@@ -11,7 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { UnderlineField } from '@/components/field';
-import { supabase } from '@/lib/supabase';
+import { sendSignInCode, verifySignInCode } from '@/lib/auth';
 
 type Step = 'email' | 'code';
 
@@ -29,12 +29,9 @@ export default function SignIn() {
     }
     setBusy(true);
     setError(null);
-    const { error } = await supabase.auth.signInWithOtp({
-      email: email.trim().toLowerCase(),
-      options: { shouldCreateUser: true },
-    });
+    const { error } = await sendSignInCode(email.trim().toLowerCase());
     setBusy(false);
-    if (error) setError(error.message);
+    if (error) setError(error);
     else setStep('code');
   };
 
@@ -45,13 +42,9 @@ export default function SignIn() {
     }
     setBusy(true);
     setError(null);
-    const { error } = await supabase.auth.verifyOtp({
-      email: email.trim().toLowerCase(),
-      token: code,
-      type: 'email',
-    });
+    const { error } = await verifySignInCode(email.trim().toLowerCase(), code);
     setBusy(false);
-    if (error) setError(error.message);
+    if (error) setError(error);
   };
 
   return (

@@ -9,8 +9,9 @@ TrackDown is a React Native (Expo) iOS/Android app for weight loss tracking with
 - **State Management:** Zustand
 - **Data Fetching:** TanStack Query
 - **Charts:** Victory Native / Skia
-- **Backend:** Supabase (Postgres + Auth + Storage + Edge Functions + Realtime)
-- **AI Vision:** Claude Sonnet (claude-sonnet-4-20250514) for food/scale/equipment photo analysis
+- **Backend:** `backend/` — Express 5 + Better Auth (email OTP, bearer tokens) + self-hosted Postgres 17 in Docker. Migrated off Supabase 2026-08-28; see `docs/supabase-migration-plan.md`
+- **AI text parsing:** Claude Haiku 4.5 via `backend/src/services/parseLog.ts` (the former `parse-log` edge function)
+- **AI Vision (planned):** Claude Sonnet for food/scale/equipment photo analysis
 - **Voice:** OpenAI Whisper for voice transcription
 - **Nutrition APIs:** Open Food Facts API + USDA FoodData Central
 - **Monitoring:** Sentry + PostHog
@@ -27,9 +28,9 @@ TrackDown is a React Native (Expo) iOS/Android app for weight loss tracking with
 - Adaptive TDEE targets
 - Weekly AI meal suggestions
 
-## Database Schema (Supabase/Postgres)
+## Database Schema (Postgres — `backend/migrations/`)
 Tables:
-- `users` - Auth users
+- `user`, `session`, `account`, `verification` - Better Auth (0001)
 - `profiles` - User profiles, goals, TDEE settings
 - `meals` - Meal entries (breakfast, lunch, dinner, snacks)
 - `meal_items` - Individual food items within meals
@@ -102,17 +103,20 @@ The phone must have **Tailscale on and connected** to scan this QR.
 curl -s http://localhost:8081/status   # should print "packager-status:running"
 ```
 
-### Supabase
+### Backend
 ```bash
-# Start local Supabase
-npx supabase start
-
-# Generate types from schema
-npx supabase gen types typescript --local > src/types/supabase.ts
-
-# Push migrations
-npx supabase db push
-
-# Create new migration
-npx supabase migration new <name>
+cd backend
+npm run dev                      # API on :8000 with hot reload (needs Postgres: `make pg`)
+npm test                         # integration tests on an embedded Postgres (no Docker)
+npm run db:migrate               # apply backend/migrations/*.sql to DATABASE_URL
+npm run db:migrate-from-supabase # one-time data copy, see docs/supabase-migration-plan.md
 ```
+Config lives in `backend/src/config/index.ts` (the only file that reads `process.env`);
+`.env.example` at the repo root documents every variable. The app reads the API base
+URL from `EXPO_PUBLIC_API_URL` (repo-root `.env`, inlined at bundle time).
+
+### Auth flow
+Email OTP through Better Auth's `email-otp` plugin — the same UX Supabase gave us:
+`POST /api/auth/email-otp/send-verification-otp` then `POST /api/auth/sign-in/email-otp`.
+The session token comes back in the `set-auth-token` header and is stored in
+`expo-secure-store` (`lib/token-store.ts`); every API call sends it as a bearer token.

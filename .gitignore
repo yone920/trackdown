@@ -42,3 +42,12 @@ app-example
 # generated native folders
 /ios
 /android
+
+# backend
+backend/node_modules/
+backend/dist/
+backend/.env
+.env.production
+
+# Supabase CLI link state (project is no longer on Supabase)
+supabase/.temp/

@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { useSession } from '@/lib/auth';
+import { signOut, useSession } from '@/lib/auth';
 import {
   useAcknowledgeDisclaimer,
   useAddWeight,
@@ -25,7 +25,6 @@ import {
   GOAL_PACE_LABELS,
   type GoalPace,
 } from '@/lib/recommendations';
-import { supabase } from '@/lib/supabase';
 import {
   ACTIVITY_LABELS,
   cmToInches,
@@ -502,7 +501,7 @@ export default function Profile() {
 
           <View className="px-8 pt-14">
             <Pressable
-              onPress={() => supabase.auth.signOut()}
+              onPress={() => signOut()}
               className="py-5 border-t border-b border-hairline">
               <Text className="text-[14px] text-terracotta">Sign out</Text>
             </Pressable>

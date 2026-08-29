@@ -1,0 +1,72 @@
+# TrackDown production stack — Postgres + API. Deployed on the home Docker host
+# (192.168.1.56) behind cloudflared, same shape as the SoundSteps stack there.
+#
+#   make docker-prod          build, tag with the version, start
+#   make rollback VERSION=…   repoint :latest at an earlier image
+#
+# The project name is pinned so a dev compose in the same directory can never
+# recreate these containers.
+
+name: trackdown-prod
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: trackdown-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-trackdown}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.production}
+      - POSTGRES_DB=${POSTGRES_DB:-trackdown}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - trackdown
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-trackdown} -d $${POSTGRES_DB:-trackdown}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./backend
+      args:
+        - APP_VERSION=${APP_VERSION:-dev}
+        - GIT_SHA=${GIT_SHA:-unknown}
+    image: trackdown-backend:${APP_VERSION:-latest}
+    container_name: trackdown-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Host port 8003 — 8000/8001/8002 are taken on the Docker host (SoundSteps uses 8002).
+    # Only cloudflared needs to reach it; LAN access is handy for testing from a phone.
+    ports:
+      - "8003:8000"
+    environment:
+      - NODE_ENV=production
+      - PORT=8000
+      - DATABASE_URL=postgres://${POSTGRES_USER:-trackdown}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-trackdown}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set in .env.production}
+      - BETTER_AUTH_URL=${BETTER_AUTH_URL:?BETTER_AUTH_URL (public API hostname) must be set in .env.production}
+      - APP_ORIGIN=${APP_ORIGIN}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-haiku-4-5}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_SECURE=${SMTP_SECURE}
+      - EMAIL_FROM=${EMAIL_FROM}
+    networks:
+      - trackdown
+
+volumes:
+  postgres_data:
+    name: trackdown_postgres_data
+
+networks:
+  trackdown:
+    driver: bridge

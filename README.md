@@ -27,68 +27,59 @@ You can start developing by editing the files inside the **app** directory. This
 
 ## Where the code runs (and how to push changes)
 
-"The app" is actually three things running in three different places. When you
-edit a file on your laptop, only your laptop sees the change — to make it live
-you have to push it to whichever runtime owns that file.
+"The app" is two things in two places. Editing a file only changes it where you are;
+to make it live, push it to whichever runtime owns it.
 
 ```
-┌──────────────────────┐    HTTPS calls    ┌──────────────────────────┐
-│  YOUR PHONE          │ ─────────────────►│  SUPABASE SERVERS        │
-│                      │                   │                          │
-│  - React Native code │                   │  - Edge Functions        │
-│    (app/, lib/, ...) │                   │    (supabase/functions/)  │
-│  - Runs in Hermes JS │                   │  - Runs in Deno          │
-│                      │                   │                          │
-│                      │                   │  - Postgres database     │
-│                      │                   │    (meals, weight_logs…) │
-└──────────────────────┘                   └──────────────────────────┘
+┌──────────────────────┐    HTTPS (bearer)  ┌──────────────────────────────────┐
+│  YOUR PHONE          │ ──────────────────►│  DOCKER HOST (192.168.1.56)      │
+│                      │                    │  behind cloudflared              │
+│  - React Native code │                    │                                  │
+│    (app/, lib/, ...) │                    │  trackdown-backend  (backend/)   │
+│  - Runs in Hermes JS │                    │    /api/auth/*   Better Auth     │
+│                      │                    │    /api/log      Claude parser   │
+│                      │                    │    /api/entries, /api/weight, …  │
+│                      │                    │  trackdown-postgres (Postgres 17)│
+└──────────────────────┘                    └──────────────────────────────────┘
 ```
 
 | You changed... | Where it runs | What to do |
 |---|---|---|
-| `app/**/*.tsx`, `lib/**/*.ts`, `components/**/*.tsx` | Your phone (Hermes) | Save → Metro hot-reloads. If it doesn't, press `r` in the Expo terminal, or restart with `--clear` (see below). |
-| `supabase/functions/<name>/index.ts` | Supabase servers (Deno) | `npx supabase functions deploy <name>` |
-| `supabase/migrations/*.sql` | Supabase Postgres | `npx supabase db push` |
+| `app/**/*.tsx`, `lib/**/*.ts`, `components/**/*.tsx` | Your phone (Hermes) | Save → Metro hot-reloads. If not, press `r`, or restart with `--clear`. |
+| `backend/src/**` | Docker host | commit, then on the Docker host: `git pull && make docker-prod` |
+| `backend/migrations/*.sql` | Docker host Postgres | same — the backend container applies pending migrations on start |
 
-**Mnemonic:** if the file is in `app/`, `lib/`, or `components/`, restart Expo.
-If it's in `supabase/`, deploy or push.
-
-### Common "wait, why isn't my change working?"
-
-- Edited the AI prompt (`supabase/functions/parse-log/index.ts`) but the app
-  still gives old responses → you forgot to deploy the function. Run
-  `npx supabase functions deploy parse-log`.
-- Added a new column in a migration but the app errors with "column not found"
-  → you forgot to push the migration. Run `npx supabase db push`.
-- Edited a `.tsx` file but the app looks the same → Metro probably hot-reloaded
-  but the screen wasn't re-mounted; navigate away and back, or press `r`.
-
-### Linking the Supabase CLI to your project
-
-`db push` and `functions deploy` both need to know which Supabase project to
-talk to. The CLI stores the link in `supabase/.temp/` (gitignored), so it's
-**one-time per machine / per fresh clone**.
-
-If you see `Cannot find project ref. Have you run supabase link?`:
+### Local development
 
 ```bash
-npx supabase link --project-ref <YOUR_PROJECT_REF>
+make install          # npm install for the app and backend/
+make pg               # Postgres 17 in Docker on :5433 (docker-compose.dev.yml)
+make pg-migrate       # apply backend/migrations
+make backend          # API on http://localhost:8000 with hot reload
+make app              # Expo dev server (see the Tailscale note below)
+make test             # backend tests — embedded Postgres, no Docker needed
 ```
 
-Your project ref is the subdomain in `EXPO_PUBLIC_SUPABASE_URL` —
-`https://<REF>.supabase.co`. The link prompts for your database password (find
-it in Supabase dashboard → Project Settings → Database).
+Copy `.env.example` to `backend/.env`. Without `SMTP_HOST` the sign-in code is printed
+in the backend console — that is the intended local setup. Without `ANTHROPIC_API_KEY`
+everything works except free-text logging (`/api/log`).
 
-### Migration history mismatch
+Point the app at your backend with `EXPO_PUBLIC_API_URL` in a repo-root `.env`, e.g.
+`EXPO_PUBLIC_API_URL=http://100.126.117.105:8000` when the phone reaches the dev VM over
+Tailscale. It is inlined at bundle time, so restart Expo after changing it.
 
-If `db push` lists migrations you've **already applied via the dashboard SQL
-editor**, do NOT push them again — `CREATE TABLE` will fail on existing
-tables. Mark them as applied without re-running:
+### Production
+
+Runs on the home Docker host as the `trackdown-prod` compose project. First deploy and
+the Supabase cutover are in `docs/supabase-migration-plan.md`; afterwards:
 
 ```bash
-npx supabase migration repair --status applied 0001
-npx supabase db push   # should now only show un-applied migrations
+git pull && make docker-prod        # build, tag trackdown-backend:<version>, start
+make status                          # containers + /health
+make rollback VERSION=x.y.z          # repoint :latest at an earlier image
 ```
+
+Backups: `scripts/backup-postgres.sh` (daily cron, `BACKUP_DIR` on the TrueNAS mount).
 
 ## Running Expo from the Fedora dev VM
 

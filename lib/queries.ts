@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { supabase } from './supabase';
+import { api } from './api';
 import {
   buildRecommendation,
   type GoalPace,
@@ -10,6 +10,11 @@ import {
   type ActivityLevel,
   type Sex,
 } from './tdee';
+
+// Data hooks for the screens. Same exported names and shapes as the Supabase version;
+// only the transport changed — PostgREST calls became calls to backend/ (see lib/api.ts).
+// Day/range boundaries are still computed here in the phone's local timezone and sent
+// as ISO instants, exactly as the PostgREST filters were.
 
 export type Entry = {
   id: string;
@@ -28,6 +33,20 @@ export type MealMacros = {
 export type EntryDetail = Entry & Partial<MealMacros> & {
   weight_lb?: number | null;
 };
+
+/** Row shape returned by GET /api/entries/:kind (meals carry the macro columns). */
+type EntryRow = {
+  id: string;
+  description: string;
+  kcal: number;
+  logged_at: string;
+  protein_g?: number | null;
+  carbs_g?: number | null;
+  fat_g?: number | null;
+  fiber_g?: number | null;
+};
+
+type WeightRow = { id: string; weight_lb: number; logged_at: string };
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
@@ -58,40 +77,39 @@ function dayBoundsFromKey(dateKey: string) {
   return { start: start.toISOString(), end: end.toISOString() };
 }
 
-const TABLE = { meals: 'meals', movement: 'calorie_expenditure' } as const;
-type Kind = keyof typeof TABLE;
+type Kind = 'meals' | 'movement';
+
+type RangeQuery = { from?: string; to?: string; order?: 'asc' | 'desc'; limit?: number };
+
+function listEntries(kind: Kind, query: RangeQuery) {
+  return api<EntryRow[]>(`/api/entries/${kind}`, { query });
+}
+
+function listWeights(query: RangeQuery) {
+  return api<WeightRow[]>('/api/weight', { query });
+}
+
+const toEntry = (r: EntryRow): Entry => ({
+  id: r.id,
+  time: formatTime(r.logged_at),
+  name: r.description,
+  kcal: r.kcal ?? 0,
+});
 
 async function fetchToday(kind: Kind): Promise<Entry[]> {
   const { start, end } = dayBounds();
-  const { data, error } = await supabase
-    .from(TABLE[kind])
-    .select('id, description, kcal, logged_at')
-    .gte('logged_at', start)
-    .lt('logged_at', end)
-    .order('logged_at', { ascending: false });
-  if (error) throw error;
-  return (data ?? []).map((r) => ({
-    id: r.id as string,
-    time: formatTime(r.logged_at as string),
-    name: r.description as string,
-    kcal: (r.kcal as number) ?? 0,
-  }));
+  const rows = await listEntries(kind, { from: start, to: end, order: 'desc' });
+  return rows.map(toEntry);
 }
 
 async function fetchRecentUnique(
   kind: Kind,
   limit: number,
 ): Promise<{ name: string; kcal: number }[]> {
-  const { data, error } = await supabase
-    .from(TABLE[kind])
-    .select('description, kcal, logged_at')
-    .order('logged_at', { ascending: false })
-    .limit(50);
-  if (error) throw error;
+  const rows = await listEntries(kind, { order: 'desc', limit: 50 });
   const seen = new Map<string, { name: string; kcal: number }>();
-  for (const r of data ?? []) {
-    const name = r.description as string;
-    if (!seen.has(name)) seen.set(name, { name, kcal: (r.kcal as number) ?? 0 });
+  for (const r of rows) {
+    if (!seen.has(r.description)) seen.set(r.description, { name: r.description, kcal: r.kcal ?? 0 });
     if (seen.size >= limit) break;
   }
   return Array.from(seen.values());
@@ -110,14 +128,9 @@ export type TodayMacros = {
 
 async function fetchTodayMacros(): Promise<TodayMacros> {
   const { start, end } = dayBounds();
-  const { data, error } = await supabase
-    .from('meals')
-    .select('protein_g, carbs_g, fat_g, fiber_g')
-    .gte('logged_at', start)
-    .lt('logged_at', end);
-  if (error) throw error;
+  const rows = await listEntries('meals', { from: start, to: end });
   const totals: TodayMacros = { protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 };
-  for (const r of data ?? []) {
+  for (const r of rows) {
     totals.protein_g += Number(r.protein_g ?? 0);
     totals.carbs_g += Number(r.carbs_g ?? 0);
     totals.fat_g += Number(r.fat_g ?? 0);
@@ -159,35 +172,19 @@ export function useEntry(kind: EntryKind, id: string) {
     enabled: !!id,
     queryFn: async (): Promise<EntryDetail | null> => {
       if (kind === 'weight') {
-        const { data, error } = await supabase
-          .from('weight_logs')
-          .select('id, weight_lb, logged_at')
-          .eq('id', id)
-          .maybeSingle();
-        if (error) throw error;
-        if (!data) return null;
+        const row = await api<WeightRow>(`/api/weight/${id}`).catch(notFoundAsNull);
+        if (!row) return null;
         return {
-          id: data.id as string,
-          time: formatTime(data.logged_at as string),
+          id: row.id,
+          time: formatTime(row.logged_at),
           name: 'Weight reading',
           kcal: 0,
-          weight_lb: Number(data.weight_lb),
+          weight_lb: Number(row.weight_lb),
         };
       }
-      const { data, error } = await supabase
-        .from(TABLE[kind])
-        .select('*')
-        .eq('id', id)
-        .maybeSingle();
-      if (error) throw error;
-      if (!data) return null;
-      const row = data as Record<string, unknown>;
-      const base: EntryDetail = {
-        id: row.id as string,
-        time: formatTime(row.logged_at as string),
-        name: row.description as string,
-        kcal: (row.kcal as number) ?? 0,
-      };
+      const row = await api<EntryRow>(`/api/entries/${kind}/${id}`).catch(notFoundAsNull);
+      if (!row) return null;
+      const base: EntryDetail = toEntry(row);
       if (kind === 'meals') {
         const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
         base.protein_g = num(row.protein_g);
@@ -200,13 +197,17 @@ export function useEntry(kind: EntryKind, id: string) {
   });
 }
 
+function notFoundAsNull(error: unknown): null {
+  if (error && typeof error === 'object' && (error as { status?: number }).status === 404) return null;
+  throw error;
+}
+
 export function useDeleteEntry() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ kind, id }: { kind: EntryKind; id: string }) => {
-      const table = kind === 'weight' ? 'weight_logs' : TABLE[kind];
-      const { error } = await supabase.from(table).delete().eq('id', id);
-      if (error) throw error;
+      const path = kind === 'weight' ? `/api/weight/${id}` : `/api/entries/${kind}/${id}`;
+      await api<void>(path, { method: 'DELETE' });
     },
     onSuccess: (_, { kind }) => {
       const key = kind === 'weight' ? 'weight' : kind;
@@ -237,8 +238,7 @@ export function useUpdateEntry() {
       id: string;
       patch: EntryPatch;
     }) => {
-      const { error } = await supabase.from(TABLE[kind]).update(patch).eq('id', id);
-      if (error) throw error;
+      await api<EntryRow>(`/api/entries/${kind}/${id}`, { method: 'PATCH', body: patch });
     },
     onSuccess: (_, { kind, id }) => {
       qc.invalidateQueries({ queryKey: [kind] });
@@ -254,16 +254,7 @@ function useAdd(kind: Kind) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: { description: string; kcal: number }) => {
-      const { data: userData, error: userErr } = await supabase.auth.getUser();
-      if (userErr) throw userErr;
-      const user = userData.user;
-      if (!user) throw new Error('Not authenticated.');
-      const { error } = await supabase.from(TABLE[kind]).insert({
-        user_id: user.id,
-        description: input.description,
-        kcal: input.kcal,
-      });
-      if (error) throw error;
+      await api<EntryRow[]>(`/api/entries/${kind}`, { method: 'POST', body: input });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [kind] });
@@ -295,80 +286,20 @@ export type ParsedItem = {
 
 export type LoggedItem = ParsedItem & { id?: string };
 
+// The backend parses the text with Claude (what the `parse-log` edge function did) and
+// saves every item in one transaction, returning them with their new ids.
 export function useLogText() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (text: string): Promise<LoggedItem[]> => {
       const trimmed = text.trim();
       if (!trimmed) throw new Error('Say something first.');
-
-      const { data: userData, error: userErr } = await supabase.auth.getUser();
-      if (userErr) throw userErr;
-      const user = userData.user;
-      if (!user) throw new Error('Not authenticated.');
-
-      const { data: parsed, error: fnErr } = await supabase.functions.invoke<{
-        items: ParsedItem[];
-      }>('parse-log', { body: { text: trimmed } });
-      if (fnErr) throw fnErr;
-      const items = parsed?.items ?? [];
-      if (items.length === 0) throw new Error('Could not understand that.');
-
-      const meals = items.filter((i) => i.type === 'meal');
-      const movement = items.filter((i) => i.type === 'movement');
-      const weights = items.filter((i) => i.type === 'weight' && i.weight_lb);
-
-      const ids: { meal: string[]; movement: string[]; weight: string[] } = {
-        meal: [],
-        movement: [],
-        weight: [],
-      };
-
-      if (meals.length > 0) {
-        const { data, error } = await supabase.from('meals').insert(
-          meals.map((i) => ({
-            user_id: user.id,
-            description: i.description,
-            kcal: i.kcal ?? 0,
-            protein_g: i.protein_g ?? null,
-            carbs_g: i.carbs_g ?? null,
-            fat_g: i.fat_g ?? null,
-            fiber_g: i.fiber_g ?? null,
-          })),
-        ).select('id');
-        if (error) throw error;
-        ids.meal = (data ?? []).map((r) => r.id as string);
-      }
-      if (movement.length > 0) {
-        const { data, error } = await supabase.from('calorie_expenditure').insert(
-          movement.map((i) => ({
-            user_id: user.id,
-            description: i.description,
-            kcal: i.kcal ?? 0,
-          })),
-        ).select('id');
-        if (error) throw error;
-        ids.movement = (data ?? []).map((r) => r.id as string);
-      }
-      if (weights.length > 0) {
-        const { data, error } = await supabase.from('weight_logs').insert(
-          weights.map((i) => ({
-            user_id: user.id,
-            weight_lb: i.weight_lb,
-          })),
-        ).select('id');
-        if (error) throw error;
-        ids.weight = (data ?? []).map((r) => r.id as string);
-      }
-
-      const counters = { meal: 0, movement: 0, weight: 0 };
-      const enriched = items.map((item) => {
-        if (item.type === 'weight' && !item.weight_lb) return { ...item };
-        const idx = counters[item.type]++;
-        return { ...item, id: ids[item.type][idx] };
+      const { items } = await api<{ items: LoggedItem[] }>('/api/log', {
+        method: 'POST',
+        body: { text: trimmed },
       });
-      console.log('[useLogText:v3] enriched items', enriched);
-      return enriched;
+      if (items.length === 0) throw new Error('Could not understand that.');
+      return items;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['meals'] });
@@ -392,23 +323,12 @@ async function fetchDaysSummary(days: number): Promise<DaySummary[]> {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1));
   const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-  const startISO = start.toISOString();
-  const endISO = end.toISOString();
+  const range = { from: start.toISOString(), to: end.toISOString() };
 
-  const [mealsRes, moveRes] = await Promise.all([
-    supabase
-      .from('meals')
-      .select('kcal, logged_at')
-      .gte('logged_at', startISO)
-      .lt('logged_at', endISO),
-    supabase
-      .from('calorie_expenditure')
-      .select('kcal, logged_at')
-      .gte('logged_at', startISO)
-      .lt('logged_at', endISO),
+  const [meals, movement] = await Promise.all([
+    listEntries('meals', range),
+    listEntries('movement', range),
   ]);
-  if (mealsRes.error) throw mealsRes.error;
-  if (moveRes.error) throw moveRes.error;
 
   const buckets = new Map<string, DaySummary>();
   for (let i = 0; i < days; i++) {
@@ -417,19 +337,17 @@ async function fetchDaysSummary(days: number): Promise<DaySummary[]> {
     buckets.set(key, { date: key, consumed: 0, burned: 0, mealCount: 0, movementCount: 0 });
   }
 
-  for (const r of mealsRes.data ?? []) {
-    const key = localDateKey(new Date(r.logged_at as string));
-    const b = buckets.get(key);
+  for (const r of meals) {
+    const b = buckets.get(localDateKey(new Date(r.logged_at)));
     if (b) {
-      b.consumed += (r.kcal as number) ?? 0;
+      b.consumed += r.kcal ?? 0;
       b.mealCount += 1;
     }
   }
-  for (const r of moveRes.data ?? []) {
-    const key = localDateKey(new Date(r.logged_at as string));
-    const b = buckets.get(key);
+  for (const r of movement) {
+    const b = buckets.get(localDateKey(new Date(r.logged_at)));
     if (b) {
-      b.burned += (r.kcal as number) ?? 0;
+      b.burned += r.kcal ?? 0;
       b.movementCount += 1;
     }
   }
@@ -454,17 +372,12 @@ export type LoggedEntry = {
 async function fetchRecentEntries(kind: Kind, days: number): Promise<LoggedEntry[]> {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1));
-  const { data, error } = await supabase
-    .from(TABLE[kind])
-    .select('id, description, kcal, logged_at')
-    .gte('logged_at', start.toISOString())
-    .order('logged_at', { ascending: false });
-  if (error) throw error;
-  return (data ?? []).map((r) => ({
-    id: r.id as string,
-    description: r.description as string,
-    kcal: (r.kcal as number) ?? 0,
-    logged_at: r.logged_at as string,
+  const rows = await listEntries(kind, { from: start.toISOString(), order: 'desc' });
+  return rows.map((r) => ({
+    id: r.id,
+    description: r.description,
+    kcal: r.kcal ?? 0,
+    logged_at: r.logged_at,
   }));
 }
 
@@ -488,33 +401,22 @@ export type WeightLog = {
   logged_at: string;
 };
 
+const toWeightLog = (r: WeightRow): WeightLog => ({
+  id: r.id,
+  weight_lb: Number(r.weight_lb),
+  logged_at: r.logged_at,
+});
+
 async function fetchWeightLogs(days: number): Promise<WeightLog[]> {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1));
-  const { data, error } = await supabase
-    .from('weight_logs')
-    .select('id, weight_lb, logged_at')
-    .gte('logged_at', start.toISOString())
-    .order('logged_at', { ascending: true });
-  if (error) throw error;
-  return (data ?? []).map((r) => ({
-    id: r.id as string,
-    weight_lb: Number(r.weight_lb),
-    logged_at: r.logged_at as string,
-  }));
+  const rows = await listWeights({ from: start.toISOString(), order: 'asc' });
+  return rows.map(toWeightLog);
 }
 
 async function fetchAllWeightLogs(): Promise<WeightLog[]> {
-  const { data, error } = await supabase
-    .from('weight_logs')
-    .select('id, weight_lb, logged_at')
-    .order('logged_at', { ascending: true });
-  if (error) throw error;
-  return (data ?? []).map((r) => ({
-    id: r.id as string,
-    weight_lb: Number(r.weight_lb),
-    logged_at: r.logged_at as string,
-  }));
+  const rows = await listWeights({ order: 'asc' });
+  return rows.map(toWeightLog);
 }
 
 export function useWeightLogs(days = 30) {
@@ -547,34 +449,17 @@ export type Profile = {
 };
 
 async function fetchProfile(): Promise<Profile | null> {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
-  if (!userId) return null;
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', userId)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) return null;
-  const row = data as Record<string, unknown>;
+  const row = await api<Record<string, unknown>>('/api/profile');
+  if (!row) return null;
+  const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
   return {
     id: row.id as string,
     display_name: (row.display_name as string | null) ?? null,
-    goal_weight_lb:
-      row.goal_weight_lb === null || row.goal_weight_lb === undefined
-        ? null
-        : Number(row.goal_weight_lb),
+    goal_weight_lb: num(row.goal_weight_lb),
     units: ((row.units as string) ?? 'imperial') as 'imperial' | 'metric',
     sex: (row.sex as Sex | null) ?? null,
-    birth_year:
-      row.birth_year === null || row.birth_year === undefined
-        ? null
-        : Number(row.birth_year),
-    height_cm:
-      row.height_cm === null || row.height_cm === undefined
-        ? null
-        : Number(row.height_cm),
+    birth_year: num(row.birth_year),
+    height_cm: num(row.height_cm),
     activity_level: (row.activity_level as ActivityLevel | null) ?? null,
     goal_pace: ((row.goal_pace as GoalPace | null) ?? 'standard') as GoalPace,
     pregnant_or_lactating: Boolean(row.pregnant_or_lactating),
@@ -605,14 +490,7 @@ export function useAddWeight() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (weightLb: number) => {
-      const { data: userData, error: userErr } = await supabase.auth.getUser();
-      if (userErr) throw userErr;
-      const userId = userData.user?.id;
-      if (!userId) throw new Error('Not authenticated.');
-      const { error } = await supabase
-        .from('weight_logs')
-        .insert({ user_id: userId, weight_lb: weightLb });
-      if (error) throw error;
+      await api<WeightRow[]>('/api/weight', { method: 'POST', body: { weight_lb: weightLb } });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['weight'] });
@@ -625,12 +503,7 @@ export function useUpdateProfile() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (patch: ProfileUpdate) => {
-      const { data: userData, error: userErr } = await supabase.auth.getUser();
-      if (userErr) throw userErr;
-      const userId = userData.user?.id;
-      if (!userId) throw new Error('Not authenticated.');
-      const { error } = await supabase.from('profiles').update(patch).eq('id', userId);
-      if (error) throw error;
+      await api<Record<string, unknown>>('/api/profile', { method: 'PATCH', body: patch });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['profile'] });
@@ -689,32 +562,12 @@ export function useDay(dateKey: string) {
     enabled: !!dateKey,
     queryFn: async (): Promise<{ meals: Entry[]; movement: Entry[] }> => {
       const { start, end } = dayBoundsFromKey(dateKey);
-      const [mealsRes, moveRes] = await Promise.all([
-        supabase
-          .from('meals')
-          .select('id, description, kcal, logged_at')
-          .gte('logged_at', start)
-          .lt('logged_at', end)
-          .order('logged_at', { ascending: true }),
-        supabase
-          .from('calorie_expenditure')
-          .select('id, description, kcal, logged_at')
-          .gte('logged_at', start)
-          .lt('logged_at', end)
-          .order('logged_at', { ascending: true }),
+      const range = { from: start, to: end, order: 'asc' as const };
+      const [meals, movement] = await Promise.all([
+        listEntries('meals', range),
+        listEntries('movement', range),
       ]);
-      if (mealsRes.error) throw mealsRes.error;
-      if (moveRes.error) throw moveRes.error;
-      const map = (r: { id: unknown; description: unknown; kcal: unknown; logged_at: unknown }) => ({
-        id: r.id as string,
-        time: formatTime(r.logged_at as string),
-        name: r.description as string,
-        kcal: (r.kcal as number) ?? 0,
-      });
-      return {
-        meals: (mealsRes.data ?? []).map(map),
-        movement: (moveRes.data ?? []).map(map),
-      };
+      return { meals: meals.map(toEntry), movement: movement.map(toEntry) };
     },
   });
 }
