@@ -82,11 +82,17 @@ Extract `LlmPort` from `services/parseLog.ts`; add `adapters/llm/anthropic.ts` a
 `parseLog` becomes provider-neutral. Accept: existing 13 tests pass unchanged; `LLM_PROVIDER=openai`
 boots and parses with a real key (contract test); lint fails on a direct SDK import in a route.
 
-### WP1 — Schema v2 (migration `0003_v2.sql`)
+### WP1 — Schema v2 (migration `0004_v2.sql` — 0003 went to WP0a)
+Shipped; the deltas from what is written below are marked **(built:)**.
 - `calorie_expenditure` → `activities` (rename + add: exercise_id, category
   cardio|strength|mobility|other, muscle_groups text[], sets int, reps int, load_lb numeric,
   duration_min int, distance_mi numeric, source manual|fused|health, confidence low|medium|high,
   external_id text unique nullable, block_id uuid nullable). All nullable; existing rows valid.
+  **(built:** also an `exercise` **text** column beside `exercise_id` — the catalogue is a
+  normaliser, not a gate, so a lift it has never heard of still gets a name; the v1
+  `duration_minutes` column was **renamed** to `duration_min` rather than duplicated; and
+  `external_id` is unique per `(user_id, external_id)`, since two phones can mint the same
+  sample uuid.**)**
 - `exercise_catalog` (id, name unique, aliases text[], category, primary_muscles text[],
   secondary_muscles text[], equipment text[]) — seed ~120 common exercises from a JSON file in
   `backend/data/exercises.json`.
@@ -96,15 +102,20 @@ boots and parses with a real key (contract test); lint fails on a direct SDK imp
   raw jsonb).
 - `goals` (id, user_id, kind, title, metrics jsonb, priority int, status active|reached|expired|dropped,
   active_from, active_to, stated_at, created_at) + `measure_catalog` as code (`services/goals/measures.ts`:
-  one calculator per measure, unit-tested).
+  one calculator per measure, unit-tested). **(built:** plus `reached_candidate_at`, which WP4's
+  reached-detection job sets and the coach turns into "mark it done?".**)**
 - `profiles` gains: diet_style, protein_g, carbs_max_g, training_days, environment, equipment text[],
   constraints text[], preferences text[], eatback none|half|all default half, stated_at jsonb.
+  **(built:** `training_days` is an int, days-per-week; concept-v2's separate `plans` table is
+  these columns, since it is 1:1 with the user.**)**
 - `daily_summaries`: add eaten, earned, allowance, status, blocks jsonb, muscle_groups text[],
-  closed_at.
+  closed_at. **(built:** plus `verdict` and `in_short`, which WP3 writes at close.**)**
 - `coach_briefs` (id, user_id, date, asked_at, context text, workout jsonb, nutrition jsonb,
   nudge, rationale, model, inputs_hash, created_at).
 Keep the old `/api/entries/movement` routes working (alias to activities) so the current app
-keeps functioning until WP6.
+keeps functioning until WP6. **(built:** those routes also accept the new activity fields, and
+`npm run db:migrate` seeds `exercise_catalog` from `backend/data/exercises.json` after applying
+the SQL — `npm run db:seed-exercises` re-runs just that.**)**
 
 ### WP2 — Evidence storage + fusion endpoint
 - `EvidenceStore` local adapter → Docker volume `trackdown_uploads` (add to compose), served by
