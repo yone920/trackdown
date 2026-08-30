@@ -53,12 +53,58 @@ if (!betterAuthSecretFromEnv) {
 	if (!isTest) console.warn("⚠️  BETTER_AUTH_SECRET is unset — using the insecure dev secret");
 }
 
-// Optional everywhere: without it POST /api/log answers with a clear error while sign-in,
-// manual logging and every other endpoint keep working (createClaudeLogParser handles the
-// empty key). Warned about at boot so a forgotten key is visible in the container log.
+// ── LLM providers ────────────────────────────────────────────────────────────────────
+// Every provider sits behind LlmPort (src/ports/llm.ts) and is chosen here; container.ts
+// builds the adapter. An unknown provider name is fatal at boot rather than at the first
+// request — a typo in LLM_PROVIDER should not look like a working deploy.
+const LLM_PROVIDERS = ["anthropic", "openai"] as const;
+export type LlmProvider = (typeof LLM_PROVIDERS)[number];
+
+function readProvider(name: string, fallback: LlmProvider): LlmProvider {
+	const value = read(name);
+	if (!value) return fallback;
+	if ((LLM_PROVIDERS as readonly string[]).includes(value)) return value as LlmProvider;
+	throw new Error(
+		`❌ ${name}=${value} is not a known LLM provider. Use one of: ${LLM_PROVIDERS.join(", ")}.`
+	);
+}
+
+const llmProvider = readProvider("LLM_PROVIDER", "anthropic");
+const coachLlmProvider = readProvider("COACH_LLM_PROVIDER", llmProvider);
+
+// Per-provider defaults so LLM_MODEL_* only has to be set when overriding. Also what the
+// adapter contract tests call, so there is one source of truth for model names.
+const DEFAULT_MODELS = Object.freeze({
+	anthropic: Object.freeze({ fusion: "claude-haiku-4-5", coach: "claude-sonnet-4-5" }),
+	openai: Object.freeze({ fusion: "gpt-4.1-mini", coach: "gpt-4.1" }),
+});
+
+// ANTHROPIC_MODEL is v1's name for the same setting; still honoured so the deployed
+// .env.production keeps working.
+const fusionModel =
+	read("LLM_MODEL_FUSION") ??
+	(llmProvider === "anthropic" ? read("ANTHROPIC_MODEL") : undefined) ??
+	DEFAULT_MODELS[llmProvider].fusion;
+const coachModel = read("LLM_MODEL_COACH") ?? DEFAULT_MODELS[coachLlmProvider].coach;
+
+// Keys are optional everywhere: without one, sign-in, manual logging and every other
+// endpoint keep working and only the LLM call fails, with a clear message (see
+// adapters/llm/unavailable.ts). Warned about at boot so a forgotten key is visible in the
+// container log.
 const anthropicApiKey = read("ANTHROPIC_API_KEY") ?? "";
-if (!anthropicApiKey && !isTest) {
-	console.warn("⚠️  ANTHROPIC_API_KEY is unset — free-text logging (POST /api/log) will fail until it is set");
+const openaiApiKey = read("OPENAI_API_KEY") ?? "";
+const usedProviders = new Set<LlmProvider>([llmProvider, coachLlmProvider]);
+const providerKeys: Record<LlmProvider, { key: string; envName: string }> = {
+	anthropic: { key: anthropicApiKey, envName: "ANTHROPIC_API_KEY" },
+	openai: { key: openaiApiKey, envName: "OPENAI_API_KEY" },
+};
+if (!isTest) {
+	for (const provider of usedProviders) {
+		const { key, envName } = providerKeys[provider];
+		if (!key) {
+			console.warn(`⚠️  ${envName} is unset — AI features using the ${provider} provider will fail until it is set`);
+		}
+	}
 }
 
 const smtpHost = read("SMTP_HOST");
@@ -97,13 +143,27 @@ export const config = Object.freeze({
 		baseUrl: read("BETTER_AUTH_URL") ?? `http://localhost:${port}`,
 	}),
 
+	llm: Object.freeze({
+		/** Log parsing and (WP2) photo fusion. */
+		provider: llmProvider,
+		fusionModel,
+		/** The coach (WP5) — usually a bigger model, optionally a different provider. */
+		coachProvider: coachLlmProvider,
+		coachModel,
+		defaultModels: DEFAULT_MODELS,
+	}),
+
 	anthropic: Object.freeze({
 		apiKey: anthropicApiKey,
-		// The Supabase edge function used claude-haiku-4-5; kept env-tunable.
-		model: read("ANTHROPIC_MODEL") ?? "claude-haiku-4-5",
 		// Identity-linked API keys must name the workspace on every request
 		// (`anthropic-workspace-id`); legacy keys leave this unset.
 		workspaceId: read("ANTHROPIC_WORKSPACE_ID"),
+	}),
+
+	openai: Object.freeze({
+		apiKey: openaiApiKey,
+		/** Point at a compatible gateway (Azure, a proxy) without changing the adapter. */
+		baseUrl: read("OPENAI_BASE_URL"),
 	}),
 
 	smtp: Object.freeze({

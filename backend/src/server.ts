@@ -5,8 +5,9 @@ import { execSync } from "node:child_process";
 import { createApp } from "./app.js";
 import { createAuth } from "./auth.js";
 import { config } from "./config/index.js";
+import { createContainer } from "./container.js";
 import { describeTarget, pool } from "./db/client.js";
-import { createClaudeLogParser } from "./services/parseLog.js";
+import { createLogParser } from "./services/parseLog.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -35,6 +36,8 @@ console.log(
 	`🗄️  Postgres target: ${describeTarget(config.databaseUrl)}${config.databaseUrlIsExplicit ? "" : " (local dev default, DATABASE_URL unset)"}`
 );
 
+const container = createContainer(config);
+
 const auth = createAuth({
 	pool,
 	secret: config.auth.secret,
@@ -45,7 +48,7 @@ const auth = createAuth({
 const app = createApp({
 	pool,
 	auth,
-	parser: createClaudeLogParser(config.anthropic),
+	parser: createLogParser(container.llm),
 	allowedOrigins: config.allowedOrigins,
 	version: resolveVersion(),
 	commit: resolveCommit(),
@@ -53,4 +56,5 @@ const app = createApp({
 
 app.listen(config.port, () => {
 	console.log(`🚀 TrackDown API listening on port ${config.port} (auth base URL ${config.auth.baseUrl})`);
+	console.log(`🤖 LLM: ${config.llm.provider}/${container.llm.model} · coach ${config.llm.coachProvider}/${container.coachLlm.model}`);
 });
