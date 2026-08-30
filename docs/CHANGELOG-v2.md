@@ -3,6 +3,8 @@
 One section per work package (`docs/build-plan.md`): what shipped, what was deferred, and
 every decision that had to be made along the way. This file is the handover.
 
+> **Post-test fix (2026-08-30 pm):** the coach brief is now one per day — a plain ask returns the existing brief (with a `stale` flag when inputs moved); only the first ask, explicit Regenerate, or new context generates. Also: all Pressable function-styles converted to static (NativeWind drops function styles — everything white was invisible on iOS), and the + moved into the tab bar.
+
 ## Morning test — read this first
 
 **Two ways to run the app (2026-08-30):**

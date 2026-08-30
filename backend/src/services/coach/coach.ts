@@ -375,8 +375,12 @@ export class CoachUnavailableError extends Error {
 }
 
 /**
- * Today's brief: the cached one when nothing has changed, a new one when something has,
- * and always a new one for an explicit regenerate.
+ * Today's brief: one per day. A plain ask returns the day's existing brief no matter what
+ * has been logged since — the user asked once and the answer should hold still; `stale`
+ * tells the app when the inputs have moved on so it can offer Regenerate. A new brief is
+ * made only on the first ask of the day, an explicit regenerate, or an ask that carries
+ * fresh context (a new question deserves a new answer; an identical context repeat hits
+ * the exact-inputs cache).
  */
 export async function nextBrief(
 	db: Queryable,
@@ -388,8 +392,13 @@ export async function nextBrief(
 	const hash = briefInputsHash(inputs);
 
 	if (!options.regenerate) {
-		const cached = await cachedBrief(db, userId, inputs.date, hash);
-		if (cached) return { brief: cached, inputs, stale: false };
+		if (!inputs.context) {
+			const previous = await latestBrief(db, userId, inputs.date);
+			if (previous) return { brief: previous, inputs, stale: previous.inputs_hash !== hash };
+		} else {
+			const cached = await cachedBrief(db, userId, inputs.date, hash);
+			if (cached) return { brief: cached, inputs, stale: false };
+		}
 	}
 
 	try {
