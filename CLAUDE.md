@@ -12,6 +12,15 @@ TrackDown is a React Native (Expo) iOS/Android app for weight loss tracking with
 - **Backend:** `backend/` — Express 5 + Better Auth (email + password, bearer tokens) + self-hosted Postgres 17 in Docker. Migrated off Supabase 2026-08-28; see `docs/supabase-migration-plan.md`
 - **AI text parsing:** Claude Haiku 4.5 via `backend/src/services/parseLog.ts` (the former `parse-log` edge function)
 - **AI Vision (planned):** Claude Sonnet for food/scale/equipment photo analysis
+
+Every third-party service sits behind a port. `backend/src/ports/*` holds the interfaces
+(`LlmPort` takes messages of text **and** base64 images), `backend/src/adapters/**` the SDK
+calls (`llm/anthropic.ts`, `llm/openai.ts`, `email/smtp.ts`), and `backend/src/container.ts`
+picks one from `LLM_PROVIDER` / `COACH_LLM_PROVIDER` — an unknown name refuses to boot.
+Routes and services import ports only; ESLint fails a build that imports `@anthropic-ai/sdk`,
+`openai` or `nodemailer` outside `src/adapters/**`, or reads `process.env` outside `src/config/`.
+Tests use the fakes in `backend/src/test/fakes/`; each adapter has a contract test that runs
+only when that provider's key is in `backend/.env`.
 - **Voice:** OpenAI Whisper for voice transcription
 - **Nutrition APIs:** Open Food Facts API + USDA FoodData Central
 - **Monitoring:** Sentry + PostHog

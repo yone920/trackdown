@@ -1,10 +1,12 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
+import type { LlmPort } from "../ports/llm.js";
 
 // The Supabase edge function `parse-log` (supabase/functions/parse-log/index.ts), moved
 // into the backend. Prompt and output schema are unchanged; only the runtime differs
 // (Node instead of Deno, session-authenticated instead of anon-key).
+//
+// Provider-neutral: the prompt and the schema live here, the SDK call lives in an adapter
+// behind LlmPort. Swapping Claude for GPT is `LLM_PROVIDER=openai`, not an edit to this file.
 
 export const ParsedItemSchema = z.object({
 	type: z.enum(["meal", "movement", "weight"]),
@@ -56,41 +58,22 @@ Examples:
 
 If the input is completely unparseable, return one item with the raw input as description, type "meal", kcal 0, confidence "low". Always return at least one item.`;
 
-/** Port: anything that turns free text into log items. Tests inject a fake. */
+/** What routes depend on: anything that turns free text into log items. */
 export interface LogParser {
 	parse(text: string): Promise<ParsedItem[]>;
 }
 
-export function createClaudeLogParser({
-	apiKey,
-	model,
-	workspaceId,
-}: {
-	apiKey: string;
-	model: string;
-	workspaceId?: string | undefined;
-}): LogParser {
-	if (!apiKey) {
-		return {
-			async parse() {
-				throw new Error("ANTHROPIC_API_KEY is not set — free-text logging is unavailable.");
-			},
-		};
-	}
-	const client = new Anthropic({
-		apiKey,
-		defaultHeaders: workspaceId ? { "anthropic-workspace-id": workspaceId } : undefined,
-	});
+export function createLogParser(llm: LlmPort): LogParser {
 	return {
 		async parse(text) {
-			const response = await client.messages.parse({
-				model,
-				max_tokens: 1024,
+			const { items } = await llm.parseStructured({
 				system: SYSTEM_PROMPT,
+				schema: ParseResponseSchema,
+				schemaName: "log_entries",
+				maxTokens: 1024,
 				messages: [{ role: "user", content: text.trim() }],
-				output_config: { format: zodOutputFormat(ParseResponseSchema) },
 			});
-			return response.parsed_output?.items ?? [];
+			return items;
 		},
 	};
 }

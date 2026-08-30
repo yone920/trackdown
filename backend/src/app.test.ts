@@ -3,24 +3,27 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
 import { createAuth, type Auth } from "./auth.js";
 import { setUserPassword } from "./services/password.js";
-import type { LogParser, ParsedItem } from "./services/parseLog.js";
+import { createLogParser, type ParsedItem } from "./services/parseLog.js";
 import { startTestDatabase, type TestDatabase } from "./test/db.js";
+import { createFakeLlm } from "./test/fakes/llm.js";
 
 // End-to-end through Express + Better Auth + a real Postgres: the sign-up/sign-in flow the
-// app uses, then the CRUD the screens depend on, then free-text logging with a fake parser.
+// app uses, then the CRUD the screens depend on, then free-text logging over a fake LlmPort.
 
 let db: TestDatabase;
 let auth: Auth;
 let app: ReturnType<typeof createApp>;
-let nextParse: ParsedItem[] = [];
 
 const PASSWORD = "correct-horse-battery";
 
-const fakeParser: LogParser = {
-	async parse() {
-		return nextParse;
-	},
-};
+// The fake LlmPort, not a fake parser: the real services/parseLog runs, so the prompt,
+// the schema and the route are all exercised — only the provider call is replaced.
+const llm = createFakeLlm();
+const parser = createLogParser(llm);
+
+function nextParse(items: ParsedItem[]): void {
+	llm.nextOutput = { items };
+}
 
 beforeAll(async () => {
 	db = await startTestDatabase();
@@ -33,7 +36,7 @@ beforeAll(async () => {
 	app = createApp({
 		pool: db.pool,
 		auth,
-		parser: fakeParser,
+		parser,
 		allowedOrigins: [],
 		version: "test",
 		commit: "test",
@@ -262,11 +265,11 @@ describe("free-text log", () => {
 	it("parses and saves meals, movement and weight in one call, returning ids in input order", async () => {
 		const token = await signUp("frank@example.com");
 		const auth = { Authorization: `Bearer ${token}` };
-		nextParse = [
+		nextParse([
 			{ type: "movement", description: "30 min walk", kcal: 120, confidence: "medium" },
 			{ type: "meal", description: "protein shake", kcal: 150, protein_g: 25, carbs_g: 5, fat_g: 3, fiber_g: 1, confidence: "high" },
 			{ type: "weight", description: "weigh-in", weight_lb: 181, confidence: "high" },
-		];
+		]);
 		const res = await request(app).post("/api/log").set(auth).send({ text: "protein shake after my 30 min walk, 181 on the scale" });
 		expect(res.status).toBe(201);
 		expect(res.body.items).toHaveLength(3);
