@@ -3,7 +3,7 @@
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
-	"description": "TrackDown API — Better Auth (email OTP), Postgres data layer, Claude log parser",
+	"description": "TrackDown API — Better Auth (email + password), Postgres data layer, Claude log parser",
 	"scripts": {
 		"dev": "tsx watch src/server.ts",
 		"build": "tsc -p tsconfig.build.json",
@@ -13,10 +13,12 @@
 		"test:watch": "vitest",
 		"lint": "eslint",
 		"db:migrate": "tsx src/db/migrate.ts",
-		"db:migrate-from-supabase": "tsx src/scripts/migrate-from-supabase.ts"
+		"db:migrate-from-supabase": "tsx src/scripts/migrate-from-supabase.ts",
+		"reset-password": "tsx src/scripts/reset-password.ts"
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.122.0",
+		"@better-auth/core": "^1.7.2",
 		"better-auth": "^1.7.2",
 		"cors": "^2.8.5",
 		"dotenv": "^17.2.3",

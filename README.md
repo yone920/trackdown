@@ -60,9 +60,10 @@ make app              # Expo dev server (see the Tailscale note below)
 make test             # backend tests — embedded Postgres, no Docker needed
 ```
 
-Copy `.env.example` to `backend/.env`. Without `SMTP_HOST` the sign-in code is printed
-in the backend console — that is the intended local setup. Without `ANTHROPIC_API_KEY`
-everything works except free-text logging (`/api/log`).
+Copy `.env.example` to `backend/.env`. Sign-in is email + password, so no mail server is
+needed; `SMTP_HOST` is unused for now and a forgotten password is fixed with
+`cd backend && npm run reset-password -- <email> <newPassword>`. Without
+`ANTHROPIC_API_KEY` everything works except free-text logging (`/api/log`).
 
 Point the app at your backend with `EXPO_PUBLIC_API_URL` in a repo-root `.env`, e.g.
 `EXPO_PUBLIC_API_URL=http://100.126.117.105:8000` when the phone reaches the dev VM over
