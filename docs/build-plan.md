@@ -231,17 +231,44 @@ Tests: proposal maths, reached detection on fixtures, priority ordering, history
   the muscle cards and the no-goal state as well as the fat-loss one.**)**
 
 ### WP5 — Coach
+Shipped; the deltas from what is written below are marked **(built:)**.
 - `services/coach/features.ts`: pure functions over the last 28 days → features listed in
   concept-v2 (days since last workout, per-muscle recency and weekly sets, per-exercise last
   load×sets×reps + best-in-4-weeks + trend, cardio minutes, adherence 1/3/7d, weight trend,
-  data-quality flags). Unit-tested on fixtures.
+  data-quality flags). Unit-tested on fixtures. **(built:** over the same `DayFacts` window
+  `services/day.ts` already loads, so the coach and the goals read one set of rows. A day is
+  one *session* at that day's top load — "the same load in two consecutive workouts" cannot
+  be counted per row. `TRACKED_MUSCLES` is written out rather than discovered, because a
+  group nobody has trained in four weeks has no rows to be discovered from and "no pulling
+  since Monday" is a sentence about an absence. `FactActivity` gained `source` and
+  `confidence`, which no measure reads and the data-quality flags do.**)**
 - `services/coach/rules.ts`: progression + recovery + gap rules as data the prompt receives.
+  **(built:** plus **`prescribeLoads()`**, the concrete load × sets × reps per exercise, so
+  the model chooses movements and reasons and never picks a number; "target reps" is the
+  best the user has proved *at the load they are on* — an average would drift down on every
+  bad day. Machines and cables step 5 % rather than a plate, from the catalogue's
+  `equipment`. `selectNudge()` turns WP4's `reached_candidate_at` / `stalled_since` into a
+  `nudge_action` (`mark_reached` / `adjust_goal` / `weigh_in` / `close_items`) — chosen, not
+  generated, and `mark_reached` never closes the goal.**)**
 - `CoachPort` default = `LlmCoach(LlmPort, model: LLM_MODEL_COACH)`; prompt + zod `Brief`
   schema (`workout{type, targets[], why, exercises[{name, load_lb, sets, reps, note}]}`,
-  `nutrition{kcal, protein_g, carbs_max_g, ideas[], why}`, `nudge`).
+  `nutrition{kcal, protein_g, carbs_max_g, ideas[], why}`, `nudge`). **(built:** the brief
+  gained `headline` and `why` at the top (design-system §Coach) and `minutes` on an
+  exercise; `workout.why` folded into the brief's own `why`. ~1.6 KB of JSON schema against
+  WP2's ~4.5 KB grammar ceiling, pinned by a budget test and by a contract test on the real
+  model that also checks the prescribed numbers came back unchanged.**)**
 - `GET /api/coach/next?context=` returns today's cached brief or generates; `POST
   /api/coach/next/regenerate`. Cache key = date + inputs_hash; context text is appended to
-  the day's key so a new context regenerates.
+  the day's key so a new context regenerates. **(built:** the hash covers the whole feature
+  set, the plan, the goals' candidates, the prescriptions and the context, plus the local
+  *hour* — a brief at 6 am and one at 9 pm are different answers. Migration
+  `0008_coach.sql` adds `coach_briefs.headline` / `.nudge_action` and the **`coach_contexts`**
+  table, which is where WP2's unsaved `coach_context` statements now live: one row on the
+  user's local day, read back when the coach is asked that day and gone tomorrow. A failed
+  generation serves the day's previous brief and 503s when there is none. `GET
+  /api/day/:date` gained a `coach` field — WP3's deferred coach-ask card — and `seed-demo`
+  leaves one brief on yesterday. **Nothing schedules a brief**, and `routes/coach.ts` says
+  so where the first scheduler would go.**)**
 
 ### WP6 — App: new screens (direction A)
 Rebuild per `docs/design-system.md` — new tokens, Barlow / Barlow Condensed, dark UI. Remove the
@@ -305,7 +332,8 @@ values except the ones the user filled in.
    `npm run seed-demo -- <email> --tz <minutes>`; the password is `demo-pass-123`. The
    backend half of 3 and 5 — `/api/day/:date`, `/api/week`, `/api/days` — is done; the
    screens are WP6.**)**
-6. Coach ask → brief.
+6. Coach ask → brief. **(built in WP5:** `GET /api/coach/next?tz=<min>&context=…` and
+   `POST /api/coach/next/regenerate`; the Coach screen is WP6.**)**
 7. Metro running on this VM with the Tailscale hostname; instructions at the top of
    `docs/CHANGELOG-v2.md` ("Open Expo Go, scan this QR / open exp://100.64.198.50:8081").
 

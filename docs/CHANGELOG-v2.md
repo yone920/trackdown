@@ -16,6 +16,159 @@ open `exp://100.64.198.50:8081` directly.
 
 ---
 
+## WP5 — Coach
+
+The brief. Everything with a number in it is computed; the model chooses the movements,
+the order and the words. Asked for, never scheduled.
+
+**`services/coach/features.ts` — the coach's inputs, pure**
+
+- Every feature concept-v2 §Coach lists, as pure functions of the same 28-day `DayFacts`
+  window `services/day.ts` already builds: days since the last workout, sessions this week
+  against last, per muscle group days-since and 7-/28-day sets, per exercise last
+  load × sets × reps + best in four weeks + trend, cardio minutes this week vs the plan,
+  adherence over 1/3/7 days, the weight trend, and the data-quality flags.
+- **A day is one session.** Three logged sets of bench in one visit are one session at that
+  day's top load, because that is what "the same load in two consecutive workouts" counts.
+  The warm-up set still counts as volume.
+- **null is "we do not know", never zero** — the same rule the measure catalog runs on. A
+  muscle group with no entry in four weeks reports `days_since: null`, and
+  `TRACKED_MUSCLES` is a written-out list precisely so an *absence* is visible: "no pulling
+  movement since Monday" is a sentence about rows that do not exist.
+- Data quality is the coach's half of concept-v2's "the coach is only as good as the log":
+  low-confidence items from the last week, days with nothing logged, a missing calorie
+  target, a due weigh-in, meals with no protein figure.
+
+**`services/coach/rules.ts` — the numbers the model is not allowed to invent**
+
+- `gapRule` (3–4 days → ease back, ≥14 → restart, and never scold), `recoveryRule` (trained
+  inside 48 h is not today's primary target), `cardioRule` (the week's shortfall, capped at
+  one safe +10 % step — "by weekly minutes vs the plan, not by yesterday").
+- **`prescribeLoads()`** turns history into the concrete load × sets × reps per exercise:
+  a new exercise repeats what was reported; a session short of target holds and two short
+  drop one plate; target reps on every set in two consecutive sessions steps up one plate
+  (5 lb, or 5 % on a stack) unless the load already went up inside the last week; a
+  restart-length gap comes back a step lighter and a set shorter.
+- `selectNudge()` picks the single most useful thing — a reached goal first, then a stalled
+  one, then unconfirmed items, then a due weigh-in, then the unlogged days — and returns the
+  **action** with it (`mark_reached goal_id` / `adjust_goal goal_id` / `weigh_in` /
+  `close_items`). The model writes the sentence; the button is not generated.
+
+**The port, the schema and the prompt**
+
+- `ports/coach.ts` — `CoachPort.brief(inputs) → Brief`, with `adapters/coach/llm.ts`
+  composing `LlmPort` on the coach model (`COACH_LLM_PROVIDER` / `LLM_MODEL_COACH`, Sonnet
+  by default) and `src/test/fakes/coach.ts` behind every integration test.
+- `services/coach/schema.ts` — `{ headline, why, workout {type, targets[], exercises[{name,
+  load_lb, sets, reps, minutes, note}]}, nutrition {kcal, protein_g, carbs_max_g, ideas[≤3],
+  why}, nudge }`, ~1.6 KB of JSON schema against WP2's ~4.5 KB grammar ceiling, pinned by a
+  budget test and proved on the real model by a contract test.
+- The prompt hands over the goals in priority order, the plan and its constraints, the
+  eating targets, today so far, the feature sheet, the rules as constraints, the prescribed
+  loads, and the user's context — and says in three places that the numbers are not the
+  model's to change.
+
+**Routes**
+
+- `GET /api/coach/next?tz=&context=` — the day's cached brief, or a new one. The response
+  carries the brief, the computed `gap`, the `nudge_action` and the active goals with their
+  candidates, so the app never has to parse anything back out of the model's sentences.
+- `POST /api/coach/next/regenerate` — `{ tz_offset_min, context? }`, always generated.
+- Both close the user's due days first, like every other day-shaped route.
+- **Nothing else in the codebase produces a brief.** No job, no cron, no notification — that
+  is concept-v2 §Principles 5 as a property of the code, and the note at the top of
+  `routes/coach.ts` says so to whoever adds the first scheduler.
+
+**Context has a home now**
+
+`POST /api/log/confirm` with `kind: "coach_context"` writes a `coach_contexts` row on the
+user's local day (migration 0008) instead of returning the text and forgetting it. The
+coach reads that day's statements, joined with whatever was typed into the ask itself, and
+both go into the cache key — so "knee hurts today" produces a different brief and is gone
+tomorrow. A context that outlives the day is a *preference*, which is a different table.
+
+**Migration — `backend/migrations/0008_coach.sql`**
+
+- `coach_briefs.headline` and `.nudge_action`. 0004's `rationale` is the brief's `why`
+  under its older name; `headline` is the title sentence the Coach screen opens with, and
+  `nudge_action` is what the app can *do* about the nudge.
+- `coach_contexts (user_id, date, text)`, with a unique index on `(user_id, date, md5(text))`
+  — a phone with no signal retries the confirm, and the fusion ledger only covers a repeated
+  `client_id`.
+
+**Decisions**
+
+- **The model never picks a number.** Loads, sets, reps, minutes and the calorie/protein
+  targets are all computed and handed over to be copied. Ask a language model for "the next
+  sensible weight" and it answers differently on Tuesday than on Monday for the same
+  history, which is the one thing a progression must never do. The contract test asserts the
+  copying against the real model, because it is a claim about behaviour that no fake can
+  make.
+- **"Target reps" is the best the user has proved at the load they are on**, not the average
+  of their sessions and not a constant in the code. An average drifts *down* every time
+  someone has a bad day — the finish line quietly moving to wherever they landed — and a set
+  of twelve at a warm-up weight is not a target for the working weight.
+- **The cache key is the whole feature set, plus the local hour.** Unlike the day reading —
+  whose hash had to *exclude* a NOW marker that moves every minute — every number the coach
+  reads is a fact about what was logged, so hashing all of it is right. The hour is in it
+  because a brief at 6 am and one at 9 pm are different answers; the minute is not.
+  `regenerate` rewrites the same row rather than adding a duplicate.
+- **A failed generation serves the day's previous brief, or 503s.** The day readings are
+  allowed to be absent; the brief is the answer the user asked for, and a blank Coach screen
+  with no explanation is worse than a message saying the coach is down.
+- **`nudge_action` is chosen, not generated**, and `mark_reached` never closes anything:
+  concept-v2 §Goals is explicit that a goal is never auto-closed, so the action is a button
+  the user presses and the prompt says as much.
+- **The coach reads goals through `services/goals/store.ts`**, so it sees exactly what the
+  Goals screen sees — priority order, progress and the candidates — rather than a second
+  query that could disagree with it.
+- **`GET /api/day/:date` gained a `coach` field**, the day's most recent brief. That is
+  WP3's deferred coach-ask card, and it is a *record of an ask*, not a second place that
+  generates advice.
+- No new dependencies.
+
+**Tests** — 311 passing, 2 skipped (was 243 / 2).
+
+- `src/services/coach/features.test.ts` (22): the gap at 0, 1, 3 and never; sessions folded
+  per day; muscle recency, weekly sets and the untrained list; the four-week trend and the
+  window's edge; cardio counted against the week and not confused with a lift; adherence
+  averaged per day rather than per meal, with the unlogged days named; the smoothed weight
+  trend; and every data-quality flag, including the "nothing to flag" case.
+- `src/services/coach/rules.test.ts` (32): every gap level and its wording; recovery;
+  cardio's shortfall and its cap; `targetScheme` from the load they are on; the plate and
+  the stack step; and `prescribeLoads` for new / hold / step up / stepped this week already
+  / low confidence / two misses / ease back / restart / cardio / no history. Plus nudge
+  priority (reached before stalled before items before weigh-in), and the schema's size.
+- `src/app.test.ts` (+11): the brief built from real rows (features, prescriptions, the
+  stated constraint), the cache serving the rest of the day free, a log invalidating it, a
+  context on the query string and one said through the Log sheet, regenerate rewriting the
+  same row, the reached candidate becoming `mark_reached` with the goal's id, a stalled goal
+  becoming `adjust_goal`, an 18-day gap prescribing a restart, the coach-ask card on the Day
+  view, the 503 and the stale fallback.
+- `src/adapters/coach/anthropic.coach.contract.test.ts` (1, skipped without a key, run and
+  green here): the grammar compiles on the coach model, and every exercise the model chose
+  from the prescription list came back with that prescription's numbers.
+- `src/scripts/seed-demo.test.ts`: the seeded brief on yesterday.
+
+**Deferred**
+
+- **No `GET /api/coach/briefs` history.** The Coach screen's "previous briefs" list has the
+  rows (one per distinct answer per day) but no endpoint yet; WP6 can add the query it wants
+  rather than one guessed at now.
+- **The brief is not regenerated when a *goal* changes**, only when the goal's id, priority
+  or candidates change — editing a goal's target mid-day leaves the morning's brief cached
+  until something else moves. Adding the metrics to the hash is a one-line change if it
+  bites.
+- **`loadCoachInputs` runs `computeDay` and `listGoals` on every ask, cached or not.** The
+  cache saves the model call, not the queries — the same trade WP3 made for readings.
+- **Nothing writes `expired`.** WP4 left this for "WP5's coach to ask"; the coach asks about
+  reached and stalled goals, and a goal whose `active_to` has passed still reads as active.
+  It wants a decision about whether an expiry is a question or a sweep.
+- **No app screens.** The Coach screen (brief, context input, regenerate, previous briefs)
+  is WP6; this is the API it reads.
+
+---
+
 ## WP4 — Goals and profile by talking
 
 A goal is now a thing the server can propose, judge, notice the end of, and keep in

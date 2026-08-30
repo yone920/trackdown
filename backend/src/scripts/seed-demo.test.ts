@@ -77,6 +77,16 @@ describe("npm run seed-demo", () => {
 		);
 		expect(goal.rows[0]?.title).toBe("Down to 170 lb");
 		expect(goal.rows[0]?.metrics[0]?.measure).toBe("body_weight");
+
+		// One brief on yesterday, so the Day screen's coach-ask card is not empty in the demo.
+		expect(stdout).toContain("Coach brief for");
+		const briefs = await db.pool.query<{ date: string; headline: string; workout: { type: string } }>(
+			`SELECT date, headline, workout FROM coach_briefs
+			  WHERE user_id = (SELECT id FROM "user" WHERE email = 'demo@example.com')`
+		);
+		expect(briefs.rows).toHaveLength(1);
+		expect(briefs.rows[0]?.headline).toContain("Pull day");
+		expect(briefs.rows[0]?.workout.type).toBe("strength");
 	}, 120_000);
 
 	it("is safe to run twice — the goal is not duplicated and closed days are left alone", async () => {

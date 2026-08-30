@@ -672,6 +672,9 @@ export function buildFacts({ date, tzOffsetMin, tdee, mealRows, activityRows, we
 		duration_min: row.duration_min,
 		distance_mi: row.distance_mi,
 		kcal: row.kcal,
+		// Not read by any measure; the coach's data-quality flags are what these are for.
+		source: row.source,
+		confidence: row.confidence,
 	}));
 	const weights: FactWeight[] = weightRows.map((row) => ({ date: on(row.logged_at), weight_lb: row.weight_lb }));
 	const healthSamples: FactHealthSample[] = healthRows.map((row) => ({

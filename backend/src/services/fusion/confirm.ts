@@ -1,8 +1,10 @@
 import type pg from "pg";
 import { z } from "zod";
+import { saveCoachContext } from "../coach/coach.js";
 import { insertEntries, insertWeights, getProfile, type NewEntry } from "../entries.js";
 import { insertTextEvidence, linkEvidence, type EvidenceRow } from "../evidence.js";
 import { InvalidGoalError, createGoal } from "../goals/store.js";
+import { localDateOf } from "../localTime.js";
 import type { GoalProposal } from "../goals/proposal.js";
 import { FusionResultSchema, type FusionKind } from "./schema.js";
 
@@ -55,8 +57,8 @@ export interface SavedLog {
 	/** The safe-rate timeline the goal was saved with (services/goals/proposal.ts). */
 	goal_proposal: GoalProposal | null;
 	profile: Row | null;
-	/** WP5 reads this back when the coach is asked; nothing else acts on it. */
-	coach_context: { text: string } | null;
+	/** Saved against the user's local day; the coach reads it when it is asked (WP5). */
+	coach_context: { date: string; text: string } | null;
 	evidence: EvidenceRow[];
 }
 
@@ -287,10 +289,11 @@ export async function saveConfirmed(
 		}
 
 		case "coach_context": {
-			// Nothing to write: the coach (WP5) reads the day's context when it is asked,
-			// and a context that outlives the day is a preference, not a context. The
-			// evidence row is the record that it was said.
-			saved.coach_context = { text: result.text };
+			// WP5 gave this a home: one row on the user's local day (migration 0008), read
+			// back when the coach is asked that day and never after it. A context that
+			// outlives the day is a preference, which is a different table on purpose.
+			const date = localDateOf(loggedAt ?? new Date(), body.tz_offset_min ?? 0);
+			saved.coach_context = await saveCoachContext(client, userId, date, result.text);
 			saved.evidence = await linkEvidence(client, userId, evidenceIds);
 			break;
 		}
