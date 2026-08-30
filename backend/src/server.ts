@@ -57,6 +57,7 @@ const app = createApp({
 	// The day readings run on the coach model: they are two sentences of judgement, not
 	// an extraction (config COACH_LLM_PROVIDER / LLM_MODEL_COACH).
 	readings: createDayReadings(container.coachLlm),
+	coach: container.coach,
 	allowedOrigins: config.allowedOrigins,
 	version: resolveVersion(),
 	commit: resolveCommit(),

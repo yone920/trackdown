@@ -1,8 +1,11 @@
+import { createLlmCoach } from "../adapters/coach/llm.js";
 import { createAuth } from "../auth.js";
 import { config } from "../config/index.js";
 import { createContainer } from "../container.js";
 import { describeTarget, pool } from "../db/client.js";
 import type { LlmPort } from "../ports/llm.js";
+import { nextBrief } from "../services/coach/coach.js";
+import { COACH_BRIEF_SCHEMA_NAME } from "../services/coach/schema.js";
 import { computeDay } from "../services/day.js";
 import { closeDueDays } from "../services/dayClose.js";
 import { insertEntries, insertWeights } from "../services/entries.js";
@@ -88,15 +91,37 @@ function cannedLlm(): LlmPort {
 		model: "seed-demo-canned",
 		async parseStructured({ schema, schemaName }) {
 			const answer =
-				schemaName === RIGHT_NOW_SCHEMA_NAME
+				schemaName === COACH_BRIEF_SCHEMA_NAME
 					? {
-							text: "You are on track for the day with dinner still to come.",
-							next_action: { label: "Log dinner", kind: "log_meal", hint: "Dinner is the only slot left" },
-							actions: [{ label: "Ask the coach", kind: "coach" }],
+							headline: "Pull day: back and shoulders",
+							why: "Chest was trained yesterday and back is five days out. You are two sessions into the week against a plan of four.",
+							workout: {
+								type: "strength",
+								targets: ["back", "shoulders"],
+								exercises: [
+									{ name: "Lat Pulldown", load_lb: 110, sets: 3, reps: 10, minutes: null, note: "Hold the load until ten is clean." },
+									{ name: "Dumbbell Row", load_lb: 50, sets: 3, reps: 12, minutes: null, note: null },
+									{ name: "Overhead Press", load_lb: 65, sets: 4, reps: 8, minutes: null, note: null },
+								],
+							},
+							nutrition: {
+								kcal: 2250,
+								protein_g: 175,
+								carbs_max_g: 250,
+								ideas: ["Greek yoghurt and berries", "Chicken, rice and greens"],
+								why: "Yesterday ran high on carbs, so keep the starch to one meal.",
+							},
+							nudge: "Weigh in tomorrow morning — the trend is what the plan is steered by.",
 						}
-					: {
-							text: "You trained and ate inside your allowance. The bench went up a step and the weigh-in came in lower than last week.",
-						};
+					: schemaName === RIGHT_NOW_SCHEMA_NAME
+						? {
+								text: "You are on track for the day with dinner still to come.",
+								next_action: { label: "Log dinner", kind: "log_meal", hint: "Dinner is the only slot left" },
+								actions: [{ label: "Ask the coach", kind: "coach" }],
+							}
+						: {
+								text: "You trained and ate inside your allowance. The bench went up a step and the weigh-in came in lower than last week.",
+							};
 			// Parsed through the caller's own schema, exactly as a real adapter would: a
 			// stand-in that could return a shape the schema rejects is not a stand-in.
 			return schema.parse(answer);
@@ -427,11 +452,23 @@ async function main(): Promise<void> {
 	await seedDays(userId);
 	await seedGoal(userId);
 
-	const readings = createDayReadings(hasCoachKey() ? createContainer(config).coachLlm : cannedLlm());
-	if (!hasCoachKey()) console.log("🤖 No coach API key — the readings use the built-in canned text.");
+	const coachLlm = hasCoachKey() ? createContainer(config).coachLlm : cannedLlm();
+	const readings = createDayReadings(coachLlm);
+	if (!hasCoachKey()) console.log("🤖 No coach API key — the readings and the brief use the built-in canned text.");
 
 	const report = await closeDueDays(pool, readings, { userId, tzOffsetMin });
 	console.log(`🔒 Closed ${report.closed.length} day(s): ${report.closed.join(", ") || "none"}`);
+
+	// One brief on yesterday, so the closed Day screen's coach-ask card has something to
+	// render. Nothing generates a brief on its own (concept-v2 §Principles 5) — this is a
+	// demo standing in for the user having tapped "What should I do today?" yesterday.
+	const yesterday = day(-1);
+	try {
+		const { brief } = await nextBrief(pool, createLlmCoach(coachLlm), userId, { date: yesterday, tzOffsetMin });
+		console.log(`🧠 Coach brief for ${yesterday}: ${brief.headline}`);
+	} catch (error) {
+		console.warn(`⚠️  No coach brief for ${yesterday}:`, error instanceof Error ? error.message : error);
+	}
 
 	// And leave today's reading warm, so the demo's first screen is not a spinner.
 	const view = await computeDay(pool, { userId, date: today, tzOffsetMin });

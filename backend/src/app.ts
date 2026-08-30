@@ -6,7 +6,9 @@ import type pg from "pg";
 import type { Auth } from "./auth.js";
 import { checkDatabase } from "./db/client.js";
 import { createRequireUser } from "./middleware/auth.js";
+import type { CoachPort } from "./ports/coach.js";
 import type { EvidenceStore } from "./ports/storage.js";
+import { coachRouter } from "./routes/coach.js";
 import { dayRouter } from "./routes/day.js";
 import { entriesRouter } from "./routes/entries.js";
 import { evidenceRouter } from "./routes/evidence.js";
@@ -29,6 +31,8 @@ export interface AppDeps {
 	evidence: EvidenceStore;
 	/** The two generated sentences on a day, and their cache (WP3). */
 	readings: DayReadings;
+	/** The on-demand brief behind GET /api/coach/next (WP5). */
+	coach: CoachPort;
 	allowedOrigins: string[];
 	version: string;
 	commit: string;
@@ -45,6 +49,7 @@ export function createApp({
 	fusion,
 	evidence,
 	readings,
+	coach,
 	allowedOrigins,
 	version,
 	commit,
@@ -94,6 +99,7 @@ export function createApp({
 	app.use(evidenceRouter(pool, evidence));
 	app.use(dayRouter(pool, readings));
 	app.use(goalsRouter(pool));
+	app.use(coachRouter(pool, coach, readings));
 
 	app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 		const message = error instanceof Error ? error.message : String(error);

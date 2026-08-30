@@ -1,9 +1,11 @@
+import { createLlmCoach } from "./adapters/coach/llm.js";
 import { createSmtpEmailer } from "./adapters/email/smtp.js";
 import { createAnthropicLlm } from "./adapters/llm/anthropic.js";
 import { createOpenAiLlm } from "./adapters/llm/openai.js";
 import { createUnavailableLlm } from "./adapters/llm/unavailable.js";
 import { createLocalEvidenceStore } from "./adapters/storage/local.js";
 import type { Config, EvidenceProvider, LlmProvider } from "./config/index.js";
+import type { CoachPort } from "./ports/coach.js";
 import type { EmailPort } from "./ports/email.js";
 import type { LlmPort } from "./ports/llm.js";
 import type { EvidenceStore } from "./ports/storage.js";
@@ -16,15 +18,23 @@ export interface Container {
 	llm: LlmPort;
 	/** The coach (WP5). Same port, usually a bigger model. */
 	coachLlm: LlmPort;
+	/**
+	 * The brief itself (WP5). Its own port, because "what should I do today" is a decision
+	 * the app makes rather than a model call it happens to run — a rules-only coach or a
+	 * hosted one is a different adapter and nothing else changes.
+	 */
+	coach: CoachPort;
 	email: EmailPort;
 	/** The bytes behind an evidence row (WP2). */
 	evidence: EvidenceStore;
 }
 
 export function createContainer(config: Config): Container {
+	const coachLlm = createLlm(config, config.llm.coachProvider, config.llm.coachModel);
 	return {
 		llm: createLlm(config, config.llm.provider, config.llm.fusionModel),
-		coachLlm: createLlm(config, config.llm.coachProvider, config.llm.coachModel),
+		coachLlm,
+		coach: createLlmCoach(coachLlm),
 		email: createSmtpEmailer(config.smtp),
 		evidence: createEvidenceStore(config.evidence.provider, config.evidence.dir),
 	};

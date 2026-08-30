@@ -2,6 +2,7 @@ import { Router, type Response } from "express";
 import type pg from "pg";
 import { z } from "zod";
 import type { AuthenticatedRequest } from "../middleware/auth.js";
+import { latestBrief } from "../services/coach/coach.js";
 import { computeDay, dayNumberFrom, firstActiveDate, type DayView } from "../services/day.js";
 import { closeDay, closeDueDays } from "../services/dayClose.js";
 import { verdictWords, type DayStatus, type Verdict } from "../services/goals/verdict.js";
@@ -159,7 +160,12 @@ export function dayRouter(pool: pg.Pool, readings: DayReadings): Router {
 			? await readings.rightNow(pool, userId, view, now)
 			: ((await readings.cached(pool, userId, date, "in_short")) ?? (await readings.inShort(pool, userId, view)));
 
-		res.json({ ...toBody(view), reading });
+		// The coach-ask card on the Day screen (docs/design-system.md §Day: "Coach-ask card
+		// if any"). The brief is generated only when the user asks for one — this is the
+		// record of that ask, not a second place that produces advice.
+		const coach = await latestBrief(pool, userId, date);
+
+		res.json({ ...toBody(view), reading, coach });
 	});
 
 	router.get("/api/week", async (req: AuthenticatedRequest, res) => {
