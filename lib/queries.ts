@@ -1,573 +1,192 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { api } from './api';
-import {
-  buildRecommendation,
-  type GoalPace,
-  type Recommendation,
-} from './recommendations';
-import {
-  type ActivityLevel,
-  type Sex,
-} from './tdee';
+import { api, tzOffsetMin, upload } from './api';
+import type {
+  AnalyzeResponse,
+  CoachNext,
+  ConfirmResponse,
+  DayView,
+  DaysView,
+  FusionResult,
+  GoalProgress,
+  GoalsView,
+  IsoDate,
+  Profile,
+  WeekView,
+} from './types';
 
-// Data hooks for the screens. Same exported names and shapes as the Supabase version;
-// only the transport changed — PostgREST calls became calls to backend/ (see lib/api.ts).
-// Day/range boundaries are still computed here in the phone's local timezone and sent
-// as ISO instants, exactly as the PostgREST filters were.
+// Every screen's data, and the only place a URL appears twice (lib/api.ts is the
+// transport). The v1 hooks that fetched `/api/entries/*` and did the arithmetic on the
+// phone are gone: the server computes the day, the targets and the verdict now
+// (docs/build-plan.md §WP3/§WP4), so a hook here fetches one endpoint and returns it.
+//
+// `tz` goes on every day-shaped request — the backend's day boundaries are the user's
+// local midnight and only this device knows where that is.
 
-export type Entry = {
-  id: string;
-  time: string;
-  name: string;
-  kcal: number;
-};
-
-export type MealMacros = {
-  protein_g: number | null;
-  carbs_g: number | null;
-  fat_g: number | null;
-  fiber_g: number | null;
-};
-
-export type EntryDetail = Entry & Partial<MealMacros> & {
-  weight_lb?: number | null;
-};
-
-/** Row shape returned by GET /api/entries/:kind (meals carry the macro columns). */
-type EntryRow = {
-  id: string;
-  description: string;
-  kcal: number;
-  logged_at: string;
-  protein_g?: number | null;
-  carbs_g?: number | null;
-  fat_g?: number | null;
-  fiber_g?: number | null;
-};
-
-type WeightRow = { id: string; weight_lb: number; logged_at: string };
-
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  let h = d.getHours();
-  const m = d.getMinutes();
-  const ampm = h >= 12 ? 'p' : 'a';
-  h = h % 12 || 12;
-  return `${h}:${String(m).padStart(2, '0')}${ampm}`;
-}
-
-function dayBounds(d = new Date()) {
-  const start = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const end = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
-  return { start: start.toISOString(), end: end.toISOString() };
-}
-
-export function localDateKey(d: Date): string {
+export function localDateKey(d: Date = new Date()): IsoDate {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
 
-function dayBoundsFromKey(dateKey: string) {
-  const [y, m, d] = dateKey.split('-').map(Number);
-  const start = new Date(y, m - 1, d);
-  const end = new Date(y, m - 1, d + 1);
-  return { start: start.toISOString(), end: end.toISOString() };
+/** Everything a confirmed log can have changed. One list, so no screen goes stale. */
+export function invalidateAfterLog(qc: ReturnType<typeof useQueryClient>): void {
+  for (const key of ['day', 'week', 'days', 'goals', 'profile', 'coach'])
+    qc.invalidateQueries({ queryKey: [key] });
 }
 
-type Kind = 'meals' | 'movement';
+// ---------------------------------------------------------------------------
+// Reading
+// ---------------------------------------------------------------------------
 
-type RangeQuery = { from?: string; to?: string; order?: 'asc' | 'desc'; limit?: number };
-
-function listEntries(kind: Kind, query: RangeQuery) {
-  return api<EntryRow[]>(`/api/entries/${kind}`, { query });
-}
-
-function listWeights(query: RangeQuery) {
-  return api<WeightRow[]>('/api/weight', { query });
-}
-
-const toEntry = (r: EntryRow): Entry => ({
-  id: r.id,
-  time: formatTime(r.logged_at),
-  name: r.description,
-  kcal: r.kcal ?? 0,
-});
-
-async function fetchToday(kind: Kind): Promise<Entry[]> {
-  const { start, end } = dayBounds();
-  const rows = await listEntries(kind, { from: start, to: end, order: 'desc' });
-  return rows.map(toEntry);
-}
-
-async function fetchRecentUnique(
-  kind: Kind,
-  limit: number,
-): Promise<{ name: string; kcal: number }[]> {
-  const rows = await listEntries(kind, { order: 'desc', limit: 50 });
-  const seen = new Map<string, { name: string; kcal: number }>();
-  for (const r of rows) {
-    if (!seen.has(r.description)) seen.set(r.description, { name: r.description, kcal: r.kcal ?? 0 });
-    if (seen.size >= limit) break;
-  }
-  return Array.from(seen.values());
-}
-
-export function useMealsToday() {
-  return useQuery({ queryKey: ['meals', 'today'], queryFn: () => fetchToday('meals') });
-}
-
-export type TodayMacros = {
-  protein_g: number;
-  carbs_g: number;
-  fat_g: number;
-  fiber_g: number;
-};
-
-async function fetchTodayMacros(): Promise<TodayMacros> {
-  const { start, end } = dayBounds();
-  const rows = await listEntries('meals', { from: start, to: end });
-  const totals: TodayMacros = { protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 };
-  for (const r of rows) {
-    totals.protein_g += Number(r.protein_g ?? 0);
-    totals.carbs_g += Number(r.carbs_g ?? 0);
-    totals.fat_g += Number(r.fat_g ?? 0);
-    totals.fiber_g += Number(r.fiber_g ?? 0);
-  }
-  return totals;
-}
-
-export function useTodayMacros() {
-  return useQuery({ queryKey: ['meals', 'today-macros'], queryFn: fetchTodayMacros });
-}
-
-export function useMovementToday() {
+/** GET /api/day/:date — the live day when `date` is today, the record when it is past. */
+export function useDay(date: IsoDate) {
   return useQuery({
-    queryKey: ['movement', 'today'],
-    queryFn: () => fetchToday('movement'),
+    queryKey: ['day', date],
+    enabled: !!date,
+    queryFn: () => api<DayView>(`/api/day/${date}`, { query: { tz: tzOffsetMin() } }),
   });
 }
 
-export function useRecentMeals(limit = 8) {
+/** GET /api/week — seven statuses and the week's deficit. */
+export function useWeek(end?: IsoDate) {
   return useQuery({
-    queryKey: ['meals', 'recent', limit],
-    queryFn: () => fetchRecentUnique('meals', limit),
+    queryKey: ['week', end ?? 'today'],
+    queryFn: () => api<WeekView>('/api/week', { query: { tz: tzOffsetMin(), end } }),
   });
 }
 
-export function useRecentMovement(limit = 8) {
+/** GET /api/days — the Days list, newest first. */
+export function useDays(before?: IsoDate, limit = 14) {
   return useQuery({
-    queryKey: ['movement', 'recent', limit],
-    queryFn: () => fetchRecentUnique('movement', limit),
+    queryKey: ['days', before ?? 'top', limit],
+    queryFn: () => api<DaysView>('/api/days', { query: { tz: tzOffsetMin(), before, limit } }),
   });
 }
 
-export type EntryKind = 'meals' | 'movement' | 'weight';
-
-export function useEntry(kind: EntryKind, id: string) {
+/** GET /api/goals — active goals in priority order, with progress, plus history. */
+export function useGoals() {
   return useQuery({
-    queryKey: [kind, 'detail', id],
+    queryKey: ['goals'],
+    queryFn: () => api<GoalsView>('/api/goals', { query: { tz: tzOffsetMin() } }),
+  });
+}
+
+/** GET /api/goals/:id/progress — per-metric current/target/% and the trend series. */
+export function useGoalProgress(id: string | null) {
+  return useQuery({
+    queryKey: ['goals', 'progress', id],
     enabled: !!id,
-    queryFn: async (): Promise<EntryDetail | null> => {
-      if (kind === 'weight') {
-        const row = await api<WeightRow>(`/api/weight/${id}`).catch(notFoundAsNull);
-        if (!row) return null;
-        return {
-          id: row.id,
-          time: formatTime(row.logged_at),
-          name: 'Weight reading',
-          kcal: 0,
-          weight_lb: Number(row.weight_lb),
-        };
-      }
-      const row = await api<EntryRow>(`/api/entries/${kind}/${id}`).catch(notFoundAsNull);
-      if (!row) return null;
-      const base: EntryDetail = toEntry(row);
-      if (kind === 'meals') {
-        const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
-        base.protein_g = num(row.protein_g);
-        base.carbs_g = num(row.carbs_g);
-        base.fat_g = num(row.fat_g);
-        base.fiber_g = num(row.fiber_g);
-      }
-      return base;
-    },
+    queryFn: () =>
+      api<GoalProgress & { today: IsoDate }>(`/api/goals/${id}/progress`, {
+        query: { tz: tzOffsetMin() },
+      }),
   });
 }
 
-function notFoundAsNull(error: unknown): null {
-  if (error && typeof error === 'object' && (error as { status?: number }).status === 404) return null;
-  throw error;
-}
-
-export function useDeleteEntry() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async ({ kind, id }: { kind: EntryKind; id: string }) => {
-      const path = kind === 'weight' ? `/api/weight/${id}` : `/api/entries/${kind}/${id}`;
-      await api<void>(path, { method: 'DELETE' });
-    },
-    onSuccess: (_, { kind }) => {
-      const key = kind === 'weight' ? 'weight' : kind;
-      qc.invalidateQueries({ queryKey: [key] });
-      qc.invalidateQueries({ queryKey: ['summary'] });
-      qc.invalidateQueries({ queryKey: ['day'] });
-    },
-  });
-}
-
-export type EntryPatch = {
-  kcal?: number;
-  protein_g?: number | null;
-  carbs_g?: number | null;
-  fat_g?: number | null;
-  fiber_g?: number | null;
-};
-
-export function useUpdateEntry() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async ({
-      kind,
-      id,
-      patch,
-    }: {
-      kind: 'meals' | 'movement';
-      id: string;
-      patch: EntryPatch;
-    }) => {
-      await api<EntryRow>(`/api/entries/${kind}/${id}`, { method: 'PATCH', body: patch });
-    },
-    onSuccess: (_, { kind, id }) => {
-      qc.invalidateQueries({ queryKey: [kind] });
-      qc.invalidateQueries({ queryKey: [kind, 'detail', id] });
-      qc.invalidateQueries({ queryKey: ['meals', 'today-macros'] });
-      qc.invalidateQueries({ queryKey: ['summary'] });
-      qc.invalidateQueries({ queryKey: ['day'] });
-    },
-  });
-}
-
-function useAdd(kind: Kind) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (input: { description: string; kcal: number }) => {
-      await api<EntryRow[]>(`/api/entries/${kind}`, { method: 'POST', body: input });
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: [kind] });
-      qc.invalidateQueries({ queryKey: ['summary'] });
-      qc.invalidateQueries({ queryKey: ['day'] });
-    },
-  });
-}
-
-export function useAddMeal() {
-  return useAdd('meals');
-}
-
-export function useAddMovement() {
-  return useAdd('movement');
-}
-
-export type ParsedItem = {
-  type: 'meal' | 'movement' | 'weight';
-  description: string;
-  kcal?: number;
-  protein_g?: number;
-  carbs_g?: number;
-  fat_g?: number;
-  fiber_g?: number;
-  weight_lb?: number;
-  confidence: 'low' | 'medium' | 'high';
-};
-
-export type LoggedItem = ParsedItem & { id?: string };
-
-// The backend parses the text with Claude (what the `parse-log` edge function did) and
-// saves every item in one transaction, returning them with their new ids.
-export function useLogText() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (text: string): Promise<LoggedItem[]> => {
-      const trimmed = text.trim();
-      if (!trimmed) throw new Error('Say something first.');
-      const { items } = await api<{ items: LoggedItem[] }>('/api/log', {
-        method: 'POST',
-        body: { text: trimmed },
-      });
-      if (items.length === 0) throw new Error('Could not understand that.');
-      return items;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['meals'] });
-      qc.invalidateQueries({ queryKey: ['movement'] });
-      qc.invalidateQueries({ queryKey: ['weight'] });
-      qc.invalidateQueries({ queryKey: ['summary'] });
-      qc.invalidateQueries({ queryKey: ['day'] });
-    },
-  });
-}
-
-export type DaySummary = {
-  date: string;
-  consumed: number;
-  burned: number;
-  mealCount: number;
-  movementCount: number;
-};
-
-async function fetchDaysSummary(days: number): Promise<DaySummary[]> {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1));
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-  const range = { from: start.toISOString(), to: end.toISOString() };
-
-  const [meals, movement] = await Promise.all([
-    listEntries('meals', range),
-    listEntries('movement', range),
-  ]);
-
-  const buckets = new Map<string, DaySummary>();
-  for (let i = 0; i < days; i++) {
-    const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
-    const key = localDateKey(d);
-    buckets.set(key, { date: key, consumed: 0, burned: 0, mealCount: 0, movementCount: 0 });
-  }
-
-  for (const r of meals) {
-    const b = buckets.get(localDateKey(new Date(r.logged_at)));
-    if (b) {
-      b.consumed += r.kcal ?? 0;
-      b.mealCount += 1;
-    }
-  }
-  for (const r of movement) {
-    const b = buckets.get(localDateKey(new Date(r.logged_at)));
-    if (b) {
-      b.burned += r.kcal ?? 0;
-      b.movementCount += 1;
-    }
-  }
-
-  return Array.from(buckets.values()).sort((a, b) => a.date.localeCompare(b.date));
-}
-
-export function useDaysSummary(days = 14) {
-  return useQuery({
-    queryKey: ['summary', days],
-    queryFn: () => fetchDaysSummary(days),
-  });
-}
-
-export type LoggedEntry = {
-  id: string;
-  description: string;
-  kcal: number;
-  logged_at: string;
-};
-
-async function fetchRecentEntries(kind: Kind, days: number): Promise<LoggedEntry[]> {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1));
-  const rows = await listEntries(kind, { from: start.toISOString(), order: 'desc' });
-  return rows.map((r) => ({
-    id: r.id,
-    description: r.description,
-    kcal: r.kcal ?? 0,
-    logged_at: r.logged_at,
-  }));
-}
-
-export function useRecentMealEntries(days = 30) {
-  return useQuery({
-    queryKey: ['meals', 'entries', days],
-    queryFn: () => fetchRecentEntries('meals', days),
-  });
-}
-
-export function useRecentMovementEntries(days = 30) {
-  return useQuery({
-    queryKey: ['movement', 'entries', days],
-    queryFn: () => fetchRecentEntries('movement', days),
-  });
-}
-
-export type WeightLog = {
-  id: string;
-  weight_lb: number;
-  logged_at: string;
-};
-
-const toWeightLog = (r: WeightRow): WeightLog => ({
-  id: r.id,
-  weight_lb: Number(r.weight_lb),
-  logged_at: r.logged_at,
-});
-
-async function fetchWeightLogs(days: number): Promise<WeightLog[]> {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1));
-  const rows = await listWeights({ from: start.toISOString(), order: 'asc' });
-  return rows.map(toWeightLog);
-}
-
-async function fetchAllWeightLogs(): Promise<WeightLog[]> {
-  const rows = await listWeights({ order: 'asc' });
-  return rows.map(toWeightLog);
-}
-
-export function useWeightLogs(days = 30) {
-  return useQuery({
-    queryKey: ['weight', 'range', days],
-    queryFn: () => fetchWeightLogs(days),
-  });
-}
-
-export function useAllWeightLogs() {
-  return useQuery({
-    queryKey: ['weight', 'all'],
-    queryFn: fetchAllWeightLogs,
-  });
-}
-
-export type Profile = {
-  id: string;
-  display_name: string | null;
-  goal_weight_lb: number | null;
-  units: 'imperial' | 'metric';
-  sex: Sex | null;
-  birth_year: number | null;
-  height_cm: number | null;
-  activity_level: ActivityLevel | null;
-  goal_pace: GoalPace;
-  pregnant_or_lactating: boolean;
-  health_concern: boolean;
-  disclaimer_acknowledged_at: string | null;
-};
-
-async function fetchProfile(): Promise<Profile | null> {
-  const row = await api<Record<string, unknown>>('/api/profile');
-  if (!row) return null;
-  const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
-  return {
-    id: row.id as string,
-    display_name: (row.display_name as string | null) ?? null,
-    goal_weight_lb: num(row.goal_weight_lb),
-    units: ((row.units as string) ?? 'imperial') as 'imperial' | 'metric',
-    sex: (row.sex as Sex | null) ?? null,
-    birth_year: num(row.birth_year),
-    height_cm: num(row.height_cm),
-    activity_level: (row.activity_level as ActivityLevel | null) ?? null,
-    goal_pace: ((row.goal_pace as GoalPace | null) ?? 'standard') as GoalPace,
-    pregnant_or_lactating: Boolean(row.pregnant_or_lactating),
-    health_concern: Boolean(row.health_concern),
-    disclaimer_acknowledged_at:
-      (row.disclaimer_acknowledged_at as string | null) ?? null,
-  };
-}
-
+/** GET /api/profile — the plan row and the targets the server derives from it. */
 export function useProfile() {
-  return useQuery({ queryKey: ['profile'], queryFn: fetchProfile });
-}
-
-export type ProfileUpdate = Partial<{
-  display_name: string | null;
-  goal_weight_lb: number | null;
-  sex: Sex | null;
-  birth_year: number | null;
-  height_cm: number | null;
-  activity_level: ActivityLevel | null;
-  goal_pace: GoalPace;
-  pregnant_or_lactating: boolean;
-  health_concern: boolean;
-  disclaimer_acknowledged_at: string | null;
-}>;
-
-export function useAddWeight() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (weightLb: number) => {
-      await api<WeightRow[]>('/api/weight', { method: 'POST', body: { weight_lb: weightLb } });
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['weight'] });
-      qc.invalidateQueries({ queryKey: ['tdee'] });
-    },
+  return useQuery({
+    queryKey: ['profile'],
+    queryFn: () => api<Profile>('/api/profile', { query: { tz: tzOffsetMin() } }),
   });
 }
 
-export function useUpdateProfile() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (patch: ProfileUpdate) => {
-      await api<Record<string, unknown>>('/api/profile', { method: 'PATCH', body: patch });
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['profile'] });
-      qc.invalidateQueries({ queryKey: ['recommendation'] });
-    },
+/**
+ * GET /api/coach/next — today's brief, cached for the day on the server. Never fetched
+ * on its own: the coach is a button (concept-v2 §Principles 5), so this hook is only
+ * mounted by the Coach screen.
+ */
+export function useCoachNext(context?: string | null) {
+  return useQuery({
+    queryKey: ['coach', 'next', context ?? ''],
+    queryFn: () =>
+      api<CoachNext>('/api/coach/next', {
+        query: { tz: tzOffsetMin(), context: context ?? undefined },
+      }),
+    // A brief costs a model call; asking again on every focus is not what the button means.
+    staleTime: 1000 * 60 * 30,
+    retry: 0,
   });
 }
 
-export function useAcknowledgeDisclaimer() {
-  const update = useUpdateProfile();
-  return () => update.mutateAsync({ disclaimer_acknowledged_at: new Date().toISOString() });
+export function useRegenerateCoach() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (context: string | null) =>
+      api<CoachNext>('/api/coach/next/regenerate', {
+        method: 'POST',
+        body: { tz_offset_min: tzOffsetMin(), context },
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['coach'] }),
+  });
 }
 
-export type RecSummary = {
-  ready: boolean;
-  missing: ('sex' | 'birth_year' | 'height_cm' | 'activity_level' | 'weight')[];
-  weightLb: number | null;
-  recommendation: Recommendation | null;
+// ---------------------------------------------------------------------------
+// The log pipeline
+// ---------------------------------------------------------------------------
+
+export type AnalyzeInput = {
+  text?: string | null;
+  /** Local file URIs, already downscaled (lib/photos.ts). At most four. */
+  photos?: { uri: string; filename: string; type: string }[];
+  kindHint?: string | null;
 };
 
-export function useRecommendation(): RecSummary {
-  const { data: profile } = useProfile();
-  const { data: weightLogs = [] } = useAllWeightLogs();
-  const latestWeight =
-    weightLogs.length > 0 ? weightLogs[weightLogs.length - 1].weight_lb : null;
-
-  const missing: RecSummary['missing'] = [];
-  if (!profile?.sex) missing.push('sex');
-  if (!profile?.birth_year) missing.push('birth_year');
-  if (!profile?.height_cm) missing.push('height_cm');
-  if (!profile?.activity_level) missing.push('activity_level');
-  if (latestWeight === null) missing.push('weight');
-
-  if (missing.length > 0 || !profile) {
-    return { ready: false, missing, weightLb: latestWeight, recommendation: null };
-  }
-
-  const recommendation = buildRecommendation({
-    sex: profile.sex!,
-    birthYear: profile.birth_year!,
-    heightCm: profile.height_cm!,
-    weightLb: latestWeight!,
-    activityLevel: profile.activity_level!,
-    goalPace: profile.goal_pace,
-    goalWeightLb: profile.goal_weight_lb,
-    pregnantOrLactating: profile.pregnant_or_lactating,
-    healthConcern: profile.health_concern,
+/** POST /api/log/analyze — a preview. Nothing is saved until the user confirms. */
+export function useAnalyze() {
+  return useMutation({
+    mutationFn: ({ text, photos = [], kindHint }: AnalyzeInput) => {
+      const parts = [
+        ...(text ? [{ name: 'text', value: text }] : []),
+        ...(kindHint ? [{ name: 'kind_hint', value: kindHint }] : []),
+        { name: 'client_time', value: new Date().toISOString() },
+        { name: 'tz_offset_min', value: String(tzOffsetMin()) },
+        ...photos.map((photo) => ({
+          name: 'photos',
+          uri: photo.uri,
+          filename: photo.filename,
+          type: photo.type,
+        })),
+      ];
+      return upload<AnalyzeResponse>('/api/log/analyze', parts);
+    },
   });
-
-  return { ready: true, missing: [], weightLb: latestWeight, recommendation };
 }
 
-export function useDay(dateKey: string) {
-  return useQuery({
-    queryKey: ['day', dateKey],
-    enabled: !!dateKey,
-    queryFn: async (): Promise<{ meals: Entry[]; movement: Entry[] }> => {
-      const { start, end } = dayBoundsFromKey(dateKey);
-      const range = { from: start, to: end, order: 'asc' as const };
-      const [meals, movement] = await Promise.all([
-        listEntries('meals', range),
-        listEntries('movement', range),
-      ]);
-      return { meals: meals.map(toEntry), movement: movement.map(toEntry) };
-    },
+export type ConfirmInput = {
+  /** Minted once per confirm card, so a retry replays instead of logging twice. */
+  clientId: string;
+  result: FusionResult;
+  evidenceIds?: string[];
+  text?: string | null;
+  textKind?: 'text' | 'transcript';
+  source?: 'fused' | 'manual';
+  /** kind "goal": keep the user's own date, or save with no finish line. */
+  confirmDate?: boolean;
+  noDate?: boolean;
+};
+
+/** POST /api/log/confirm — writes the (edited) preview in one transaction. */
+export function useConfirm() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ConfirmInput) =>
+      api<ConfirmResponse>('/api/log/confirm', {
+        method: 'POST',
+        body: {
+          client_id: input.clientId,
+          result: input.result,
+          evidence_ids: input.evidenceIds ?? [],
+          text: input.text ?? null,
+          text_kind: input.textKind ?? 'text',
+          ...(input.source ? { source: input.source } : {}),
+          tz_offset_min: tzOffsetMin(),
+          ...(input.confirmDate === undefined ? {} : { confirm_date: input.confirmDate }),
+          ...(input.noDate === undefined ? {} : { no_date: input.noDate }),
+        },
+      }),
+    onSuccess: () => invalidateAfterLog(qc),
   });
 }

@@ -21,6 +21,15 @@ export class ApiError extends Error {
 
 type Query = Record<string, string | number | boolean | undefined>;
 
+/**
+ * Minutes to add to UTC for the phone's local time. The backend takes this on every
+ * day-shaped route: day boundaries are the user's local midnight, and only the phone
+ * knows where that is (docs/agent-brief.md §Engineering rules).
+ */
+export function tzOffsetMin(at: Date = new Date()): number {
+  return -at.getTimezoneOffset();
+}
+
 let onUnauthorized: (() => void) | null = null;
 /** lib/auth registers itself here so a 401 drops the dead session (avoids an import cycle). */
 export function setUnauthorizedHandler(handler: () => void): void {
@@ -61,6 +70,59 @@ export async function api<T>(
     if (res.status === 401) onUnauthorized?.();
     const payload = (data ?? {}) as { error?: string; issues?: unknown };
     throw new ApiError(res.status, payload.error ?? `Request failed (${res.status}).`, payload.issues);
+  }
+  return data as T;
+}
+
+/** The headers an <Image> needs to fetch `/api/evidence/:id`, which is authenticated. */
+export function authHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+export function evidenceUrl(id: string): string {
+  return `${API_URL}/api/evidence/${id}`;
+}
+
+export type UploadPart =
+  | { name: string; value: string }
+  | { name: string; uri: string; filename: string; type: string };
+
+/**
+ * multipart/form-data, for `POST /api/log/analyze` — the one endpoint that takes bytes.
+ * React Native's FormData accepts `{ uri, name, type }` where the web takes a Blob, and
+ * the Content-Type header must be left unset so the runtime can add its own boundary.
+ */
+export async function upload<T>(path: string, parts: UploadPart[]): Promise<T> {
+  const form = new FormData();
+  for (const part of parts) {
+    if ('value' in part) form.append(part.name, part.value);
+    else {
+      // The RN FormData file shape; the DOM types do not describe it.
+      form.append(part.name, {
+        uri: part.uri,
+        name: part.filename,
+        type: part.type,
+      } as unknown as Blob);
+    }
+  }
+
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(API_URL + path, { method: 'POST', headers, body: form });
+  const text = await res.text();
+  let data: unknown = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+  if (!res.ok) {
+    if (res.status === 401) onUnauthorized?.();
+    const payload = (data ?? {}) as { error?: string; issues?: unknown };
+    throw new ApiError(res.status, payload.error ?? `Upload failed (${res.status}).`, payload.issues);
   }
   return data as T;
 }

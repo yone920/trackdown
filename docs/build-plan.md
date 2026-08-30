@@ -271,6 +271,8 @@ Shipped; the deltas from what is written below are marked **(built:)**.
   so where the first scheduler would go.**)**
 
 ### WP6 — App: new screens (direction A)
+Split in two: **WP6a** (theme, shared components, API layer, Today, Log, navigation —
+shipped) and **WP6b** (Days, Day, DayLog, Progress, Goals). See `docs/CHANGELOG-v2.md`.
 Rebuild per `docs/design-system.md` — new tokens, Barlow / Barlow Condensed, dark UI. Remove the
 old theme. Screens: Today, Log, Days, Day, DayLog, Progress, Goals (incl. empty/propose/reached/
 history), plus account rows inside Goals. Must run in **Expo Go** (SDK 54): speech behind

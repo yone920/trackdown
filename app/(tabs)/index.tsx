@@ -1,341 +1,357 @@
-import { Feather } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import { Pressable, ScrollView, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
+import { useCallback, useMemo } from 'react';
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import {
-  useMealsToday,
-  useMovementToday,
-  useRecommendation,
-  useTodayMacros,
-} from '@/lib/queries';
-import { classifyDay, type DaySeverity } from '@/lib/recommendations';
+import { DayArc } from '@/components/day-arc';
+import { EvidenceThumbs } from '@/components/evidence';
+import { GoalBanner } from '@/components/goal-banner';
+import { IconAvatar } from '@/components/icons';
+import { Card, Chip, Chips, GroupHeading, Row, Section } from '@/components/kit';
+import { MetricCard } from '@/components/metric-card';
+import { ReadingCard } from '@/components/reading-card';
+import { Body, Disp, Eyebrow, Sub } from '@/components/type';
+import { clock, dateEyebrow, dateLabel, grams, kcal, slotLabel } from '@/lib/format';
+import { localDateKey, useDay, useGoals, useProfile, useWeek } from '@/lib/queries';
+import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
+import { todayCards } from '@/lib/today-cards';
+import type { ActionKind, DayView, MealSlot } from '@/lib/types';
 
-const FALLBACK_MACRO_GOALS = { carbs: 220, fat: 70, protein: 140, fiber: 30 };
+// Today (docs/design-system.md §Today). The live day: where you are, what the goal is,
+// the cards that goal decides, the model's two sentences about right now, the arc, and
+// what you have actually done — training and eating, organised the way the closed Day is.
+//
+// Nothing on this screen is computed here. `/api/day/:date` answers with the totals, the
+// verdict, the blocks and the deltas; `/api/goals` with the goal and its progress. The one
+// judgement the app makes is *which cards to show*, and that is lib/today-cards.ts.
+
+const STATUS_WORDS: Record<DayView['status'], { text: string; color: string }> = {
+  on_track: { text: 'on track', color: C.good },
+  over: { text: 'over', color: C.accent },
+  under: { text: 'under', color: C.accent },
+  none: { text: '—', color: C.mute },
+};
+
+const SLOT_ORDER: MealSlot[] = ['breakfast', 'lunch', 'dinner', 'snack'];
 
 export default function Today() {
-  const { data: mealsToday = [] } = useMealsToday();
-  const { data: movementToday = [] } = useMovementToday();
-  const { data: todayMacros } = useTodayMacros();
-  const rec = useRecommendation();
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+  // Recomputed on every render, so an app left open overnight asks for the new day.
+  const date = localDateKey();
 
-  const macroGoals =
-    rec.recommendation
-      ? {
-          carbs: rec.recommendation.macros.carbs_g,
-          fat: rec.recommendation.macros.fat_g,
-          protein: rec.recommendation.macros.protein_g,
-          fiber: rec.recommendation.macros.fiber_g,
-        }
-      : FALLBACK_MACRO_GOALS;
+  const day = useDay(date);
+  const week = useWeek();
+  const goals = useGoals();
+  const profile = useProfile();
 
-  const macros = [
-    { label: 'Carbs', value: Math.round(todayMacros?.carbs_g ?? 0), goal: macroGoals.carbs, unit: 'g' },
-    { label: 'Fat', value: Math.round(todayMacros?.fat_g ?? 0), goal: macroGoals.fat, unit: 'g' },
-    { label: 'Protein', value: Math.round(todayMacros?.protein_g ?? 0), goal: macroGoals.protein, unit: 'g' },
-    { label: 'Fiber', value: Math.round(todayMacros?.fiber_g ?? 0), goal: macroGoals.fiber, unit: 'g' },
-  ];
+  const refreshing = day.isRefetching || week.isRefetching || goals.isRefetching;
+  const onRefresh = useCallback(() => {
+    day.refetch();
+    week.refetch();
+    goals.refetch();
+    profile.refetch();
+  }, [day, week, goals, profile]);
 
-  const consumed = mealsToday.reduce((sum, m) => sum + m.kcal, 0);
-  const exerciseBurn = movementToday.reduce((sum, m) => sum + m.kcal, 0);
-  // True energy balance: subtract baseline TDEE plus logged exercise.
-  const baselineBurn = rec.recommendation?.tdee.tdee ?? 0;
-  const totalBurn = baselineBurn + exerciseBurn;
-  const target =
-    rec.recommendation?.mode === 'recommendations'
-      ? rec.recommendation.dailyCalories
-      : rec.recommendation?.mode === 'tracking_only'
-        ? rec.recommendation.maintenanceCalories
-        : 2100;
-  const targetDeficit =
-    rec.recommendation?.mode === 'recommendations'
-      ? rec.recommendation.dailyDeficit
-      : 500;
-  const safeFloor =
-    rec.recommendation?.mode === 'recommendations'
-      ? rec.recommendation.safeFloor
-      : rec.recommendation?.mode === 'tracking_only'
-        ? rec.recommendation.safeFloor
-        : 1500;
-  const net = rec.ready ? consumed - totalBurn : consumed - exerciseBurn;
-  const status = classifyDay({
-    consumed,
-    net,
-    dailyTarget: target,
-    targetDeficit,
-    safeFloor,
-  });
-  const intakeRemaining = target - consumed;
-  const overCap = intakeRemaining < 0;
-  const now = new Date();
-  const dayLabel = now.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
-  const dateLabel = now.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
-  const barPct = Math.max(0, Math.min(100, (consumed / target) * 100));
-  const netTint = severityTint(status.severity);
-  const intakeNote = status.belowSafeFloor
-    ? `Eaten only ${consumed.toLocaleString()} kcal — safe minimum is ${safeFloor.toLocaleString()} kcal.`
-    : overCap
-      ? `${Math.abs(intakeRemaining).toLocaleString()} kcal past your ${target.toLocaleString()} intake cap`
-      : `${intakeRemaining.toLocaleString()} kcal left of your ${target.toLocaleString()} daily intake`;
-  const heroNumberDisplay =
-    net < 0
-      ? `−${Math.abs(net).toLocaleString()}`
-      : net > 0
-        ? `+${net.toLocaleString()}`
-        : '0';
+  const goal = goals.data?.active?.[0] ?? null;
+  const cards = useMemo(
+    () => (day.data ? todayCards({ day: day.data, week: week.data ?? null, goal }) : []),
+    [day.data, week.data, goal],
+  );
+
+  const openLog = (hint?: string) =>
+    router.push(hint ? { pathname: '/log', params: { hint } } : '/log');
+
+  const onAction = (kind: ActionKind) => {
+    if (kind === 'coach') router.push('/coach');
+    else if (kind === 'weigh_in') openLog('weight');
+    else if (kind === 'workout') openLog('activities');
+    else openLog('meal');
+  };
+
+  if (day.isLoading && !day.data) {
+    return (
+      <View style={{ flex: 1, backgroundColor: C.bg, alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator color={C.mute} />
+      </View>
+    );
+  }
+
+  if (day.error || !day.data) {
+    return (
+      <View style={{ flex: 1, backgroundColor: C.bg, padding: SPACE.screen, justifyContent: 'center' }}>
+        <Disp size={26}>Could not reach the server</Disp>
+        <Sub style={{ marginTop: 8 }}>{(day.error as Error | null)?.message ?? 'No day to show.'}</Sub>
+        <View style={{ marginTop: 18, alignSelf: 'flex-start' }}>
+          <Chip label="Try again" variant="primary" onPress={onRefresh} />
+        </View>
+      </View>
+    );
+  }
+
+  const view = day.data;
+  const status = STATUS_WORDS[view.status];
+  const reading = view.reading;
+  const workoutDone = view.workout_done ?? view.blocks.length > 0;
+  const mealsBySlot = SLOT_ORDER.map((slot) => ({
+    slot,
+    meals: view.items.meals.filter((meal) => meal.slot === slot),
+  })).filter((group) => group.meals.length > 0);
+  const expectedMeal = view.expected.find((item) => item.kind === 'meal') ?? null;
+  const standalone = view.items.activities.filter((activity) => activity.block_id === null);
 
   return (
-    <SafeAreaView className="flex-1 bg-cream" edges={['top']}>
-      <ScrollView
-        className="flex-1"
-        contentContainerStyle={{ paddingBottom: 48 }}
-        showsVerticalScrollIndicator={false}>
-        <View className="px-8 pt-10">
-          <Text
-            className="text-[11px] text-ash"
-            style={{ letterSpacing: 3, textTransform: 'uppercase' }}>
-            {dayLabel} · {dateLabel}
-          </Text>
+    <ScrollView
+      testID="today-scroll"
+      style={{ flex: 1, backgroundColor: C.bg }}
+      contentContainerStyle={{
+        paddingHorizontal: SPACE.screen,
+        paddingTop: insets.top + 12,
+        paddingBottom: 140,
+      }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.mute} />}>
+      {/* Header */}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+        <View style={{ flex: 1 }}>
+          <Eyebrow>{dateEyebrow()}</Eyebrow>
+          <Disp size={30} style={{ marginTop: 6 }}>
+            Day {view.day_number} ·{' '}
+            <Text style={{ color: status.color, fontFamily: FONT.disp }}>{status.text}</Text>
+          </Disp>
         </View>
+        <Pressable
+          accessibilityLabel="Account"
+          onPress={() => router.push('/goals')}
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: RADIUS.pill,
+            borderWidth: 1,
+            borderColor: C.track,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
+          <IconAvatar size={20} color={C.mute} />
+        </Pressable>
+      </View>
 
-        <View className="px-8 pt-14 pb-10">
-          <Text className="text-[15px] text-graphite">{status.headline}</Text>
-          <View className="flex-row items-baseline mt-1">
-            <Text
-              className={`font-serif-light ${netTint}`}
-              style={{ fontSize: 96, lineHeight: 104, letterSpacing: -2 }}>
-              {heroNumberDisplay}
-            </Text>
-          </View>
-          <Text
-            className={`text-[15px] -mt-1 ${
-              status.severity === 'danger' ? 'text-terracotta' : 'text-graphite'
-            }`}>
-            {status.subline}
-          </Text>
+      {/* The goal, or the absence of one */}
+      <View style={{ marginTop: 18 }}>
+        <GoalBanner
+          testID="goal-banner"
+          title={goal?.title ?? null}
+          sub={goalSubtitle(goal?.metrics ?? [], goal?.progress?.percent ?? null)}
+          percent={goal?.progress?.percent ?? null}
+          onPress={() => router.push('/goals')}
+        />
+      </View>
 
-          <View className="flex-row mt-10">
-            <BalanceStat label="Eaten" value={consumed} tint="text-terracotta" />
-            <View className="w-[1px] bg-hairline mx-1 self-stretch" />
-            <BalanceStat
-              label="Burned"
-              value={rec.ready ? totalBurn : exerciseBurn}
-              tint="text-sage"
-              sublabel={
-                rec.ready
-                  ? `${baselineBurn.toLocaleString()} base + ${exerciseBurn.toLocaleString()} move`
-                  : undefined
-              }
+      {/* The cards the goal decides */}
+      <View style={{ marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+        {cards.map((card) => (
+          <View key={card.key} style={card.full ? { width: '100%' } : { flexGrow: 1, flexBasis: '46%' }}>
+            <MetricCard
+              testID={`metric-${card.key}`}
+              eyebrow={card.eyebrow}
+              value={card.value}
+              unit={card.unit}
+              sub={card.sub}
+              chart={card.chart}
+              valueColor={card.valueColor}
             />
-            <View className="w-[1px] bg-hairline mx-1 self-stretch" />
-            <BalanceStat label="Net" value={net} tint={netTint} />
           </View>
+        ))}
+      </View>
 
-          <View className="mt-8">
-            <View className="h-[2px] bg-hairline rounded-full overflow-hidden">
-              <View
-                className="h-full bg-terracotta"
-                style={{ width: `${barPct}%`, opacity: overCap ? 1 : 0.7 }}
-              />
-            </View>
-            <Text className="text-[12px] text-ash mt-3">{intakeNote}</Text>
+      {/* No target yet: the profile cannot produce one, so say what is missing. */}
+      {view.allowance == null && profile.data?.targets?.source === 'none' ? (
+        <Card style={{ marginTop: 12 }}>
+          <Eyebrow>No calorie target yet</Eyebrow>
+          <Body style={{ marginTop: 8, lineHeight: 15 * 1.55 }}>
+            Tell me your height, your age and what you weigh and I can work out what to eat.
+          </Body>
+          <View style={{ marginTop: 14 }}>
+            <Chips>
+              <Chip label="Tell me" variant="primary" onPress={() => openLog()} />
+            </Chips>
           </View>
+        </Card>
+      ) : null}
 
-          {!rec.ready && (
-            <Pressable
-              onPress={() => router.push('/(tabs)/profile')}
-              className="mt-6 flex-row items-center active:opacity-70">
-              <Text className="text-[12px] text-terracotta flex-1">
-                Set up your profile so we can compute your real TDEE.
-              </Text>
-              <Feather name="chevron-right" size={14} color="#B8623E" />
-            </Pressable>
-          )}
+      {/* Right now */}
+      {reading ? (
+        <View style={{ marginTop: 12 }}>
+          <ReadingCard eyebrow="Right now" text={reading.text} live={view.is_today}>
+            <Chips>
+              {reading.next_action ? (
+                <Chip
+                  label={reading.next_action.label}
+                  variant="primary"
+                  onPress={() => onAction(reading.next_action!.kind)}
+                />
+              ) : null}
+              {reading.actions.map((action) => (
+                <Chip key={action.label} label={action.label} onPress={() => onAction(action.kind)} />
+              ))}
+            </Chips>
+          </ReadingCard>
         </View>
+      ) : null}
 
-        <View className="px-8">
-          <Text
-            className="text-[10px] text-ash pb-4"
-            style={{ letterSpacing: 3, textTransform: 'uppercase' }}>
-            Macros
-          </Text>
-          <View className="gap-5">
-            {macros.map((m) => {
-              const pct = Math.min(100, (m.value / m.goal) * 100);
+      {/* The day arc */}
+      {view.arc.length > 0 ? (
+        <Card style={{ marginTop: 12 }}>
+          <Eyebrow>The day so far</Eyebrow>
+          <View style={{ marginTop: 10 }}>
+            <DayArc events={view.arc} />
+          </View>
+        </Card>
+      ) : null}
+
+      {/* Training */}
+      <Section
+        title="Training"
+        summary={
+          view.blocks.length === 0 && standalone.length === 0
+            ? 'Nothing yet'
+            : `${kcal(view.earned)} kcal earned`
+        }>
+        {view.blocks.length === 0 && standalone.length === 0 ? (
+          <Card>
+            <Sub>No exercise logged today.</Sub>
+          </Card>
+        ) : (
+          <Card style={{ paddingVertical: 4 }}>
+            {view.blocks.map((block) => {
+              const members = view.items.activities.filter((a) => a.block_id === block.id);
               return (
-                <View key={m.label}>
-                  <View className="flex-row justify-between items-baseline">
-                    <Text className="text-[14px] text-ink">{m.label}</Text>
-                    <Text className="font-serif text-[15px] text-ink">
-                      {m.value}
-                      <Text className="text-ash">
-                        {' '}
-                        / {m.goal}
-                        {m.unit}
-                      </Text>
-                    </Text>
-                  </View>
-                  <View className="mt-2 h-[1px] bg-hairline overflow-hidden">
-                    <View className="h-full bg-ink" style={{ width: `${pct}%` }} />
-                  </View>
+                <View key={block.id}>
+                  <GroupHeading
+                    label={block.title}
+                    right={`${clock(block.start)}–${clock(block.end)} · ${kcal(block.kcal)} kcal`}
+                  />
+                  {members.map((activity, index) => (
+                    <Row
+                      key={activity.id ?? `${block.id}-${index}`}
+                      time={clock(activity.logged_at)}
+                      title={activity.exercise ?? activity.description}
+                      sub={activity.exercise ? activity.description : null}
+                      right={activity.kcal > 0 ? kcal(activity.kcal) : null}
+                      divider={index < members.length - 1}>
+                      {activity.delta_vs_last ? (
+                        <Sub style={{ marginTop: 3, color: deltaColor(activity.delta_vs_last.direction) }}>
+                          {activity.delta_vs_last.text}
+                        </Sub>
+                      ) : null}
+                      <EvidenceThumbs photos={activity.evidence} />
+                    </Row>
+                  ))}
                 </View>
               );
             })}
-          </View>
-        </View>
+            {standalone.length > 0 ? (
+              <View>
+                <GroupHeading label="Also today" />
+                {standalone.map((activity, index) => (
+                  <Row
+                    key={activity.id ?? `standalone-${index}`}
+                    time={clock(activity.logged_at)}
+                    title={activity.exercise ?? activity.description}
+                    sub={activity.source === 'health' ? 'From Health' : null}
+                    right={activity.kcal > 0 ? kcal(activity.kcal) : null}
+                    divider={index < standalone.length - 1}
+                  />
+                ))}
+              </View>
+            ) : null}
+          </Card>
+        )}
+      </Section>
 
-        <View className="px-8 pt-14">
-          <View className="flex-row justify-between items-baseline pb-4">
-            <Pressable
-              onPress={() => router.push('/eating')}
-              hitSlop={8}
-              className="flex-row items-center">
-              <Text
-                className="text-[10px] text-ash"
-                style={{ letterSpacing: 3, textTransform: 'uppercase' }}>
-                Today's meals
-              </Text>
-              <Feather
-                name="chevron-right"
-                size={12}
-                color="#9A938A"
-                style={{ marginLeft: 6 }}
+      {/* Eating */}
+      <Section
+        title="Eating"
+        summary={`${kcal(view.eaten)} kcal${view.macros.protein_g.eaten != null ? ` · ${grams(view.macros.protein_g.eaten)} protein` : ''}`}>
+        <Card style={{ paddingVertical: 4 }}>
+          {mealsBySlot.map((group) => (
+            <View key={group.slot}>
+              <GroupHeading
+                label={slotLabel(group.slot)}
+                right={`${kcal(group.meals.reduce((sum, meal) => sum + meal.kcal, 0))} kcal`}
               />
-            </Pressable>
-            <Pressable onPress={() => router.push('/(tabs)/log')} hitSlop={8}>
-              <Text className="text-[11px] text-terracotta">+ add</Text>
-            </Pressable>
-          </View>
-          <View>
-            {mealsToday.length === 0 ? (
-              <Text className="text-[13px] text-ash italic py-2">Nothing logged yet today.</Text>
-            ) : (
-              mealsToday.map((meal, i) => (
-                <Pressable
+              {group.meals.map((meal, index) => (
+                <Row
                   key={meal.id}
-                  onPress={() =>
-                    router.push({ pathname: '/detail', params: { type: 'meals', id: meal.id } })
-                  }
-                  className={`flex-row items-center py-5 ${
-                    i !== mealsToday.length - 1 ? 'border-b border-hairline' : ''
-                  }`}>
-                  <Text className="w-16 text-[12px] text-ash">{meal.time}</Text>
-                  <Text
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                    className="flex-1 text-[15px] text-ink pr-3">
-                    {meal.name}
-                  </Text>
-                  <Text className="font-serif text-[15px] text-ink">
-                    {meal.kcal > 0 ? meal.kcal : '—'}
-                  </Text>
-                </Pressable>
-              ))
-            )}
-          </View>
-        </View>
+                  time={clock(meal.logged_at)}
+                  title={meal.description}
+                  sub={grams(meal.protein_g) ? `${grams(meal.protein_g)} protein` : null}
+                  right={kcal(meal.kcal)}
+                  divider={index < group.meals.length - 1}>
+                  <EvidenceThumbs photos={meal.evidence} />
+                </Row>
+              ))}
+            </View>
+          ))}
 
-        <View className="px-8 pt-12">
-          <View className="flex-row justify-between items-baseline pb-4">
-            <Pressable
-              onPress={() => router.push('/movement')}
-              hitSlop={8}
-              className="flex-row items-center">
-              <Text
-                className="text-[10px] text-ash"
-                style={{ letterSpacing: 3, textTransform: 'uppercase' }}>
-                Movement
-              </Text>
-              <Feather
-                name="chevron-right"
-                size={12}
-                color="#9A938A"
-                style={{ marginLeft: 6 }}
+          {/* The dashed placeholder for the meal the clock says is due. */}
+          {expectedMeal ? (
+            <View>
+              <GroupHeading label={slotLabel(expectedMeal.slot ?? 'snack')} right="Expected" />
+              <Row
+                title={expectedMeal.label}
+                sub="Not logged yet"
+                right="—"
+                rightColor={C.dim}
+                dashed
+                divider={false}
+                onPress={() => openLog('meal')}
               />
-            </Pressable>
-            <Pressable onPress={() => router.push('/(tabs)/log')} hitSlop={8}>
-              <Text className="text-[11px] text-terracotta">+ add</Text>
-            </Pressable>
-          </View>
-          <View>
-            {movementToday.length === 0 ? (
-              <Text className="text-[13px] text-ash italic py-2">No movement logged yet.</Text>
-            ) : (
-              movementToday.map((m, i) => (
-                <Pressable
-                  key={m.id}
-                  onPress={() =>
-                    router.push({ pathname: '/detail', params: { type: 'movement', id: m.id } })
-                  }
-                  className={`flex-row items-center py-5 ${
-                    i !== movementToday.length - 1 ? 'border-b border-hairline' : ''
-                  }`}>
-                  <Text className="w-16 text-[12px] text-ash">{m.time}</Text>
-                  <Text
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                    className="flex-1 text-[15px] text-ink pr-3">
-                    {m.name}
-                  </Text>
-                  <Text className="font-serif text-[15px] text-sage">
-                    {m.kcal > 0 ? `−${m.kcal}` : '—'}
-                  </Text>
-                </Pressable>
-              ))
-            )}
-          </View>
-        </View>
+            </View>
+          ) : null}
 
-        <View className="px-8 pt-10">
-          <Text className="text-[13px] italic text-graphite text-center font-serif">
-            "Small steps, taken daily."
-          </Text>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+          {mealsBySlot.length === 0 && !expectedMeal ? (
+            <View style={{ paddingVertical: 14 }}>
+              <Sub>Nothing eaten yet today.</Sub>
+            </View>
+          ) : null}
+        </Card>
+        {view.eating_pattern ? <Sub style={{ marginTop: 10 }}>{view.eating_pattern}</Sub> : null}
+      </Section>
+
+      {/* The coach is a button (concept-v2 §Principles 5) */}
+      <Pressable
+        testID="coach-button"
+        onPress={() => router.push('/coach')}
+        style={({ pressed }) => ({
+          marginTop: 26,
+          borderRadius: RADIUS.pill,
+          backgroundColor: C.accent,
+          paddingVertical: 16,
+          alignItems: 'center',
+          opacity: pressed ? 0.85 : 1,
+        })}>
+        <Body style={{ fontFamily: FONT.semi, color: C.bg }}>
+          {workoutDone ? 'What should I do tomorrow?' : 'What should I do today?'}
+        </Body>
+      </Pressable>
+    </ScrollView>
   );
 }
 
-function severityTint(severity: DaySeverity): string {
-  switch (severity) {
-    case 'good':
-      return 'text-sage';
-    case 'caution':
-    case 'danger':
-      return 'text-terracotta';
-    case 'neutral':
-    default:
-      return 'text-ink';
-  }
+function deltaColor(direction: 'up' | 'down' | 'same' | 'new'): string {
+  if (direction === 'up') return C.good;
+  if (direction === 'down') return C.accent;
+  return C.mute;
 }
 
-function BalanceStat({
-  label,
-  value,
-  tint,
-  sublabel,
-}: {
-  label: string;
-  value: number;
-  tint: string;
-  sublabel?: string;
-}) {
-  return (
-    <View className="flex-1 items-center">
-      <Text
-        className="text-[10px] text-ash"
-        style={{ letterSpacing: 2, textTransform: 'uppercase' }}>
-        {label}
-      </Text>
-      <Text className={`font-serif text-[24px] mt-2 ${tint}`}>
-        {value.toLocaleString()}
-      </Text>
-      <Text className="text-[10px] text-ash mt-1">kcal</Text>
-      {sublabel && (
-        <Text className="text-[9px] text-mist mt-0.5 text-center" numberOfLines={2}>
-          {sublabel}
-        </Text>
-      )}
-    </View>
-  );
+/** The line under the goal's title: what it is measured on, and where it finishes. */
+function goalSubtitle(
+  metrics: { measure: string; target?: number | null; unit?: string | null; by?: string | null }[],
+  percent: number | null,
+): string | null {
+  const first = metrics[0];
+  if (!first) return percent == null ? null : `${Math.round(percent * 100)}% of the way`;
+  const target = first.target == null ? null : `${first.target}${first.unit ? ` ${first.unit}` : ''}`;
+  const by = first.by ? ` by ${dateLabel(first.by)}` : '';
+  return target ? `${target}${by}` : by.trim() || null;
 }
