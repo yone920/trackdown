@@ -10,6 +10,7 @@ import { createLogParser, type ParsedItem } from "./services/parseLog.js";
 import { createFusionAnalyzer } from "./services/fusion/analyze.js";
 import { createDayReadings } from "./services/readings/readings.js";
 import type { FusionResult, FusionRoute } from "./services/fusion/schema.js";
+import { addDays, localDay } from "./services/localTime.js";
 import { startTestDatabase, type TestDatabase } from "./test/db.js";
 import { createFakeLlm } from "./test/fakes/llm.js";
 import { createFakeEvidenceStore } from "./test/fakes/storage.js";
@@ -77,6 +78,14 @@ beforeAll(async () => {
 afterAll(async () => {
 	await db?.stop();
 });
+
+async function countRows(table: string, userId: string): Promise<number> {
+	const { rows } = await db.pool.query<{ count: string }>(
+		`SELECT COUNT(*)::text AS count FROM ${table} WHERE user_id = $1`,
+		[userId]
+	);
+	return Number(rows[0]!.count);
+}
 
 /** Creates the account and returns its bearer token — sign-up auto-signs in. */
 async function signUp(email: string, password: string = PASSWORD): Promise<string> {
@@ -809,5 +818,452 @@ describe("evidence sweep", () => {
 
 		const left = await db.pool.query(`SELECT storage_key FROM evidence WHERE user_id = $1`, [userId]);
 		expect(left.rows.map((r) => r.storage_key).sort()).toEqual([kept.key, fresh.key].sort());
+	});
+});
+
+// ── WP3: the day, the week and the list of days ──────────────────────────────────────
+// The SQL half of the day model, end to end: real rows in real Postgres, the real close
+// job, and the readings over the fake coach LlmPort. The arithmetic itself (clustering,
+// the overlap rules, thresholds, verdicts, deltas) is unit-tested in
+// src/services/day/day.test.ts; what is proved here is that the queries, the local-day
+// windows and the close all agree with it.
+
+const READING = {
+	text: "You are 1,840 kcal short of your allowance with dinner still open.",
+	next_action: { label: "Log dinner", kind: "log_meal", hint: "Dinner is the only slot left" },
+	actions: [{ label: "Ask the coach", kind: "coach" }],
+};
+
+/** An offset that makes it `hour`:00 in the user's local time right now, whenever the suite runs. */
+function tzForLocalHour(hour: number): number {
+	const now = new Date();
+	const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+	const offset = hour * 60 - utcMinutes;
+	// ±14 h is the API's limit; shifting a day does not change the local hour.
+	return offset > 840 ? offset - 1440 : offset < -840 ? offset + 1440 : offset;
+}
+
+/** The instant at `clock` local time on `date`, for a user at `tz`. */
+function localInstant(date: string, clock: string, tz: number): string {
+	const [h, m] = clock.split(":").map(Number);
+	return new Date(
+		Date.parse(`${date}T00:00:00Z`) - tz * 60_000 + ((h as number) * 60 + (m as number)) * 60_000
+	).toISOString();
+}
+
+describe("day — the live day", () => {
+	const tz = tzForLocalHour(15);
+	const today = localDay(new Date(), tz).date;
+	const lastWeek = addDays(today, -7);
+	let token: string;
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		token = await signUp("nora@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+
+		await request(app)
+			.patch("/api/profile")
+			.set(headers)
+			.send({
+				sex: "male",
+				// Relative, so the age the TDEE is computed from is 38 in any year the suite runs.
+				birth_year: new Date().getUTCFullYear() - 38,
+				height_cm: 180,
+				activity_level: "moderate",
+				goal_pace: "standard",
+				goal_weight_lb: 170,
+			});
+		await request(app).post("/api/weight").set(headers).send({ weight_lb: 195, logged_at: localInstant(lastWeek, "07:00", tz) });
+		await request(app).post("/api/weight").set(headers).send({ weight_lb: 193.4, logged_at: localInstant(today, "06:40", tz) });
+
+		// Last week's bench, so today's has something to be a delta against.
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({
+				description: "3 × 8 bench at 130 lb",
+				exercise: "Bench Press",
+				sets: 3,
+				reps: 8,
+				load_lb: 130,
+				kcal: 110,
+				logged_at: localInstant(lastWeek, "18:10", tz),
+			});
+
+		await request(app)
+			.post("/api/entries/meals")
+			.set(headers)
+			.send({ description: "eggs and toast", kcal: 480, protein_g: 32, carbs_g: 40, fat_g: 20, fiber_g: 4, logged_at: localInstant(today, "07:30", tz) });
+		await request(app)
+			.post("/api/entries/meals")
+			.set(headers)
+			.send({ description: "chicken and rice", kcal: 700, protein_g: 55, carbs_g: 70, fat_g: 18, fiber_g: 6, logged_at: localInstant(today, "12:30", tz) });
+
+		// One gym block: three lifts inside ninety minutes of each other.
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({ description: "3 × 8 bench at 135 lb", exercise: "Bench Press", sets: 3, reps: 8, load_lb: 135, kcal: 120, logged_at: localInstant(today, "13:10", tz) });
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({ description: "3 × 10 lat pulldown at 110 lb", exercise: "Lat Pulldown", sets: 3, reps: 10, load_lb: 110, kcal: 100, logged_at: localInstant(today, "13:35", tz) });
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({ description: "4 × 12 dumbbell row at 45 lb", exercise: "Dumbbell Row", sets: 4, reps: 12, load_lb: 45, kcal: 90, logged_at: localInstant(today, "14:05", tz) });
+	}, 60_000);
+
+	it("computes the day: one block, the calorie model, macros, weight trend and the delta", async () => {
+		const res = await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+		const day = res.body;
+
+		expect(day).toMatchObject({ date: today, is_today: true, closed_at: null, tz_offset_min: tz });
+		expect(day.items.meals).toHaveLength(2);
+		expect(day.items.activities).toHaveLength(3);
+
+		// One block, because the three lifts are within ninety minutes of each other.
+		expect(day.blocks).toHaveLength(1);
+		expect(day.blocks[0]).toMatchObject({ exercise_count: 3, kcal: 310, category: "strength" });
+		expect(day.blocks[0].title).toMatch(/back|chest/i);
+		for (const activity of day.items.activities) expect(activity.block_id).toBe(day.blocks[0].id);
+
+		// eaten = Σ meals; earned = Σ block calories; allowance = target + half of earned.
+		expect(day.eaten).toBe(1180);
+		expect(day.earned).toBe(310);
+		// 193.4 lb, 180 cm, 38, moderate → Mifflin-St Jeor 1,817 BMR × 1.55, minus the
+		// standard pace's 20 %, plus half of what the gym earned.
+		expect(day.tdee).toBe(2817);
+		expect(day.target).toBe(2254);
+		expect(day.eatback).toBe("half");
+		expect(day.allowance).toBe(2254 + 155);
+		expect(day.remaining).toBe(day.allowance - 1180);
+		expect(day.balance).toBe(2817 + 310 - 1180);
+
+		expect(day.macros.protein_g).toMatchObject({ eaten: 87, note: "under" });
+		expect(day.macros.protein_g.target).toBeGreaterThan(150);
+
+		expect(day.weight).toMatchObject({ day: 193.4, avg_7d: 193.4 });
+		// The 7-day average has moved down from last week's single 195 lb reading.
+		expect(day.weight.trend_per_week).toBeLessThan(0);
+
+		const bench = day.items.activities.find((a: { exercise: string }) => a.exercise === "Bench Press");
+		expect(bench.delta_vs_last).toMatchObject({ text: "+5 lb", direction: "up", field: "load_lb" });
+		expect(bench.delta_vs_last.previous).toMatchObject({ load_lb: 130 });
+		const row = day.items.activities.find((a: { exercise: string }) => a.exercise === "Dumbbell Row");
+		expect(row.delta_vs_last).toMatchObject({ text: "first time", direction: "new" });
+
+		expect(day.muscle_summary.map((m: { muscle: string }) => m.muscle)).toContain("back");
+		expect(day.eating_pattern).toContain("2 meals");
+		expect(day.expected.map((e: { kind: string }) => e.kind)).toContain("meal");
+		expect(day.arc.some((event: { kind: string }) => event.kind === "now")).toBe(true);
+		expect(day.arc.some((event: { kind: string }) => event.kind === "block")).toBe(true);
+
+		// No goal, so no judgement colours anywhere (concept-v2 §Goals).
+		expect(day).toMatchObject({ status: "none", verdict: "none", goal: null, goal_involves_calories: false });
+
+		// The 28-day fact window is server-side only.
+		expect(day.facts).toBeUndefined();
+	});
+
+	it("writes the Right now reading once and reuses it until the day changes", async () => {
+		const before = coachLlm.requests.length;
+		const first = await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
+		expect(first.body.reading).toMatchObject({ kind: "right_now", text: READING.text, model: "fake-coach-model" });
+		expect(first.body.reading.next_action).toMatchObject({ kind: "log_meal", label: "Log dinner" });
+
+		// The clock moved; nothing else did. No second call.
+		const again = await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
+		expect(again.body.reading.inputs_hash).toBe(first.body.reading.inputs_hash);
+		expect(coachLlm.requests.length).toBe(before);
+
+		coachLlm.nextOutput = { ...READING, text: "Dinner is logged; you are 320 kcal under your allowance." };
+		await request(app)
+			.post("/api/entries/meals")
+			.set(headers)
+			.send({ description: "salmon and potatoes", kcal: 820, protein_g: 48, logged_at: localInstant(today, "14:40", tz) });
+
+		const after = await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
+		expect(after.body.reading.text).toContain("Dinner is logged");
+		expect(after.body.reading.inputs_hash).not.toBe(first.body.reading.inputs_hash);
+		expect(coachLlm.requests.length).toBe(before + 1);
+		// The prompt is the computed day — totals, blocks and deltas — not the rows.
+		const sheet = coachLlm.requests.at(-1)?.system as string;
+		expect(sheet).toContain("vs last time: +5 lb");
+		expect(sheet).toContain("Allowance (target + eat-back)");
+		expect(sheet).not.toContain(first.body.blocks[0].id);
+		coachLlm.nextOutput = READING;
+	});
+
+	it("refuses a day that has not happened and a date that is not one", async () => {
+		expect((await request(app).get(`/api/day/${addDays(today, 1)}?tz=${tz}`).set(headers)).status).toBe(400);
+		expect((await request(app).get(`/api/day/yesterday?tz=${tz}`).set(headers)).status).toBe(400);
+		expect((await request(app).get(`/api/day/today?tz=999`).set(headers)).status).toBe(400);
+		expect((await request(app).get(`/api/day/today?tz=${tz}`)).status).toBe(401);
+	});
+});
+
+describe("day — Health overlap over real rows", () => {
+	const tz = tzForLocalHour(15);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+	let userId: string;
+
+	beforeAll(async () => {
+		const token = await signUp("owen@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+		const session = await request(app).get("/api/auth/get-session").set(headers);
+		userId = session.body.user.id as string;
+
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({ description: "3 × 8 squat at 185 lb", exercise: "Squat", sets: 3, reps: 8, load_lb: 185, kcal: 150, logged_at: localInstant(today, "12:10", tz) });
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({ description: "3 × 10 leg press at 200 lb", exercise: "Leg Press", sets: 3, reps: 10, load_lb: 200, kcal: 130, logged_at: localInstant(today, "12:40", tz) });
+
+		await db.pool.query(
+			`INSERT INTO health_samples (user_id, kind, external_id, start_at, end_at, value, unit, raw) VALUES
+			   ($1, 'workout', 'hk-gym', $2, $3, 520, 'kcal', '{"name":"Traditional Strength Training","duration_min":50}'::jsonb),
+			   ($1, 'workout', 'hk-walk', $4, $5, 180, 'kcal', '{"name":"Walking","duration_min":40,"distance_mi":2.1}'::jsonb),
+			   ($1, 'active_energy', 'hk-ae', $2, $3, 700, 'kcal', '{}'::jsonb),
+			   ($1, 'steps', 'hk-steps', $2, $3, 8400, 'count', '{}'::jsonb)`,
+			[
+				userId,
+				localInstant(today, "12:05", tz),
+				localInstant(today, "12:55", tz),
+				localInstant(today, "07:00", tz),
+				localInstant(today, "07:40", tz),
+			]
+		);
+	}, 60_000);
+
+	it("attaches the gym workout to the block and keeps the walk as its own activity", async () => {
+		const day = (await request(app).get(`/api/day/today?tz=${tz}`).set(headers)).body;
+
+		expect(day.blocks).toHaveLength(1);
+		expect(day.blocks[0].health).toMatchObject({ external_id: "hk-gym", kcal: 520 });
+		// The user's own 280 stands: the watch is measured, but it is an estimate too, and
+		// its calories are never added on top.
+		expect(day.blocks[0].kcal).toBe(280);
+		expect(day.blocks[0].kcal_from_health).toBe(false);
+
+		const walk = day.items.activities.find((a: { source: string }) => a.source === "health");
+		expect(walk).toMatchObject({ description: "Walking", kcal: 180, duration_min: 40, distance_mi: 2.1, block_id: null });
+
+		// earned = the block (280) + the standalone walk (180). Daily active energy is the
+		// baseline the TDEE already covers and is never added.
+		expect(day.earned).toBe(460);
+		expect(day.health).toEqual({ active_energy: 700, steps: 8400 });
+	});
+});
+
+describe("day close", () => {
+	const tz = tzForLocalHour(15);
+	const today = localDay(new Date(), tz).date;
+	const yesterday = addDays(today, -1);
+	const twoDaysAgo = addDays(today, -2);
+	let headers: Record<string, string>;
+	let userId: string;
+
+	beforeAll(async () => {
+		const token = await signUp("pia@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+		userId = (await request(app).get("/api/auth/get-session").set(headers)).body.user.id as string;
+
+		await request(app)
+			.patch("/api/profile")
+			.set(headers)
+			.send({
+				sex: "female",
+				birth_year: new Date().getUTCFullYear() - 31,
+				height_cm: 165,
+				activity_level: "light",
+				goal_pace: "gentle",
+			});
+		await db.pool.query(
+			`INSERT INTO goals (user_id, kind, title, metrics, priority, status, active_from)
+			 VALUES ($1, 'lose_fat', 'Down to 135 lb', '[{"measure":"body_weight","target":135,"direction":"decrease","scope":null,"unit":"lb","rate":null,"by":null}]'::jsonb, 1, 'active', $2::date)`,
+			[userId, addDays(today, -30)]
+		);
+
+		for (const [date, kcal] of [
+			[twoDaysAgo, 1500],
+			[yesterday, 1600],
+		] as const) {
+			await request(app).post("/api/weight").set(headers).send({ weight_lb: 150, logged_at: localInstant(date, "07:00", tz) });
+			await request(app)
+				.post("/api/entries/meals")
+				.set(headers)
+				.send({ description: "the day's food", kcal, protein_g: 110, carbs_g: 120, fat_g: 50, fiber_g: 20, logged_at: localInstant(date, "12:30", tz) });
+			await request(app)
+				.post("/api/entries/movement")
+				.set(headers)
+				.send({ description: "40 min walk", exercise: "Walk", category: "cardio", duration_min: 40, kcal: 150, logged_at: localInstant(date, "18:00", tz) });
+		}
+	}, 60_000);
+
+	it("closes every unclosed past day on the first request, and writes its reading once", async () => {
+		coachLlm.nextOutput = { ...READING, text: "You ate 1,600 kcal and walked 40 minutes; the day served the goal." };
+		const before = coachLlm.requests.length;
+
+		await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
+
+		const { rows } = await db.pool.query(
+			`SELECT * FROM daily_summaries WHERE user_id = $1 ORDER BY date`,
+			[userId]
+		);
+		expect(rows.map((r) => r.date)).toEqual([twoDaysAgo, yesterday]);
+		const closed = rows[1]!;
+		expect(closed).toMatchObject({
+			kcal_consumed: 1600,
+			kcal_burned: 150,
+			eaten: 1600,
+			earned: 150,
+			verdict: "served",
+			weight_lb: 150,
+			meal_count: 1,
+		});
+		expect(closed.status).toBe("on_track");
+		expect(Number(closed.protein_g)).toBe(110);
+		expect(closed.blocks).toHaveLength(1);
+		expect(closed.tdee).toBeGreaterThan(1500);
+		expect(closed.summary_line).toContain("kcal in 1 meal");
+		expect(closed.closed_at).toBeTruthy();
+		expect(closed.in_short).toContain("served the goal");
+
+		// Two closed days, two in_short readings, plus today's right_now.
+		expect(coachLlm.requests.length).toBe(before + 3);
+	});
+
+	it("is idempotent — a second close changes nothing and costs no generation", async () => {
+		const before = coachLlm.requests.length;
+		const closedAt = (
+			await db.pool.query<{ closed_at: string }>(
+				`SELECT closed_at FROM daily_summaries WHERE user_id = $1 AND date = $2::date`,
+				[userId, yesterday]
+			)
+		).rows[0]!.closed_at;
+
+		const res = await request(app).post("/api/day/close").set(headers).send({ tz_offset_min: tz });
+		expect(res.status).toBe(200);
+		expect(res.body).toEqual({ closed: [], already_closed: 0 });
+
+		const named = await request(app).post("/api/day/close").set(headers).send({ tz_offset_min: tz, date: yesterday });
+		expect(named.body).toEqual({ closed: [], already_closed: 1 });
+
+		const after = await db.pool.query<{ closed_at: string }>(
+			`SELECT closed_at FROM daily_summaries WHERE user_id = $1 AND date = $2::date`,
+			[userId, yesterday]
+		);
+		expect(after.rows[0]!.closed_at).toBe(closedAt);
+		expect(await countRows("daily_summaries", userId)).toBe(2);
+		expect(coachLlm.requests.length).toBe(before);
+	});
+
+	it("will not close the day the user is still living", async () => {
+		const res = await request(app).post("/api/day/close").set(headers).send({ tz_offset_min: tz, date: today });
+		expect(res.status).toBe(400);
+		expect(res.body.error).toMatch(/still running/);
+		expect((await request(app).post("/api/day/close").set(headers).send({ tz_offset_min: tz, date: "not-a-date" })).status).toBe(400);
+	});
+
+	it("serves a closed day from its record, with the reading written at close", async () => {
+		const res = await request(app).get(`/api/day/${yesterday}?tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+		expect(res.body).toMatchObject({ date: yesterday, is_today: false, verdict: "served", verdict_words: "Served your goal" });
+		expect(res.body.closed_at).toBeTruthy();
+		expect(res.body.reading).toMatchObject({ kind: "in_short" });
+		expect(res.body.reading.text).toContain("served the goal");
+		expect(res.body.goal).toMatchObject({ title: "Down to 135 lb" });
+		expect(res.body.expected).toEqual([]);
+		expect(res.body.arc.some((event: { kind: string }) => event.kind === "now")).toBe(false);
+	});
+
+	it("gives the week its statuses, verdicts and deficit", async () => {
+		const res = await request(app).get(`/api/week?tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+		expect(res.body.days).toHaveLength(7);
+		expect(res.body.end).toBe(today);
+		expect(res.body.days.at(-1)).toMatchObject({ date: today, is_today: true });
+
+		const closed = res.body.days.find((day: { date: string }) => day.date === yesterday);
+		expect(closed).toMatchObject({ verdict: "served", status: "on_track", eaten: 1600, earned: 150, closed: true });
+		// Σ(TDEE + earned − eaten) over the days with data, positive = a deficit.
+		expect(res.body.weekly_deficit).toBeGreaterThan(0);
+		expect(res.body.served).toBe(2);
+		expect(res.body.judged).toBeGreaterThanOrEqual(2);
+
+		// A day with nothing in it was never closed, and is not judged.
+		const empty = res.body.days.find((day: { date: string }) => day.date === addDays(today, -5));
+		expect(empty).toMatchObject({ verdict: "unlogged", summary: "Nothing logged" });
+	});
+
+	it("lists the days, newest first, paged", async () => {
+		const res = await request(app).get(`/api/days?tz=${tz}&limit=1`).set(headers);
+		expect(res.status).toBe(200);
+		// The open day leads the list; the page of closed days follows it.
+		expect(res.body.days.map((d: { date: string }) => d.date)).toEqual([today, yesterday]);
+		expect(res.body.days[0]).toMatchObject({ is_today: true, closed: false });
+		expect(res.body.days[1]).toMatchObject({
+			is_today: false,
+			closed: true,
+			verdict: "served",
+			verdict_words: "Served your goal",
+			day_number: 2,
+		});
+		expect(res.body.days[1].summary).toContain("Walk");
+		expect(res.body.next_before).toBe(yesterday);
+
+		const older = await request(app).get(`/api/days?tz=${tz}&limit=1&before=${res.body.next_before}`).set(headers);
+		expect(older.body.days.map((d: { date: string }) => d.date)).toEqual([twoDaysAgo]);
+		expect(older.body.next_before).toBe(twoDaysAgo);
+
+		expect((await request(app).get(`/api/days?tz=${tz}&before=nope`).set(headers)).status).toBe(400);
+	});
+});
+
+describe("day — timezone edges", () => {
+	// Los Angeles, UTC−7: a log at 23:30 local is 06:30 the next morning in UTC. It belongs
+	// to the local day it was logged in, and to no other.
+	const tz = -420;
+	const today = localDay(new Date(), tz).date;
+	const yesterday = addDays(today, -1);
+
+	it("puts a log at 23:30 local on that local day, not the UTC one", async () => {
+		const token = await signUp("quinn@example.com");
+		const headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+
+		const lateNight = localInstant(yesterday, "23:30", tz);
+		// Sanity: this really is the next calendar day in UTC.
+		expect(lateNight.slice(0, 10)).toBe(today);
+
+		await request(app)
+			.post("/api/entries/meals")
+			.set(headers)
+			.send({ description: "late bowl of cereal", kcal: 320, logged_at: lateNight });
+
+		const theirDay = await request(app).get(`/api/day/${yesterday}?tz=${tz}`).set(headers);
+		expect(theirDay.body.items.meals.map((m: { description: string }) => m.description)).toEqual(["late bowl of cereal"]);
+		expect(theirDay.body.eaten).toBe(320);
+
+		const nextDay = await request(app).get(`/api/day/${today}?tz=${tz}`).set(headers);
+		expect(nextDay.body.items.meals).toEqual([]);
+
+		// And the close agrees with the day view about which day that was.
+		await request(app).post("/api/day/close").set(headers).send({ tz_offset_min: tz });
+		const { rows } = await db.pool.query<{ date: string; eaten: number }>(
+			`SELECT date, eaten FROM daily_summaries WHERE user_id = (SELECT id FROM "user" WHERE email = $1)`,
+			["quinn@example.com"]
+		);
+		expect(rows).toEqual([{ date: yesterday, eaten: 320 }]);
 	});
 });
