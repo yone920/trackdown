@@ -58,4 +58,4 @@ else
 fi
 rm -rf "$TMP"
 sleep 5
-curl -s -m 10 -o /dev/null -w "https://$API_HOST/health → HTTP %{http_code}\n" "https://$API_HOST/health"
+curl -4 -s -m 15 -o /dev/null -w "https://$API_HOST/health → HTTP %{http_code}\n" "https://$API_HOST/health"
