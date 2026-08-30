@@ -82,7 +82,7 @@ describe("npm run seed-demo", () => {
 	it("is safe to run twice — the goal is not duplicated and closed days are left alone", async () => {
 		const { stdout } = await seed("demo@example.com", "--tz", "120");
 		expect(stdout).toContain("already existed");
-		expect(stdout).toContain("Goal already active");
+		expect(stdout).toContain("already active; left as it is");
 		expect(stdout).toContain("Closed 0 day(s)");
 
 		const goals = await db.pool.query<{ count: string }>(
@@ -90,6 +90,42 @@ describe("npm run seed-demo", () => {
 		);
 		expect(Number(goals.rows[0]!.count)).toBe(1);
 	}, 120_000);
+
+	it("switches the scenario with --goal, including the no-goal state", async () => {
+		// The morning demo has to be able to show a muscle goal…
+		const muscle = await seed("muscle@example.com", "--tz", "120", "--goal", "muscle");
+		expect(muscle.stdout).toContain("Bench 185 and eat for it");
+		const goal = await db.pool.query<{ kind: string; metrics: { measure: string }[]; active_to: string | null }>(
+			`SELECT kind, metrics, active_to FROM goals WHERE user_id = (SELECT id FROM "user" WHERE email = 'muscle@example.com')`
+		);
+		expect(goal.rows).toHaveLength(1);
+		expect(goal.rows[0]).toMatchObject({ kind: "gain_muscle" });
+		expect(goal.rows[0]?.metrics.map((metric) => metric.measure)).toEqual(["exercise_load", "protein_g"]);
+
+		// …and the no-goal state, which is a screen of its own (concept-v2 §Goals).
+		const none = await seed("nogoal@example.com", "--tz", "120", "--goal", "none");
+		expect(none.stdout).toContain("No goal");
+		const empty = await db.pool.query(
+			`SELECT id FROM goals WHERE user_id = (SELECT id FROM "user" WHERE email = 'nogoal@example.com') AND status = 'active'`
+		);
+		expect(empty.rows).toHaveLength(0);
+
+		// Re-seeding the fat-loss account as `none` ends the goal it set, with a date, so
+		// the days it judged stay judged.
+		const cleared = await seed("muscle@example.com", "--tz", "120", "--goal", "none");
+		expect(cleared.stdout).toContain("dropped 1 demo goal");
+		const dropped = await db.pool.query<{ status: string; active_to: string | null }>(
+			`SELECT status, active_to FROM goals WHERE user_id = (SELECT id FROM "user" WHERE email = 'muscle@example.com')`
+		);
+		expect(dropped.rows[0]?.status).toBe("dropped");
+		expect(dropped.rows[0]?.active_to).not.toBeNull();
+	}, 180_000);
+
+	it("refuses a scenario it does not have", async () => {
+		await expect(run(tsx, ["src/scripts/seed-demo.ts", "x@example.com", "--goal", "vibes"], { cwd: backendRoot })).rejects.toThrow(
+			/--goal/
+		);
+	}, 60_000);
 
 	it("wants an email", async () => {
 		await expect(run(tsx, ["src/scripts/seed-demo.ts"], { cwd: backendRoot })).rejects.toThrow(/Usage/);

@@ -139,10 +139,9 @@ const GOAL_DETAIL = `Turn what the user said into a measurable goal spec (docs/c
 - direction: "decrease"/"increase" for an outcome with a finish line, "maintain"/"at_least"/
   "at_most" for a standing intention.
 - Units are pounds and miles. Convert anything the user said in kg or km.
-- proposed_timeline: project from safe rates (fat loss 0.5–1 %/week, one plate step every
-  1–2 weeks, cardio +10 %/week). If the user named their own date, keep THEIR date in "by"
-  and set realistic:false with a one-line note saying what the safe date would be. If they
-  named no date, propose one and set realistic:true.
+- Do not work out how long it will take. If the user named a date of their own, put it in
+  that metric's "by" and nothing else; the app projects the timeline from their logs at
+  safe rates and says whether their date fits.
 - active_to: only for a goal with a stated window ("upper body for two months"); null for an
   open-ended one.`;
 

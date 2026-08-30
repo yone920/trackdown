@@ -1267,3 +1267,528 @@ describe("day — timezone edges", () => {
 		expect(rows).toEqual([{ date: yesterday, eaten: 320 }]);
 	});
 });
+
+// ── WP4: goals, the plan, and what they judge ────────────────────────────────────────
+// The SQL half of goals: the routes, the priority order, what a status change does to the
+// date window, and the detection the day close runs. The arithmetic behind them is
+// unit-tested in src/services/goals/{proposal,detect}.test.ts.
+
+describe("goals — the Goals screen's API", () => {
+	const tz = tzForLocalHour(11);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+	let userId: string;
+
+	beforeAll(async () => {
+		const token = await signUp("rafa@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		userId = (await request(app).get("/api/auth/get-session").set(headers)).body.user.id as string;
+		await request(app)
+			.patch("/api/profile")
+			.set(headers)
+			.send({
+				sex: "male",
+				birth_year: new Date().getUTCFullYear() - 40,
+				height_cm: 178,
+				activity_level: "moderate",
+				goal_pace: "standard",
+			});
+		// Two weigh-ins a fortnight apart: a baseline to measure progress from and a
+		// current number to measure it to.
+		await request(app).post("/api/weight").set(headers).send({ weight_lb: 195, logged_at: localInstant(addDays(today, -14), "07:00", tz) });
+		await request(app).post("/api/weight").set(headers).send({ weight_lb: 190, logged_at: localInstant(today, "07:00", tz) });
+	}, 60_000);
+
+	let weightGoalId: string;
+
+	it("saves a goal with the timeline the safe rate projects", async () => {
+		const res = await request(app)
+			.post("/api/goals")
+			.set(headers)
+			.send({
+				spec: {
+					kind: "lose_fat",
+					title: "Down to 170 lb",
+					metrics: [{ measure: "body_weight", target: 170, unit: "lb", direction: "decrease" }],
+					active_from: addDays(today, -14),
+				},
+				tz_offset_min: tz,
+			});
+		expect(res.status).toBe(201);
+		weightGoalId = res.body.goal.id as string;
+		expect(res.body.goal).toMatchObject({ status: "active", priority: 1, active_from: addDays(today, -14) });
+		// 190 → 170 at 0.75 %/week is 15 weeks; the row's end date is the projection.
+		expect(res.body.proposal).toMatchObject({ weeks: 15, unrealistic: false });
+		expect(res.body.goal.active_to).toBe(res.body.proposal.projected_date);
+		expect(res.body.proposal.rate).toContain("lb a week");
+	});
+
+	it("refuses a goal about something the app cannot measure", async () => {
+		const bad = await request(app)
+			.post("/api/goals")
+			.set(headers)
+			.send({ spec: { kind: "custom", title: "Feel great", metrics: [{ measure: "vibes", direction: "increase" }] } });
+		expect(bad.status).toBe(400);
+
+		// And a scoped measure with nothing to scope it to.
+		const unscoped = await request(app)
+			.post("/api/goals")
+			.set(headers)
+			.send({
+				spec: {
+					kind: "build_strength",
+					title: "Lift more",
+					metrics: [{ measure: "exercise_load", target: 185, direction: "increase" }],
+				},
+			});
+		expect(unscoped.status).toBe(400);
+		expect(String(unscoped.body.error)).toContain("exercise");
+	});
+
+	let benchGoalId: string;
+
+	it("appends the next goal rather than promoting it, and lists both with their progress", async () => {
+		const second = await request(app)
+			.post("/api/goals")
+			.set(headers)
+			.send({
+				spec: {
+					kind: "build_strength",
+					title: "Bench 185",
+					metrics: [{ measure: "exercise_load", scope: "Bench Press", target: 185, unit: "lb", direction: "increase" }],
+				},
+				tz_offset_min: tz,
+			});
+		expect(second.status).toBe(201);
+		benchGoalId = second.body.goal.id as string;
+		expect(second.body.goal.priority).toBe(2);
+		// Nothing benched yet, so there is no date to project — and no invented one.
+		expect(second.body.proposal.projected_date).toBeNull();
+
+		const list = await request(app).get(`/api/goals?tz=${tz}`).set(headers);
+		expect(list.status).toBe(200);
+		expect(list.body.no_goal).toBe(false);
+		expect(list.body.active.map((goal: { title: string }) => goal.title)).toEqual(["Down to 170 lb", "Bench 185"]);
+		// 195 → 190 of the 25 lb to 170 is a fifth of the way.
+		expect(list.body.active[0].progress.percent).toBeCloseTo(0.2, 2);
+		expect(list.body.active[0].progress.metrics[0]).toMatchObject({ current: 190, baseline: 195, target: 170 });
+		// The candidate flags the coach reads are on every goal, unset until the close runs.
+		expect(list.body.active[0]).toMatchObject({ reached_candidate_at: null, stalled_since: null });
+	});
+
+	it("takes the user's order", async () => {
+		const res = await request(app).post("/api/goals/reorder").set(headers).send({ ids: [benchGoalId, weightGoalId] });
+		expect(res.status).toBe(200);
+		expect(res.body.active.map((goal: { title: string; priority: number }) => [goal.title, goal.priority])).toEqual([
+			["Bench 185", 1],
+			["Down to 170 lb", 2],
+		]);
+
+		// An id that is not an active goal of theirs is a 400, not a silent no-op.
+		expect((await request(app).post("/api/goals/reorder").set(headers).send({ ids: [randomUUID()] })).status).toBe(400);
+
+		// Put it back for the tests below.
+		await request(app).post("/api/goals/reorder").set(headers).send({ ids: [weightGoalId, benchGoalId] });
+	});
+
+	it("edits the title and the numbers", async () => {
+		const res = await request(app)
+			.patch(`/api/goals/${benchGoalId}`)
+			.set(headers)
+			.send({
+				title: "Bench 205",
+				metrics: [{ measure: "exercise_load", scope: "Bench Press", target: 205, unit: "lb", direction: "increase" }],
+			});
+		expect(res.status).toBe(200);
+		expect(res.body).toMatchObject({ title: "Bench 205", status: "active" });
+		expect(res.body.metrics[0].target).toBe(205);
+
+		// A patch that would break the measure catalog is refused whole.
+		const bad = await request(app)
+			.patch(`/api/goals/${benchGoalId}`)
+			.set(headers)
+			.send({ metrics: [{ measure: "exercise_load", target: 205, direction: "increase" }] });
+		expect(bad.status).toBe(400);
+	});
+
+	it("reports per-metric progress and a trend series over the goal's life", async () => {
+		const res = await request(app).get(`/api/goals/${weightGoalId}/progress?tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+		expect(res.body.goal.id).toBe(weightGoalId);
+		const metric = res.body.metrics[0];
+		expect(metric).toMatchObject({ measure: "body_weight", label: "Body weight", unit: "lb", target: 170, current: 190 });
+		expect(metric.percent).toBeCloseTo(0.2, 2);
+		// The series runs from the goal's start to today, and only where there is a number.
+		expect(metric.series[0]).toEqual({ date: addDays(today, -14), value: 195 });
+		expect(metric.series.at(-1)).toEqual({ date: today, value: 190 });
+		expect(res.body.detection).toMatchObject({ reached: false, stalled: false });
+
+		expect((await request(app).get(`/api/goals/${randomUUID()}/progress`).set(headers)).status).toBe(404);
+	});
+
+	it("ends a goal by dating it, and keeps judging the days it was live for", async () => {
+		// A day with a goal on it, before anything is dropped.
+		const yesterday = addDays(today, -1);
+		await request(app)
+			.post("/api/entries/meals")
+			.set(headers)
+			.send({ description: "the day's food", kcal: 1800, protein_g: 120, logged_at: localInstant(yesterday, "13:00", tz) });
+		coachLlm.nextOutput = READING;
+		const before = await request(app).get(`/api/day/${yesterday}?tz=${tz}`).set(headers);
+		expect(before.body.goal.title).toBe("Down to 170 lb");
+		expect(before.body.verdict).not.toBe("none");
+
+		const dropped = await request(app)
+			.patch(`/api/goals/${weightGoalId}`)
+			.set(headers)
+			.send({ status: "dropped", tz_offset_min: tz });
+		expect(dropped.status).toBe(200);
+		expect(dropped.body).toMatchObject({ status: "dropped", active_to: today });
+
+		// WP3 filtered dropped goals out entirely and yesterday lost its judgement with
+		// them. The window is what governs now, so yesterday still reads as it did.
+		coachLlm.nextOutput = READING;
+		const after = await request(app).get(`/api/day/${yesterday}?tz=${tz}`).set(headers);
+		expect(after.body.goal.title).toBe("Down to 170 lb");
+		expect(after.body.verdict).toBe(before.body.verdict);
+
+		// Move the end date back and yesterday falls outside the goal's life: no goal, no
+		// judgement colours — which is exactly what a later day will see.
+		await request(app).patch(`/api/goals/${weightGoalId}`).set(headers).send({ active_to: addDays(today, -3) });
+		coachLlm.nextOutput = READING;
+		const outside = await request(app).get(`/api/day/${yesterday}?tz=${tz}`).set(headers);
+		expect(outside.body.goal).toBeNull();
+		expect(outside.body.verdict).toBe("none");
+		expect(outside.body.status).toBe("none");
+	});
+
+	it("keeps the ended goal in history with its outcome", async () => {
+		const list = await request(app).get(`/api/goals?tz=${tz}`).set(headers);
+		expect(list.body.active.map((goal: { title: string }) => goal.title)).toEqual(["Bench 205"]);
+		expect(list.body.history[0]).toMatchObject({ title: "Down to 170 lb", outcome: "dropped" });
+	});
+
+	it("404s on someone else's goal", async () => {
+		const otherToken = await signUp("sami@example.com");
+		const other = { Authorization: `Bearer ${otherToken}` };
+		expect((await request(app).patch(`/api/goals/${benchGoalId}`).set(other).send({ title: "Mine now" })).status).toBe(404);
+		expect((await request(app).get(`/api/goals/${benchGoalId}/progress`).set(other)).status).toBe(404);
+		// And their own list is simply empty — the no-goal state, not an error.
+		const list = await request(app).get("/api/goals").set(other);
+		expect(list.body).toMatchObject({ active: [], history: [], no_goal: true });
+	});
+
+	it("leaves the goals table alone when nothing was asked for", async () => {
+		expect((await request(app).patch(`/api/goals/${benchGoalId}`).set(headers).send({})).status).toBe(400);
+		const { rows } = await db.pool.query(`SELECT COUNT(*)::int AS n FROM goals WHERE user_id = $1`, [userId]);
+		expect(rows[0]).toEqual({ n: 2 });
+	});
+});
+
+describe("goals — reached and stalled at day close", () => {
+	const tz = tzForLocalHour(9);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("tess@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+		await request(app)
+			.patch("/api/profile")
+			.set(headers)
+			.send({ sex: "female", birth_year: new Date().getUTCFullYear() - 35, height_cm: 170, activity_level: "light" });
+
+		// Ten days of weigh-ins, every one of them at or under the target.
+		for (let back = 10; back >= 1; back -= 1) {
+			await request(app)
+				.post("/api/weight")
+				.set(headers)
+				.send({ weight_lb: 149 - back * 0.1, logged_at: localInstant(addDays(today, -back), "07:00", tz) });
+		}
+		await request(app)
+			.post("/api/goals")
+			.set(headers)
+			.send({
+				spec: {
+					kind: "lose_fat",
+					title: "Down to 150 lb",
+					metrics: [{ measure: "body_weight", target: 150, unit: "lb", direction: "decrease" }],
+					active_from: addDays(today, -30),
+				},
+				tz_offset_min: tz,
+			});
+	}, 60_000);
+
+	it("marks the goal a reached candidate, without closing it", async () => {
+		// The close runs on the first day-shaped request after local midnight.
+		await request(app).post("/api/day/close").set(headers).send({ tz_offset_min: tz });
+
+		const list = await request(app).get(`/api/goals?tz=${tz}`).set(headers);
+		const goal = list.body.active[0];
+		expect(goal.reached_candidate_at).not.toBeNull();
+		// Never auto-closed: the coach asks, the user answers (concept-v2 §Goals).
+		expect(goal.status).toBe("active");
+		expect(goal.progress.detection).toMatchObject({ reached: true, stalled: false });
+		expect(String(goal.progress.detection.reached_why)).toContain("7 days");
+	});
+
+	it("keeps the first candidate date when the goal stays reached", async () => {
+		const first = (await request(app).get(`/api/goals?tz=${tz}`).set(headers)).body.active[0].reached_candidate_at;
+		await request(app).post("/api/day/close").set(headers).send({ tz_offset_min: tz, date: addDays(today, -1) });
+		const again = (await request(app).get(`/api/goals?tz=${tz}`).set(headers)).body.active[0].reached_candidate_at;
+		expect(again).toBe(first);
+	});
+
+	it("marks the goal reached when the user says so, and it stops judging from that day", async () => {
+		const list = await request(app).get(`/api/goals?tz=${tz}`).set(headers);
+		const id = list.body.active[0].id as string;
+		const res = await request(app).patch(`/api/goals/${id}`).set(headers).send({ status: "reached", tz_offset_min: tz });
+		expect(res.body).toMatchObject({ status: "reached", active_to: today });
+
+		const after = await request(app).get(`/api/goals?tz=${tz}`).set(headers);
+		expect(after.body.no_goal).toBe(true);
+		expect(after.body.history[0]).toMatchObject({ title: "Down to 150 lb", outcome: "reached" });
+	});
+});
+
+describe("profile — the plan and what it works out to", () => {
+	const tz = tzForLocalHour(14);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("umi@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+		await request(app).post("/api/weight").set(headers).send({ weight_lb: 200, logged_at: localInstant(today, "07:00", tz) });
+	}, 60_000);
+
+	it("derives the targets the app used to compute for itself", async () => {
+		// Without sex/height/birth year there is no TDEE, and none is invented: the target
+		// falls back to the v1 `daily_calorie_target` the profile row is created with.
+		const empty = await request(app).get("/api/profile").set(headers);
+		expect(empty.body.targets).toMatchObject({ tdee: null, source: "stated" });
+		expect(empty.body.targets.eat_target).toBe(empty.body.daily_calorie_target);
+
+		await request(app)
+			.patch("/api/profile")
+			.set(headers)
+			.send({
+				sex: "male",
+				birth_year: new Date().getUTCFullYear() - 38,
+				height_cm: 180,
+				activity_level: "moderate",
+				goal_pace: "standard",
+			});
+
+		const res = await request(app).get(`/api/profile?tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+		expect(res.body.targets).toMatchObject({ source: "computed", tracking_only: false, weight_lb: 200, date: today });
+		expect(res.body.targets.tdee).toBeGreaterThan(2500);
+		expect(res.body.targets.eat_target).toBeLessThan(res.body.targets.tdee);
+		expect(res.body.targets.deficit).toBe(res.body.targets.eat_target - res.body.targets.tdee);
+		expect(res.body.targets.protein_g).toBeGreaterThan(100);
+		expect(res.body.targets.eatback).toBe("half");
+	});
+
+	it("merges the plan and dates every field it touches", async () => {
+		const first = await request(app).patch("/api/profile").set(headers).send({ diet_style: "lower carb", training_days: 4 });
+		expect(first.status).toBe(200);
+		expect(first.body).toMatchObject({ diet_style: "lower carb", training_days: 4 });
+		const dated = first.body.stated_at as Record<string, string>;
+		expect(dated.diet_style).toBeTruthy();
+		expect(dated.training_days).toBeTruthy();
+
+		// A second patch does not erase the first field's date.
+		const second = await request(app).patch("/api/profile").set(headers).send({ environment: "home" });
+		expect(second.body.stated_at.diet_style).toBe(dated.diet_style);
+		expect(second.body.stated_at.environment).toBeTruthy();
+		expect(second.body.diet_style).toBe("lower carb");
+
+		// A stated macro beats the computed one, everywhere it is read.
+		const stated = await request(app).patch("/api/profile").set(headers).send({ protein_g: 210 });
+		expect(stated.body.targets.protein_g).toBe(210);
+	});
+
+	it("lets the ring's eat-back setting through to the day", async () => {
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({ description: "an hour on the bike", exercise: "Cycling", category: "cardio", duration_min: 60, kcal: 400, logged_at: localInstant(today, "08:00", tz) });
+
+		const half = await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
+		expect(half.body.eatback).toBe("half");
+		expect(half.body.allowance).toBe(half.body.target + 200);
+
+		await request(app).patch("/api/profile").set(headers).send({ eatback: "none" });
+		coachLlm.nextOutput = READING;
+		const none = await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
+		expect(none.body.allowance).toBe(none.body.target);
+
+		await request(app).patch("/api/profile").set(headers).send({ eatback: "all" });
+		coachLlm.nextOutput = READING;
+		const all = await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
+		expect(all.body.allowance).toBe(all.body.target + 400);
+	});
+
+	it("appends spoken constraints and replaces edited ones", async () => {
+		// The spoken path appends and dedupes (WP2's statement kind)…
+		await request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({ client_id: randomUUID(), result: { kind: "constraint", text: "bad left knee", fields: null } });
+		await request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({ client_id: randomUUID(), result: { kind: "constraint", text: "bad left knee", fields: null } });
+		await request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({ client_id: randomUUID(), result: { kind: "constraint", text: "no overhead pressing", fields: null } });
+		const spoken = await request(app).get("/api/profile").set(headers);
+		expect(spoken.body.constraints).toEqual(["bad left knee", "no overhead pressing"]);
+
+		// …and the Profile screen's edit replaces the list, because deleting a row is
+		// something only a tap can mean.
+		const edited = await request(app).patch("/api/profile").set(headers).send({ constraints: ["bad left knee"] });
+		expect(edited.body.constraints).toEqual(["bad left knee"]);
+		expect(edited.body.stated_at.constraints).toBeTruthy();
+	});
+});
+
+describe("goals — set by talking", () => {
+	const tz = 60;
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("vero@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		await request(app).post("/api/weight").set(headers).send({ weight_lb: 191 });
+	}, 60_000);
+
+	// Relative, not a literal December: the fixture has to still be a future date whenever
+	// the suite is run.
+	const theirDate = addDays(localDay(new Date(), tz).date, 100);
+
+	it("analyzes, proposes from the user's own facts, and confirms into a goal", async () => {
+		// The two calls the goal path makes: route, then spec. Neither is asked for a date
+		// — the projection is the server's job now (services/goals/proposal.ts).
+		nextFusion(
+			{ kind: "goal", title: "Down to 170 lb by December" },
+			{
+				spec: {
+					kind: "lose_fat",
+					title: "Down to 170 lb",
+					metrics: [
+						{
+							measure: "body_weight",
+							scope: null,
+							target: 170,
+							unit: "lb",
+							direction: "decrease",
+							rate: null,
+							by: theirDate,
+						},
+					],
+					active_to: null,
+				},
+			}
+		);
+
+		const analyzed = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("text", `I want to get down to 170 pounds by ${theirDate}, I'm 191 now`)
+			.field("tz_offset_min", String(tz))
+			.field("kind_hint", "goal");
+		expect(analyzed.status).toBe(200);
+		expect(analyzed.body.result.kind).toBe("goal");
+		// The preview carries the computed proposal, and the timeline on the card is it.
+		expect(analyzed.body.proposal.metrics[0].current).toBe(191);
+		expect(analyzed.body.proposal.weeks).toBeGreaterThan(10);
+		expect(analyzed.body.result.proposed_timeline.by).toBe(theirDate);
+		expect(analyzed.body.result.proposed_timeline.note).toContain(theirDate);
+
+		const confirmed = await request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({
+				client_id: randomUUID(),
+				result: analyzed.body.result,
+				text: "I want to get down to 170 pounds",
+				text_kind: "transcript",
+				tz_offset_min: tz,
+			});
+		expect(confirmed.status).toBe(201);
+		expect(confirmed.body.goal).toMatchObject({ kind: "lose_fat", title: "Down to 170 lb", status: "active", priority: 1 });
+		// Their date needs about 1.5 lb a week — brisker than their standard pace but
+		// inside the safe band, so it stands as the goal's end date.
+		expect(confirmed.body.goal.active_to).toBe(theirDate);
+		expect(confirmed.body.goal_proposal.unrealistic).toBe(false);
+		expect(confirmed.body.goal_proposal.projected_date).not.toBeNull();
+		// And the transcript is kept as the evidence for it.
+		expect(confirmed.body.evidence).toHaveLength(1);
+
+		const list = await request(app).get(`/api/goals?tz=${tz}`).set(headers);
+		expect(list.body.active).toHaveLength(1);
+		expect(list.body.active[0].progress.metrics[0].current).toBe(191);
+	});
+
+	it("takes 'no date' for an answer, and 'that date, I meant it' too", async () => {
+		nextFusion(
+			{ kind: "goal", title: "Run 20 miles a week" },
+			{
+				spec: {
+					kind: "improve_endurance",
+					title: "Run 20 miles a week",
+					metrics: [
+						{ measure: "distance_mi", scope: null, target: 20, unit: "mi", direction: "increase", rate: null, by: null },
+					],
+					active_to: null,
+				},
+			}
+		);
+		const analyzed = await request(app).post("/api/log/analyze").set(headers).field("text", "I want to run 20 miles a week");
+		const openEnded = await request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({ client_id: randomUUID(), result: analyzed.body.result, no_date: true, tz_offset_min: tz });
+		expect(openEnded.status).toBe(201);
+		expect(openEnded.body.goal.active_to).toBeNull();
+
+		// A date the safe rate cannot meet is kept when the user insists, and the note
+		// still says what it would take.
+		const soon = addDays(localDay(new Date(), tz).date, 14);
+		const insisted = await request(app)
+			.post("/api/goals")
+			.set(headers)
+			.send({
+				spec: {
+					kind: "lose_fat",
+					title: "Down to 150 lb",
+					metrics: [{ measure: "body_weight", target: 150, unit: "lb", direction: "decrease", by: soon }],
+				},
+				confirm_date: true,
+				tz_offset_min: tz,
+			});
+		expect(insisted.status).toBe(201);
+		expect(insisted.body.proposal.unrealistic).toBe(true);
+		expect(insisted.body.goal.active_to).toBe(soon);
+
+		// Without confirm_date, the same goal is saved with the safe-rate date instead.
+		const proposed = await request(app)
+			.post("/api/goals")
+			.set(headers)
+			.send({
+				spec: {
+					kind: "lose_fat",
+					title: "Down to 150 lb, sensibly",
+					metrics: [{ measure: "body_weight", target: 150, unit: "lb", direction: "decrease", by: soon }],
+				},
+				tz_offset_min: tz,
+			});
+		expect(proposed.body.goal.active_to).toBe(proposed.body.proposal.projected_date);
+		expect(proposed.body.goal.active_to > soon).toBe(true);
+	});
+});

@@ -16,6 +16,175 @@ open `exp://100.64.198.50:8081` directly.
 
 ---
 
+## WP4 — Goals and profile by talking
+
+A goal is now a thing the server can propose, judge, notice the end of, and keep in
+history. The model hears what the user wants; everything with a number in it is computed.
+
+**`services/goals/proposal.ts` — the proposed timeline, pure**
+
+- The safe rates from concept-v2 §Goals, as three formulas: **fat loss** at 0.5–1 %/week of
+  body weight (compounding, at the profile's `goal_pace` — gentle 0.5, standard 0.75,
+  aggressive 1.0), **a plate step** (5 lb) every 1–2 weeks by the same pace, and **cardio
+  and other weekly volumes** at +10 %/week, flat: concept-v2 gives one number for it and it
+  is a load-management rule, not an ambition dial. Weight *gain* is projected at half the
+  fat-loss band (0.25–0.5 %/week), which concept-v2 does not name — the note in the file
+  says why.
+- `{ projected_date, weeks, rate, note, by, unrealistic, standing, metrics[] }`. A goal with
+  several metrics takes the **slowest** of them: it is reached when all of it is.
+- **The user's own date is never overwritten.** It comes back in `by` beside the
+  projection, and `unrealistic` is judged against the *fastest safe* rate rather than the
+  profile's chosen pace — so "170 by December" at 0.83 %/week is kept with a note saying it
+  is brisker than usual, and only a date that needs more than the band allows is replaced
+  by the projection (and `confirm_date: true` overrides even that).
+- Measures with no journey — protein, carbs, a daily balance — get no date at all rather
+  than an invented one, and a cardio goal with no cardio logged says so: 10 % of nothing
+  never arrives.
+
+**`services/goals/detect.ts` — reached and stalled, pure**
+
+- The smoothed rules, verbatim from concept-v2: the **7-day average at/past target on every
+  one of the last seven days**; a **lift logged at target on two separate days** (counted
+  from the activities, because `exercise_load` answers "the best in four weeks" and one
+  number cannot say "twice"); a **weekly volume at target two weeks running**. A week with
+  no weigh-in breaks the run — we do not know the goal held.
+- **Standing intentions are never reached and never stalled.** `at_least 150 min/week` has
+  no finish line to arrive at (concept-v2's outcome-vs-standing split, applied through the
+  `direction`).
+- **Stalled** = no movement toward the target in three weeks, with "movement" sized per
+  measure (0.5 lb on a 7-day average, one plate on a lift, 5 % elsewhere). Unknown is not
+  stalled: a user with no data has a logging problem, and the day's reading already says so.
+  `stalled_since` cannot predate the goal.
+- Both are **candidates**. Nothing in the file changes a status — `reached_candidate_at` and
+  `stalled_since` are what WP5's nudge reads, and the user is the one who closes a goal.
+
+**Routes** (`routes/goals.ts` over `services/goals/store.ts`)
+
+- `GET /api/goals` — active in priority order, each with `progress` (per-metric current,
+  baseline, target, percent) and the two candidate columns; `history` with the `outcome` it
+  ended on; `no_goal`, which is the state the app renders with no judgement colours.
+- `POST /api/goals` — spec → validated against the measure catalog → projected → saved
+  `active`, priority appended. `confirm_date` keeps the user's date, `no_date` saves it
+  open-ended. 400 names the problem ("Best load needs an exercise — say which one").
+- `PATCH /api/goals/:id` — title, metrics, priority, and status. **Every closing status
+  writes `active_to`**: reached and dropped end today, expired ends on the date it was due.
+- `POST /api/goals/reorder` — `{ ids }` applied as 1…n; goals not named keep their place at
+  the end.
+- `GET /api/goals/:id/progress` — the same per-metric numbers plus a **trend series over the
+  goal's life**, thinned to 90 points, from one row load: the calculators ignore rows dated
+  after the day they are asked about, so ninety dates cost one query, not ninety.
+- Someone else's goal is a 404, not a 403.
+
+**One path for a goal, whoever set it**
+
+`POST /api/log/confirm` with `kind: "goal"` now calls the same `createGoal`, so a goal set
+by talking and one typed into the Goals screen get the same validation, the same priority
+and the same computed timeline. `POST /api/log/analyze` attaches the proposal to the
+preview (`{ result, proposal, evidence, context }`) and overwrites `result.proposed_timeline`
+with it — **the model is no longer asked to do the arithmetic**: `GoalDetailOutputSchema`
+dropped `proposed_timeline` and the prompt now says to put the user's own date on the
+metric's `by` and leave the projection alone. The contract test on the real model checks
+exactly that.
+
+**Profile**
+
+- `GET /api/profile` returns the row **plus `targets`** — `tdee`, `eat_target`, `deficit`,
+  `safe_floor`, the four macros, `source` (computed | stated | none), `tracking_only`,
+  `eatback`, the weight they were computed for and the day they are for. The app can stop
+  doing this arithmetic (WP6 deletes `lib/tdee.ts`).
+- `PATCH /api/profile` accepts the plan columns (diet_style, protein_g, carbs_max_g,
+  training_days, environment, equipment, eatback, constraints, preferences) and **dates
+  every field it touches** in `stated_at`, merged rather than replaced. The spoken path
+  keeps appending and deduping; an edit from the Profile screen replaces the list, because
+  deleting a row is something only a tap can mean.
+- `eatback` was already respected by `computeDay`; it now has a test that walks
+  none → half → all and watches the allowance move.
+
+**Migration — `backend/migrations/0007_goal_progress.sql`**
+
+- `goals.stalled_since DATE`, the other half of `reached_candidate_at`.
+- A backfill giving every non-active goal with no `active_to` an end date, so the day model
+  can judge by the **date window alone**. That is the WP3 note closed: `services/day.ts` no
+  longer filters `status <> 'dropped'`, so a goal dropped today goes on judging the
+  fortnight it was live for and stops judging tomorrow.
+
+**`npm run seed-demo -- <email> [--goal fat_loss|muscle|none]`**
+
+The second scenario flag. `muscle` seeds a `gain_muscle` goal (bench 185 + 175 g protein) so
+the muscle cards have something to render; `none` is the no-goal state the morning demo has
+to be able to show — it ends the goals *this script* set, dated, and leaves any other goal
+alone with a warning. The goal is now written through `createGoal` after the days are
+seeded, so the demo's timeline is projected from the demo's own weigh-ins.
+
+**Decisions**
+
+- **`unrealistic` means unsafe, not "faster than your pace".** concept-v2 gives a band
+  (0.5–1 %/week), and treating the profile's pace as the ceiling would have overruled a
+  user's perfectly safe December date. The projection still runs at their pace; the flag is
+  judged at the top of the band.
+- **The timeline left the model.** It was in the fusion schema since WP2 (the prompt asked
+  for a projection). A date is arithmetic, the Goals screen, the row and the coach all have
+  to show the same one, and a model that is asked for a number will produce a different one
+  each time. Removing it also shrinks the second call's grammar.
+- **A dropped goal keeps its days.** WP3 had to exclude dropped goals entirely; now the
+  window governs and the status is only a label. The migration backfills the goals dropped
+  before this, using `stated_at` as the closest thing to "when it stopped" the old schema
+  recorded.
+- **Progress is measured from the baseline**, the metric's value on `active_from` — 195 → 170
+  is 0 % at 195, not the 87 % that "current over target" would put on the ring on day one.
+  A goal's own percentage is its **slowest** metric, the same rule reached-detection uses.
+- **`loadTargets` lives in `services/profile.ts`**, not in the goals module, and the goals
+  store imports it. The day model, the goals list and `GET /api/profile` all need "what
+  should this user eat today", and it belongs next to the profile it is derived from.
+- **No idempotency key on `POST /api/goals`.** The spoken path is idempotent through
+  `log_confirmations`; the Goals screen's create is a button a human presses, and a
+  duplicate goal is visible and one tap to drop. Worth revisiting if the app ever retries it
+  automatically.
+- No new dependencies.
+
+**Tests** — 243 passing, 2 skipped (was 185 / 2).
+
+- `src/services/goals/proposal.test.ts` (20): the projection for each measure at each pace
+  (pinned to the week counts, so a changed constant fails here rather than surprising
+  someone in six months), the brisk-but-safe date, the unrealistic one, a date in the past,
+  already-there, no-data, the slowest metric, standing intentions, the confirm card's shape,
+  and the catalog validation.
+- `src/services/goals/detect.test.ts` (17): every "not reached" case is a day whose raw
+  number says the goal is met and whose rule says wait — one weigh-in, the first dip, two
+  sets in one session, one good week. Plus a gaining goal from the other side, a two-metric
+  goal, and the stall (flat weight, moving weight, a stuck lift, a goal set last week, and a
+  reached goal never being called stalled).
+- `src/app.test.ts` (+13): the goals API end to end; the close writing
+  `reached_candidate_at` and keeping the first one; marking a goal reached and the list
+  going empty; yesterday still judged by the goal that was dropped today, and losing its
+  judgement when the end date moves before it; the profile's derived targets, the dated
+  merge, spoken-append vs edited-replace on constraints, and eatback moving the allowance;
+  and analyze → proposal → confirm for a goal set by talking, including "no date" and
+  "that date, I meant it".
+- `src/test/fixtures/facts.ts`: the `DayFacts` builders WP1's measures.test.ts had grown
+  privately, now shared.
+- `src/scripts/seed-demo.test.ts` (+2): both new scenarios, spawned for real.
+- The Anthropic fusion contract test now asserts the model puts the user's December date on
+  the metric and leaves `proposed_timeline` null. Run here, green.
+
+**Deferred**
+
+- **`GET /api/goals` computes progress on every call.** One row load and a handful of pure
+  calculators, capped at 180 days of baseline — fine for a handful of goals, and the place
+  to look first if the Goals tab ever feels slow.
+- **The trend series has no per-week bucketing.** It samples days; a year-long goal is 90
+  evenly spaced points, which is what a sparkline wants but not what a "weekly average"
+  chart would.
+- **Nothing writes `expired` on its own.** A goal whose `active_to` has passed still reads
+  as `active` until someone patches it; the day model already stops judging with it. A
+  sweep at close would be a one-liner, but auto-changing a status is the thing concept-v2
+  says not to do, so it waits for WP5's coach to ask.
+- **The reached candidate is not surfaced anywhere yet** beyond `GET /api/goals` — the nudge
+  that says "mark it done?" is WP5's.
+- **No app screens.** Goals, Progress and Profile are WP6; this is the API they read.
+
+---
+
 ## WP3 — Day model, blocks, calorie model, day readings
 
 The day is now a thing the server computes. One function answers "what happened on this

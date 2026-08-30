@@ -2,6 +2,8 @@ import type pg from "pg";
 import { z } from "zod";
 import { insertEntries, insertWeights, getProfile, type NewEntry } from "../entries.js";
 import { insertTextEvidence, linkEvidence, type EvidenceRow } from "../evidence.js";
+import { InvalidGoalError, createGoal } from "../goals/store.js";
+import type { GoalProposal } from "../goals/proposal.js";
 import { FusionResultSchema, type FusionKind } from "./schema.js";
 
 // POST /api/log/confirm's half of the pipeline: take the preview the user just approved
@@ -34,6 +36,12 @@ export const ConfirmBody = z.object({
 	 * discount in the coach keys off.
 	 */
 	source: z.enum(["fused", "manual"]).optional(),
+	/** Minutes to add to UTC for local time; a goal's dates are the user's calendar. */
+	tz_offset_min: z.number().int().min(-840).max(840).optional(),
+	/** kind: "goal" — keep the user's own date even if the safe rate says it is a stretch. */
+	confirm_date: z.boolean().optional(),
+	/** kind: "goal" — save it open-ended instead of taking the proposed date. */
+	no_date: z.boolean().optional(),
 });
 export type ConfirmBody = z.infer<typeof ConfirmBody>;
 
@@ -44,6 +52,8 @@ export interface SavedLog {
 	meal_items: Row[];
 	weight: Row | null;
 	goal: Row | null;
+	/** The safe-rate timeline the goal was saved with (services/goals/proposal.ts). */
+	goal_proposal: GoalProposal | null;
 	profile: Row | null;
 	/** WP5 reads this back when the coach is asked; nothing else acts on it. */
 	coach_context: { text: string } | null;
@@ -66,6 +76,7 @@ function emptySaved(kind: FusionKind): SavedLog {
 		meal_items: [],
 		weight: null,
 		goal: null,
+		goal_proposal: null,
 		profile: null,
 		coach_context: null,
 		evidence: [],
@@ -238,25 +249,24 @@ export async function saveConfirmed(
 		}
 
 		case "goal": {
-			const { spec, proposed_timeline } = result;
-			// Priority is appended: a new goal never silently demotes the primary one.
-			const { rows } = await client.query(
-				`INSERT INTO goals (user_id, kind, title, metrics, priority, status, active_from, active_to, stated_at)
-				 VALUES ($1, $2, $3, $4::jsonb,
-				         (SELECT COALESCE(MAX(priority), 0) + 1 FROM goals WHERE user_id = $1 AND status = 'active'),
-				         'active', COALESCE($5::date, CURRENT_DATE), $6::date, NOW())
-				 RETURNING *`,
-				[
-					userId,
-					spec.kind,
-					spec.title,
-					JSON.stringify(spec.metrics),
-					spec.active_from,
-					// The accepted timeline is the goal's end date when the user has one.
-					spec.active_to ?? proposed_timeline?.by ?? null,
-				]
-			);
-			saved.goal = rows[0] as Row;
+			// Through the same service the Goals screen uses, so a goal set by talking and
+			// a goal typed into the app get the same priority, the same validated metrics
+			// and the same computed timeline (services/goals/store.ts).
+			try {
+				const created = await createGoal(client, userId, {
+					spec: result.spec,
+					...(body.confirm_date === undefined ? {} : { confirmDate: body.confirm_date }),
+					...(body.no_date === undefined ? {} : { noDate: body.no_date }),
+					...(body.tz_offset_min === undefined ? {} : { tzOffsetMin: body.tz_offset_min }),
+				});
+				saved.goal = created.goal as unknown as Row;
+				saved.goal_proposal = created.proposal;
+			} catch (error) {
+				// A spec naming a measure the app cannot compute is not something to save
+				// and explain later; it is the one question that makes the goal loggable.
+				if (error instanceof InvalidGoalError) throw new NothingToSaveError(error.message);
+				throw error;
+			}
 			saved.evidence = await linkEvidence(client, userId, evidenceIds, {
 				plan_id: saved.goal.id as string,
 			});

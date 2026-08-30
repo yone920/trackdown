@@ -1,5 +1,6 @@
 import type pg from "pg";
 import { computeDay, type DayView } from "./day.js";
+import { refreshGoalDetection } from "./goals/store.js";
 import { addDays, localDateOf, localDay, type IsoDate } from "./localTime.js";
 import type { DayReadings } from "./readings/readings.js";
 
@@ -132,6 +133,11 @@ export async function closeDay(
 
 	// Lost the race with a concurrent close: the other one owns the reading too.
 	if (inserted.rowCount === 0) return null;
+
+	// The day's logs are final, so this is the moment to ask the goals whether they have
+	// been reached or have stopped moving (services/goals/detect.ts). Both write a
+	// *candidate* the coach turns into a question; neither closes a goal.
+	await refreshGoalDetection(pool, userId, { date, tzOffsetMin });
 
 	if (!withoutReading) {
 		const reading = await readings.inShort(pool, userId, view);

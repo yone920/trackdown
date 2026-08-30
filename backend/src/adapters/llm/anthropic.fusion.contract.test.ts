@@ -86,7 +86,9 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 		expect(result.spec.metrics[0]?.measure).toBe("body_weight");
 		expect(result.spec.metrics[0]?.target).toBeCloseTo(170, 0);
 		expect(result.spec.metrics[0]?.direction).toBe("decrease");
-		// The goal path is two calls: route, then spec (see services/fusion/schema.ts).
-		expect(result.proposed_timeline).not.toBeNull();
+		// The user's own date is captured on the metric; the projection is the app's job
+		// (services/goals/proposal.ts), so the analyzer leaves proposed_timeline null.
+		expect(result.spec.metrics[0]?.by ?? "").toMatch(/^\d{4}-12-\d{2}$/);
+		expect(result.proposed_timeline).toBeNull();
 	}, 90_000);
 });
