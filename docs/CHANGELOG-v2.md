@@ -5,6 +5,17 @@ every decision that had to be made along the way. This file is the handover.
 
 ## Morning test — read this first
 
+**Two ways to run the app (2026-08-30):**
+
+- **Dev build (recommended — has Speak):** on the iPhone open
+  https://expo.dev/accounts/yone920/projects/trackdown-expo/builds/a5557405-b3fb-4739-b2d9-ebb8408f5306
+  → *Install*. It is signed for your registered iPhone. It loads its JavaScript from the Metro
+  server below, so Metro must be running.
+- **Expo Go:** open `exp://100.64.198.50:8081` in Expo Go (Tailscale on). Speak is hidden there.
+
+**Metro was left running on this VM** (100.64.198.50:8081, CI mode → no hot reload). If it is
+not answering (`curl localhost:8081/status`), restart it — for the dev build drop `--go`:
+
 **On this VM** (the Omarchy desktop, 100.64.198.50), start Metro:
 
 ```bash
@@ -16,10 +27,12 @@ npx expo start --offline
 **On the iPhone**: Tailscale on and connected, then open **Expo Go** and scan the QR — or
 open `exp://100.64.198.50:8081` directly.
 
-**Sign in**: the demo account's password is `demo-pass-123`. If the account has no data,
+**Sign in**: `yonas.fhs@gmail.com` / `demo-pass-123` (seeded 2026-08-30 with a fat-loss goal and four days; tz −240). If the account has no data,
 seed it from `backend/` on the Docker host:
 `npm run seed-demo -- <email> --tz <your offset in minutes>` — three closed days and a
 half-lived today.
+
+**Android:** the EAS Android build errored in Gradle (build 6134851e); not investigated — iOS first.
 
 ### What to try, in this order
 
