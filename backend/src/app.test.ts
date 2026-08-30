@@ -1237,6 +1237,140 @@ describe("day close", () => {
 	});
 });
 
+describe("day — the log as recorded", () => {
+	// WP6b: GET /api/day/:date/log. The Day screen is a reading; this is the audit trail
+	// behind "See the log as recorded" (docs/design-system.md §DayLog).
+	const tz = tzForLocalHour(15);
+	const today = localDay(new Date(), tz).date;
+	let auth: { Authorization: string };
+
+	beforeAll(async () => {
+		const token = await signUp("rex@example.com");
+		auth = { Authorization: `Bearer ${token}` };
+
+		// Spoken: a transcript kept as evidence beside the activity it became.
+		await request(app)
+			.post("/api/log/confirm")
+			.set(auth)
+			.send({
+				client_id: randomUUID(),
+				result: {
+					kind: "activities",
+					items: [
+						{
+							exercise: "Bench Press",
+							description: "3 × 8 bench at 135 lb",
+							category: "strength",
+							muscle_groups: ["chest"],
+							sets: 3,
+							reps: 8,
+							load_lb: 135,
+							duration_min: null,
+							distance_mi: null,
+							kcal: 120,
+							confidence: "high",
+							sources: null,
+						},
+					],
+				},
+				text: "bench press, three sets of eight at one thirty five",
+				text_kind: "transcript",
+				logged_at: localInstant(today, "13:10", tz),
+			});
+
+		// Typed: a weigh-in, whose note points at the weight since migration 0009.
+		await request(app)
+			.post("/api/log/confirm")
+			.set(auth)
+			.send({
+				client_id: randomUUID(),
+				result: { kind: "weight", weight_lb: 181.4, confidence: "high", sources: null },
+				text: "181.4 on the scale",
+				logged_at: localInstant(today, "07:00", tz),
+			});
+
+		// A statement: nothing to point at, but the user did say it today.
+		await request(app)
+			.post("/api/log/confirm")
+			.set(auth)
+			.send({
+				client_id: randomUUID(),
+				result: { kind: "coach_context", text: "knee hurts today" },
+				text: "knee hurts today",
+				tz_offset_min: tz,
+			});
+	}, 60_000);
+
+	it("lists the day's entries in the order they happened, with the raw words", async () => {
+		const res = await request(app).get(`/api/day/${today}/log?tz=${tz}`).set(auth);
+		expect(res.status).toBe(200);
+		expect(res.body).toMatchObject({ date: today, tz_offset_min: tz });
+
+		const kinds = res.body.entries.map((entry: { kind: string }) => entry.kind);
+		expect(kinds).toEqual(["weight", "activity", "statement"]);
+
+		const weight = res.body.entries[0];
+		expect(weight).toMatchObject({
+			kind: "weight",
+			raw_text: "181.4 on the scale",
+			icon: "keyboard",
+			understood: "Weighed 181.4 lb",
+			editable: true,
+		});
+		expect(weight.record).toMatchObject({ kind: "weight", weight_lb: 181.4 });
+
+		const activity = res.body.entries[1];
+		expect(activity).toMatchObject({
+			kind: "activity",
+			raw_text: "bench press, three sets of eight at one thirty five",
+			// A transcript, so the row is a microphone rather than a keyboard.
+			icon: "mic",
+			source: "manual",
+			confidence: "high",
+			understood: "Bench Press · 3 × 8 · 135 lb · 120 kcal",
+			editable: true,
+		});
+		expect(activity.record).toMatchObject({ kind: "activity", sets: 3, reps: 8, load_lb: 135 });
+
+		// A constraint or a line of context has no row to correct, and says so.
+		expect(res.body.entries[2]).toMatchObject({ kind: "statement", editable: false });
+		expect(res.body.entries[2].record.text).toBe("knee hurts today");
+	});
+
+	it("corrects a weigh-in in place", async () => {
+		const before = await request(app).get(`/api/day/${today}/log?tz=${tz}`).set(auth);
+		const weight = before.body.entries.find((entry: { kind: string }) => entry.kind === "weight");
+
+		const patched = await request(app).patch(`/api/weight/${weight.id}`).set(auth).send({ weight_lb: 180.2 });
+		expect(patched.status).toBe(200);
+		expect(patched.body).toMatchObject({ weight_lb: 180.2 });
+
+		const after = await request(app).get(`/api/day/${today}/log?tz=${tz}`).set(auth);
+		const corrected = after.body.entries.find((entry: { kind: string }) => entry.kind === "weight");
+		expect(corrected.understood).toBe("Weighed 180.2 lb");
+		// The note that was recorded is untouched: the log says what was said, not what
+		// the number became.
+		expect(corrected.raw_text).toBe("181.4 on the scale");
+	});
+
+	it("is empty for a day with nothing in it, and refuses a day that has not happened", async () => {
+		const empty = await request(app).get(`/api/day/${addDays(today, -3)}/log?tz=${tz}`).set(auth);
+		expect(empty.status).toBe(200);
+		expect(empty.body.entries).toEqual([]);
+
+		expect((await request(app).get(`/api/day/${addDays(today, 1)}/log?tz=${tz}`).set(auth)).status).toBe(400);
+		expect((await request(app).get(`/api/day/nope/log?tz=${tz}`).set(auth)).status).toBe(400);
+	});
+
+	it("shows another user nothing of it", async () => {
+		const stranger = await signUp("sam@example.com");
+		const res = await request(app)
+			.get(`/api/day/${today}/log?tz=${tz}`)
+			.set({ Authorization: `Bearer ${stranger}` });
+		expect(res.body.entries).toEqual([]);
+	});
+});
+
 describe("day — timezone edges", () => {
 	// Los Angeles, UTC−7: a log at 23:30 local is 06:30 the next morning in UTC. It belongs
 	// to the local day it was logged in, and to no other.

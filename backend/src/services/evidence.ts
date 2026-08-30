@@ -22,6 +22,7 @@ export interface EvidenceRow {
 	activity_id: string | null;
 	meal_id: string | null;
 	plan_id: string | null;
+	weight_id: string | null;
 	kind: EvidenceKind;
 	storage_key: string | null;
 	mime: string | null;
@@ -101,6 +102,7 @@ export interface EvidenceOwner {
 	activity_id?: string | null;
 	meal_id?: string | null;
 	plan_id?: string | null;
+	weight_id?: string | null;
 }
 
 /**
@@ -108,8 +110,8 @@ export interface EvidenceOwner {
  * another user are silently skipped rather than reported: a client guessing ids learns
  * nothing from the response either way.
  *
- * A weight log, a constraint and a coach context have no owner column to point at; their
- * evidence is still confirmed, which is what keeps the sweep off it.
+ * A constraint and a coach context have no owner column to point at; their evidence is
+ * still confirmed, which is what keeps the sweep off it.
  */
 export async function linkEvidence(
 	db: Queryable,
@@ -124,10 +126,18 @@ export async function linkEvidence(
 		    SET activity_id = COALESCE($3, activity_id),
 		        meal_id     = COALESCE($4, meal_id),
 		        plan_id     = COALESCE($5, plan_id),
+		        weight_id   = COALESCE($6, weight_id),
 		        confirmed_at = NOW()
 		  WHERE user_id = $1 AND id = ANY($2::uuid[])
 		  RETURNING *`,
-		[userId, valid, owner.activity_id ?? null, owner.meal_id ?? null, owner.plan_id ?? null]
+		[
+			userId,
+			valid,
+			owner.activity_id ?? null,
+			owner.meal_id ?? null,
+			owner.plan_id ?? null,
+			owner.weight_id ?? null,
+		]
 	);
 	return rows;
 }
@@ -155,7 +165,7 @@ export async function sweepUnlinkedEvidence(
 	const { rows } = await db.query<{ storage_key: string | null }>(
 		`DELETE FROM evidence
 		  WHERE confirmed_at IS NULL
-		    AND activity_id IS NULL AND meal_id IS NULL AND plan_id IS NULL
+		    AND activity_id IS NULL AND meal_id IS NULL AND plan_id IS NULL AND weight_id IS NULL
 		    AND created_at < NOW() - make_interval(hours => $1)
 		  RETURNING storage_key`,
 		[olderThanHours]
