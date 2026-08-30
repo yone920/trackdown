@@ -74,6 +74,7 @@ function view(overrides: Partial<DayView> = {}): DayView {
 					carbs_g: 40,
 					fat_g: 20,
 					fiber_g: 4,
+					evidence: [],
 				},
 			],
 			activities: [
@@ -102,6 +103,7 @@ function view(overrides: Partial<DayView> = {}): DayView {
 						reps: 0,
 						previous: { logged_at: "2026-08-22T17:00:00.000Z", load_lb: 130, sets: 3, reps: 8 },
 					},
+					evidence: [],
 				},
 			],
 			weights: [{ id: "w1", logged_at: "2026-08-29T06:40:00.000Z", weight_lb: 182.4, source: "manual" }],

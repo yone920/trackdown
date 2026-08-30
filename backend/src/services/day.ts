@@ -47,10 +47,25 @@ export const UNDER_JUDGED_FROM_MINUTES = 20 * 60;
 const EATBACK_FRACTION = { none: 0, half: 0.5, all: 1 } as const;
 export type Eatback = keyof typeof EATBACK_FRACTION;
 
+/** A stored photo, as a row that owns it lists it. The bytes come from GET /api/evidence/:id. */
+export interface EvidencePhoto {
+	id: string;
+	kind: string;
+	mime: string | null;
+	width: number | null;
+	height: number | null;
+}
+
 export interface DayItemActivity extends DayActivity {
 	/** The block this activity was clustered into; null for a standalone Health item. */
 	block_id: string | null;
 	delta_vs_last: DeltaVsLast | null;
+	/** Photos logged with this exercise — the thumbnail row on Today and Day. */
+	evidence: EvidencePhoto[];
+}
+
+export interface DayItemMeal extends DayMeal {
+	evidence: EvidencePhoto[];
 }
 
 export interface MacroLine {
@@ -86,7 +101,7 @@ export interface DayView {
 	day_number: number;
 
 	items: {
-		meals: DayMeal[];
+		meals: DayItemMeal[];
 		activities: DayItemActivity[];
 		weights: DayWeight[];
 	};
@@ -481,7 +496,8 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 	const blockOf = new Map<string, string>();
 	for (const block of blocks) for (const id of block.activity_ids) blockOf.set(id, block.id);
 
-	const items: DayItemActivity[] = [
+	// Evidence is attached below; until then these are the activities with their block and delta.
+	const items: (DayActivity & { block_id: string | null; delta_vs_last: DeltaVsLast | null })[] = [
 		...withDeltas(dayActivities, history).map(({ activity, delta_vs_last }) => ({
 			...activity,
 			block_id: activity.id ? (blockOf.get(activity.id) ?? null) : null,
@@ -491,6 +507,39 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 		// "a walk" is not the same walk as last Tuesday's.
 		...standaloneActivities.map((activity) => ({ ...activity, block_id: null, delta_vs_last: null })),
 	].sort((a, b) => Date.parse(a.logged_at) - Date.parse(b.logged_at));
+
+	// The photos each row was logged with. One query for the day, because a thumbnail row
+	// under an exercise is part of the design (docs/design-system.md §Day) and N+1 of them
+	// is not. The bytes themselves are only ever served by GET /api/evidence/:id.
+	const photosByActivity = new Map<string, EvidencePhoto[]>();
+	const photosByMeal = new Map<string, EvidencePhoto[]>();
+	const ownerActivityIds = items.map((item) => item.id).filter((id): id is string => id !== null);
+	const ownerMealIds = meals.map((meal) => meal.id);
+	if (ownerActivityIds.length > 0 || ownerMealIds.length > 0) {
+		const { rows: evidenceRows } = await db.query<EvidencePhoto & { activity_id: string | null; meal_id: string | null }>(
+			`SELECT id, kind, mime, width, height, activity_id, meal_id
+			   FROM evidence
+			  WHERE user_id = $1 AND kind = 'photo'
+			    AND (activity_id = ANY($2::uuid[]) OR meal_id = ANY($3::uuid[]))
+			  ORDER BY created_at`,
+			[userId, ownerActivityIds, ownerMealIds]
+		);
+		for (const row of evidenceRows) {
+			const photo: EvidencePhoto = { id: row.id, kind: row.kind, mime: row.mime, width: row.width, height: row.height };
+			const bucket = row.activity_id ? photosByActivity : row.meal_id ? photosByMeal : null;
+			const key = row.activity_id ?? row.meal_id;
+			if (!bucket || !key) continue;
+			bucket.set(key, [...(bucket.get(key) ?? []), photo]);
+		}
+	}
+	const activityItems: DayItemActivity[] = items.map((item) => ({
+		...item,
+		evidence: item.id ? (photosByActivity.get(item.id) ?? []) : [],
+	}));
+	const mealItems: DayItemMeal[] = meals.map((meal) => ({
+		...meal,
+		evidence: photosByMeal.get(meal.id) ?? [],
+	}));
 
 	// --- the calorie model ----------------------------------------------------------
 	const eaten = meals.reduce((total, meal) => total + meal.kcal, 0);
@@ -580,7 +629,7 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 		closed_at: closedAt,
 		day_number: await dayNumber(db, userId, date, tzOffsetMin),
 
-		items: { meals, activities: items, weights },
+		items: { meals: mealItems, activities: activityItems, weights },
 		blocks,
 
 		eaten,
