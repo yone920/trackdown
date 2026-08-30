@@ -2043,17 +2043,23 @@ describe("coach — the brief", () => {
 		expect(Number(rows[0]!.count)).toBeGreaterThan(0);
 	});
 
-	it("generates a new one when something is logged", async () => {
+	it("keeps the day's brief when something is logged, and flags it stale", async () => {
 		const before = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
 		coach.nextBrief = { ...SAMPLE_BRIEF, headline: "Rest — you trained today" };
 		coachLlm.nextOutput = READING;
 		await lift(today, "12:10", "Overhead Press", 65);
 
+		// A plain ask returns the same answer — the day's brief holds still — but `stale`
+		// tells the app the inputs moved so it can offer Regenerate.
 		const after = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
-		expect(after.body.brief.headline).toBe("Rest — you trained today");
-		expect(after.body.brief.id).not.toBe(before.body.brief.id);
-		expect(after.body.brief.cached).toBe(false);
-		// Today's workout is in the inputs, so the model can refuse to prescribe a second one.
+		expect(after.body.brief.id).toBe(before.body.brief.id);
+		expect(after.body.brief.headline).toBe(before.body.brief.headline);
+		expect(after.body.stale).toBe(true);
+
+		// Regenerate picks up the new inputs; today's workout is in them, so the model can
+		// refuse to prescribe a second session.
+		const regen = await request(app).post("/api/coach/next/regenerate").set(headers).send({ tz_offset_min: tz });
+		expect(regen.body.brief.headline).toBe("Rest — you trained today");
 		expect(coach.inputs.at(-1)!.today.trained.length).toBeGreaterThan(0);
 		coach.nextBrief = SAMPLE_BRIEF;
 	});
@@ -2087,9 +2093,10 @@ describe("coach — the brief", () => {
 		const res = await request(app).post("/api/coach/next/regenerate").set(headers).send({ tz_offset_min: tz });
 		expect(res.status).toBe(200);
 		expect(res.body.brief.cached).toBe(false);
-		// Same inputs, so the same cache row is rewritten rather than a duplicate added.
-		expect(res.body.brief.id).toBe(first.body.brief.id);
 		expect(Date.parse(res.body.brief.asked_at)).toBeGreaterThanOrEqual(Date.parse(first.body.brief.asked_at));
+		// The regenerated brief becomes the day's standing answer for the next plain ask.
+		const again = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(again.body.brief.id).toBe(res.body.brief.id);
 	});
 
 	it("picks up a coach_context said through the Log sheet", async () => {
