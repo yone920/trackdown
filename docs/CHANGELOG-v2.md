@@ -16,6 +16,135 @@ open `exp://100.64.198.50:8081` directly.
 
 ---
 
+## WP6a — App foundation, Today and Log
+
+The first half of WP6: the theme, the shared components, the API layer, and the two
+screens the morning test needs — Today and Log. Days, Progress, Goals, Day and DayLog are
+WP6b; they exist as routed placeholder screens so the navigation is real.
+
+**The theme (docs/design-system.md)**
+
+- `tailwind.config.js` is the token table: `bg` `card` `track` `line` `ink` `mute` `dim`
+  `accent` `good`. The cream/terracotta palette and Fraunces are gone, along with
+  `constants/theme.ts`, the `hooks/use-color-scheme*` pair and every `themed-*` component.
+- `lib/theme.ts` holds the same values for the places a class name cannot reach: svg fills,
+  the navigation theme, `fontVariant: ['tabular-nums']`. Two hex lists that can disagree is
+  how a design system drifts, so one file is generated from the other by hand and reviewed
+  together.
+- Fonts are **Barlow** (text) and **Barlow Condensed** (display), imported **one weight at a
+  time** — `@expo-google-fonts/barlow/500Medium`, not the package root, which re-exports
+  every weight and italic and cost 3 MB of the exported bundle.
+- `components/icons.tsx` is stroke svg on a 24 grid, 1.8 by default. No emoji, and no glyph
+  font: `@expo/vector-icons` is no longer imported by anything.
+
+**Shared components** — `components/`: `type.tsx` (Eyebrow/Body/Sub/Disp/Num, the scale),
+`kit.tsx` (Card, Section, Row, Chip, Chips, GroupHeading), `charts.tsx` (Bar, Segments,
+Ring, Sparkline — all svg, all pure), `metric-card.tsx`, `goal-banner.tsx`,
+`reading-card.tsx`, `day-arc.tsx`, `evidence.tsx`, `fields.tsx`, `confirm-card.tsx`,
+`tab-bar.tsx` (the 84px bar and the 64px `+`).
+
+**The API layer**
+
+- `lib/api.ts` stays the one HTTP client and gains `upload()` (multipart, for
+  `/api/log/analyze`), `tzOffsetMin()`, and `authHeaders()`/`evidenceUrl()` so an
+  `<Image>` can fetch the authenticated photo route.
+- `lib/queries.ts` was rewritten around the v2 endpoints: `useDay`, `useWeek`, `useDays`,
+  `useGoals`, `useGoalProgress`, `useProfile`, `useCoachNext`, `useRegenerateCoach`,
+  `useAnalyze`, `useConfirm`. Every day-shaped call sends `tz`. The v1 hooks that fetched
+  `/api/entries/*` and did the arithmetic on the phone are gone.
+- **`lib/tdee.ts` and `lib/recommendations.ts` are deleted.** The server computes the
+  targets (`GET /api/profile` → `targets`, WP4) and the app renders them; two
+  implementations of "what should I eat" is how the phone and the server start disagreeing
+  about the same day.
+- `lib/types.ts` writes out the shapes the backend returns. When a service in
+  `backend/src/services/**` changes one, this file is the other half of the change.
+
+**Today** (`app/(tabs)/index.tsx`)
+
+Header (day N · on track/over/—), goal banner including the no-goal state, the goal's
+cards, the Right now reading with its action chips, the day arc, Training and Eating, the
+coach button, pull-to-refresh.
+
+- **Which cards appear is `lib/today-cards.ts`** — pure, and the only judgement the app
+  makes for itself. fat loss → calories ring + weekly deficit + weight trend; muscle →
+  protein + weekly sets + coverage; endurance → weekly cardio + pace + resting HR; strength
+  → target lift + weekly sets + push/pull/legs; no goal (and `maintain` / `custom`) →
+  workouts this week + cardio today + coverage, in `mute`, with no green and no orange.
+- **A card with a missing number does not appear.** No zeros standing in for absent facts:
+  an empty ring says the user ate nothing, which is a different claim from "we do not know".
+  Resting HR therefore never draws until WP7 brings Health in, and the endurance goal shows
+  two cards rather than three.
+- `day.workout_done` is read if the backend ever sends it; today the label flips on
+  `blocks.length > 0`, which is the same fact computed from what `/api/day` does return.
+
+**Log** (`app/log.tsx`, a modal from the `+` and from the reading's chips)
+
+Text area, photo thumbnails, the three 76px controls, analyze → confirm card → save.
+
+- The confirm card renders **every** kind the classifier can return — activities, meal,
+  weight, goal (with the proposed timeline and the `confirm_date` / `no_date` choice),
+  constraint, preference, coach_context, and `unclear`, which shows the question and offers
+  no Save. A kind it could not draw would be a log the user could not save.
+- Photos: `expo-image-picker` (camera and library, ≤ 4) downscaled by
+  `expo-image-manipulator` to 1280 px JPEG at quality 0.7 before upload — the server's
+  sharp pass stays the safety net, not the first line.
+- `client_id` is minted once per confirm card (`expo-crypto`), so a confirm retried after a
+  timeout replays instead of logging the workout twice.
+- **Speak is behind `lib/ports/speech.ts`.** `getSpeech()` `require`s the
+  `expo-speech-recognition` adapter inside a try: the native module throws while it is
+  being evaluated, which is exactly what Expo Go does, and the port answers
+  `available: false`. The control is then not drawn at all and the helper line says why.
+  Nothing imports `expo-speech-recognition` at the top level.
+
+**Navigation** — tabs Today · Days · Progress · Goals with a hand-written tab bar (the
+floating `+` has to know where the bar ends); `log` as a modal, `coach` and `day` as stack
+routes. The old screens (`detail`, `eating`, `movement`, `weight`, the v1 `progress` and
+`profile`) are deleted. `app/coach.tsx` is deliberately more than a placeholder — it asks
+`GET /api/coach/next`, renders the brief and takes a line of context — because item 6 of the
+morning-testable minimum is "coach ask → brief".
+
+**One backend change** — `GET /api/day/:date` now returns `evidence: [{id, kind, mime,
+width, height}]` on each activity and meal. The photo row under an exercise is in the design
+and the day view had no way to point at one; it is one extra query per day, not N+1. Nothing
+else about the shape moved.
+
+**`app.json` / `eas.json`** — committed (they were uncommitted EAS edits). `userInterfaceStyle`
+is `dark`, the splash and adaptive-icon backgrounds are `#121418`, the camera / photo library
+/ microphone / speech-recognition permission strings are written, and the
+`expo-speech-recognition` and `expo-image-picker` config plugins are configured. Expo Go
+ignores plugins, which is the point: the sheet still works there without them.
+
+**Tests** — jest + `jest-expo` + `@testing-library/react-native`, 28 in four files:
+`today-cards` (the card rule per goal kind, including the hidden-when-missing rule),
+`today` (rendered against a fake API), `confirm-card` (every kind, the sources line, the
+edit callback) and `log` (Speak hidden when the port is unavailable, typed text through
+analyze → edit → confirm with the idempotency key). `react-test-renderer` is pinned to
+19.1.0 to match React; `jest-expo` to ~54 to match the SDK.
+
+**Verified** — `npx tsc --noEmit` clean, `npx expo lint` clean (the 7 unescaped-quote errors
+and the unused variable were all in deleted or rewritten files), `npx expo export
+--platform ios` builds a 4.46 MB bundle, backend `typecheck`/`lint`/`test` still green
+(311 passed, 2 skipped).
+
+**Deferred to WP6b** — Days, Progress, Goals (with the empty/propose/reached/history states
+and the account rows), Day and DayLog, the Coach screen's full design, and the Goals-screen
+reorder. WP6b should know:
+
+- `lib/today-cards.ts` is the pattern for Progress: a pure selector over `GoalWithProgress`,
+  tested without a renderer.
+- `GET /api/goals/:id/progress` carries the `series` the Progress charts want;
+  `components/charts.tsx` already draws all four shapes.
+- Nothing renders `profile.constraints` / `preferences` / `training_days` yet — those are
+  the "How you train / How you eat / Constraints" rows under Goals.
+- There is no sign-out control on any screen: it belongs in the Goals tab's account rows.
+  `signOut()` in `lib/auth.ts` is ready and unused.
+- `/api/day/:date` returns everything the Day screen needs (verdict, `in_short`,
+  `muscle_summary`, macros, `eating_pattern`, `coach`); no backend work is left for it.
+- DayLog ("the log as recorded") has **no endpoint**: `evidence` rows carry the raw text but
+  nothing lists them for a day. That is a backend addition WP6b has to make or drop.
+
+---
+
 ## WP5 — Coach
 
 The brief. Everything with a number in it is computed; the model chooses the movements,
