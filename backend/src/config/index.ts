@@ -101,6 +101,9 @@ export const config = Object.freeze({
 		apiKey: anthropicApiKey,
 		// The Supabase edge function used claude-haiku-4-5; kept env-tunable.
 		model: read("ANTHROPIC_MODEL") ?? "claude-haiku-4-5",
+		// Identity-linked API keys must name the workspace on every request
+		// (`anthropic-workspace-id`); legacy keys leave this unset.
+		workspaceId: read("ANTHROPIC_WORKSPACE_ID"),
 	}),
 
 	smtp: Object.freeze({

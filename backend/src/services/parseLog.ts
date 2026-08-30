@@ -61,7 +61,15 @@ export interface LogParser {
 	parse(text: string): Promise<ParsedItem[]>;
 }
 
-export function createClaudeLogParser({ apiKey, model }: { apiKey: string; model: string }): LogParser {
+export function createClaudeLogParser({
+	apiKey,
+	model,
+	workspaceId,
+}: {
+	apiKey: string;
+	model: string;
+	workspaceId?: string | undefined;
+}): LogParser {
 	if (!apiKey) {
 		return {
 			async parse() {
@@ -69,7 +77,10 @@ export function createClaudeLogParser({ apiKey, model }: { apiKey: string; model
 			},
 		};
 	}
-	const client = new Anthropic({ apiKey });
+	const client = new Anthropic({
+		apiKey,
+		defaultHeaders: workspaceId ? { "anthropic-workspace-id": workspaceId } : undefined,
+	});
 	return {
 		async parse(text) {
 			const response = await client.messages.parse({
