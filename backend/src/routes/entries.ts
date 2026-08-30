@@ -14,7 +14,9 @@ import {
 } from "../services/entries.js";
 import { z } from "zod";
 
-// /api/entries/:kind — kind is "meals" or "movement" (calorie_expenditure).
+// /api/entries/:kind — kind is "meals" or "movement". Since 0004_v2.sql "movement" is an
+// alias over the `activities` table, and POST/PATCH also accept the v2 activity fields
+// (exercise, sets, reps, load_lb, …); see services/entries.ts.
 
 function badRequest(res: Response, error: z.ZodError) {
 	res.status(400).json({ error: "Invalid request.", issues: error.issues });

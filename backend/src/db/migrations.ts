@@ -19,9 +19,19 @@ export interface MigrationReport {
 	total: number;
 }
 
+export interface MigrationOptions {
+	log?: (message: string) => void;
+	/**
+	 * Stop after this filename (inclusive), e.g. "0003_account_issuer.sql". Tests use it
+	 * to build a database at an older schema version and then migrate it forward with
+	 * real data in it — the case a fresh-database test can never cover.
+	 */
+	upTo?: string;
+}
+
 export async function runMigrations(
 	client: pg.Client | pg.PoolClient,
-	{ log = console.log }: { log?: (message: string) => void } = {}
+	{ log = console.log, upTo }: MigrationOptions = {}
 ): Promise<MigrationReport> {
 	await client.query("SELECT pg_advisory_lock($1)", [ADVISORY_LOCK_ID]);
 	try {
@@ -32,7 +42,9 @@ export async function runMigrations(
 			)
 		`);
 
-		const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
+		const all = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
+		if (upTo && !all.includes(upTo)) throw new Error(`No migration named ${upTo} in ${MIGRATIONS_DIR}`);
+		const files = upTo ? all.filter((f) => f <= upTo) : all;
 		const { rows } = await client.query<{ name: string }>("SELECT name FROM schema_migrations");
 		const alreadyApplied = new Set(rows.map((row) => row.name));
 

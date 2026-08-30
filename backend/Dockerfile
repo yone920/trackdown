@@ -18,8 +18,10 @@ ENV APP_VERSION=$APP_VERSION GIT_SHA=$GIT_SHA NODE_ENV=production
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
-# The migration runner reads these at container start (see docker-compose.yml command)
+# The migration runner reads these at container start (see docker-compose.yml command):
+# the SQL files, and the exercise catalogue it seeds afterwards.
 COPY migrations ./migrations
+COPY data ./data
 
 USER node
 EXPOSE 8000
