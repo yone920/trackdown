@@ -4,9 +4,10 @@
 # Idempotent. Needs ~/.cloudflare.token (Tunnel:Edit + DNS:Edit for yonelab.net).
 #
 #   ./scripts/cloudflare-add-route.sh            # add
-#   HOSTNAME=other-api.yonelab.net ./scripts/cloudflare-add-route.sh
+#   API_HOST=other-api.yonelab.net ./scripts/cloudflare-add-route.sh
 set -euo pipefail
-HOSTNAME="${HOSTNAME:-trackdown-api.yonelab.net}"
+# Not $API_HOST — that is the shell's own machine-name variable (it once routed "omarchy").
+API_HOST="${API_HOST:-trackdown-api.yonelab.net}"
 SERVICE="${SERVICE:-http://localhost:8003}"
 TOKEN=$(tr -d '[:space:]' < ~/.cloudflare.token)
 H="Authorization: Bearer $TOKEN"
@@ -17,7 +18,7 @@ ZONE=44bcb4f1f972251311ecb6130c480201
 TMP=$(mktemp -d)
 
 curl -sf -H "$H" "$API/accounts/$ACCT/cfd_tunnel/$TID/configurations" > "$TMP/before.json"
-python3 - "$TMP" "$HOSTNAME" "$SERVICE" <<'PY'
+python3 - "$TMP" "$API_HOST" "$SERVICE" <<'PY'
 import json, sys
 tmp, host, svc = sys.argv[1:]
 d = json.load(open(f"{tmp}/before.json")); cfg = d["result"]["config"]; ing = cfg["ingress"]
@@ -34,14 +35,19 @@ if [ ! -f "$TMP/skip" ]; then
     "$API/accounts/$ACCT/cfd_tunnel/$TID/configurations" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("tunnel config:", "ok, version", d["result"]["version"] if d["success"] else d["errors"])'
 fi
 
-EXISTING=$(curl -sf -H "$H" "$API/zones/$ZONE/dns_records?name=$HOSTNAME" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["result"]))')
+# Delete the bogus record from the earlier run, only if it is a CNAME to this tunnel
+BOGUS=$(curl -sf -H "$H" "$API/zones/$ZONE/dns_records?name=omarchy.yonelab.net&type=CNAME" | python3 -c 'import sys,json;rs=[r for r in json.load(sys.stdin)["result"] if r["content"].endswith(".cfargotunnel.com")];print(rs[0]["id"] if rs else "")')
+if [ -n "$BOGUS" ]; then
+  curl -sf -X DELETE -H "$H" "$API/zones/$ZONE/dns_records/$BOGUS" >/dev/null && echo "dns: removed bogus omarchy.yonelab.net"
+fi
+EXISTING=$(curl -sf -H "$H" "$API/zones/$ZONE/dns_records?name=$API_HOST" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["result"]))')
 if [ "$EXISTING" = "0" ]; then
   curl -sf -X POST -H "$H" -H "Content-Type: application/json" \
-    --data "{\"type\":\"CNAME\",\"name\":\"${HOSTNAME%%.yonelab.net}\",\"content\":\"$TID.cfargotunnel.com\",\"proxied\":true,\"comment\":\"TrackDown API (Docker host :8003)\"}" \
+    --data "{\"type\":\"CNAME\",\"name\":\"${API_HOST%%.yonelab.net}\",\"content\":\"$TID.cfargotunnel.com\",\"proxied\":true,\"comment\":\"TrackDown API (Docker host :8003)\"}" \
     "$API/zones/$ZONE/dns_records" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("dns:", "ok" if d["success"] else d["errors"])'
 else
-  echo "dns: $HOSTNAME already exists, unchanged"
+  echo "dns: $API_HOST already exists, unchanged"
 fi
 rm -rf "$TMP"
 sleep 5
-curl -s -m 10 -o /dev/null -w "https://$HOSTNAME/health → HTTP %{http_code}\n" "https://$HOSTNAME/health"
+curl -s -m 10 -o /dev/null -w "https://$API_HOST/health → HTTP %{http_code}\n" "https://$API_HOST/health"
