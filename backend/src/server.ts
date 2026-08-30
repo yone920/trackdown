@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
-import { createSmtpOtpSender } from "./adapters/email/smtp.js";
 import { createApp } from "./app.js";
 import { createAuth } from "./auth.js";
 import { config } from "./config/index.js";
@@ -41,7 +40,6 @@ const auth = createAuth({
 	secret: config.auth.secret,
 	baseUrl: config.auth.baseUrl,
 	trustedOrigins: config.allowedOrigins,
-	sendOtp: createSmtpOtpSender(config.smtp),
 });
 
 const app = createApp({

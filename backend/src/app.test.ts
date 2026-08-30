@@ -1,17 +1,20 @@
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
-import { createAuth } from "./auth.js";
+import { createAuth, type Auth } from "./auth.js";
+import { setUserPassword } from "./services/password.js";
 import type { LogParser, ParsedItem } from "./services/parseLog.js";
 import { startTestDatabase, type TestDatabase } from "./test/db.js";
 
-// End-to-end through Express + Better Auth + a real Postgres: the sign-in flow the app
-// uses, then the CRUD the screens depend on, then free-text logging with a fake parser.
+// End-to-end through Express + Better Auth + a real Postgres: the sign-up/sign-in flow the
+// app uses, then the CRUD the screens depend on, then free-text logging with a fake parser.
 
 let db: TestDatabase;
+let auth: Auth;
 let app: ReturnType<typeof createApp>;
-const sentCodes = new Map<string, string>();
 let nextParse: ParsedItem[] = [];
+
+const PASSWORD = "correct-horse-battery";
 
 const fakeParser: LogParser = {
 	async parse() {
@@ -21,14 +24,11 @@ const fakeParser: LogParser = {
 
 beforeAll(async () => {
 	db = await startTestDatabase();
-	const auth = createAuth({
+	auth = createAuth({
 		pool: db.pool,
 		secret: "test-secret-test-secret-test-secret",
 		baseUrl: "http://localhost:8000",
 		trustedOrigins: [],
-		sendOtp: async ({ email, otp }) => {
-			sentCodes.set(email, otp);
-		},
 	});
 	app = createApp({
 		pool: db.pool,
@@ -45,19 +45,19 @@ afterAll(async () => {
 	await db?.stop();
 });
 
-async function signIn(email: string): Promise<string> {
-	const send = await request(app)
-		.post("/api/auth/email-otp/send-verification-otp")
-		.send({ email, type: "sign-in" });
-	expect(send.status).toBe(200);
-	const otp = sentCodes.get(email);
-	expect(otp).toMatch(/^\d{6}$/);
-
-	const verify = await request(app).post("/api/auth/sign-in/email-otp").send({ email, otp });
-	expect(verify.status).toBe(200);
-	const token = verify.headers["set-auth-token"];
+/** Creates the account and returns its bearer token — sign-up auto-signs in. */
+async function signUp(email: string, password: string = PASSWORD): Promise<string> {
+	const res = await request(app)
+		.post("/api/auth/sign-up/email")
+		.send({ name: email.split("@")[0], email, password });
+	expect(res.status).toBe(200);
+	const token = res.headers["set-auth-token"];
 	expect(token).toBeTruthy();
 	return token as string;
+}
+
+async function signIn(email: string, password: string = PASSWORD) {
+	return request(app).post("/api/auth/sign-in/email").send({ email, password });
 }
 
 describe("health", () => {
@@ -74,8 +74,8 @@ describe("auth", () => {
 		expect(res.status).toBe(401);
 	});
 
-	it("signs in with an emailed 6-digit code, creating the user and their profile", async () => {
-		const token = await signIn("ada@example.com");
+	it("signs up with an email and password, creating the user and their profile", async () => {
+		const token = await signUp("ada@example.com");
 		const session = await request(app).get("/api/auth/get-session").set("Authorization", `Bearer ${token}`);
 		expect(session.status).toBe(200);
 		expect(session.body.user.email).toBe("ada@example.com");
@@ -85,18 +85,95 @@ describe("auth", () => {
 		expect(profile.body).toMatchObject({ id: session.body.user.id, units: "imperial", goal_pace: "standard" });
 	});
 
-	it("rejects a wrong code", async () => {
-		await request(app).post("/api/auth/email-otp/send-verification-otp").send({ email: "bob@example.com", type: "sign-in" });
-		const res = await request(app).post("/api/auth/sign-in/email-otp").send({ email: "bob@example.com", otp: "000000" });
-		expect(res.status).toBeGreaterThanOrEqual(400);
+	it("signs in again with the same password", async () => {
+		await signUp("bea@example.com");
+		const res = await signIn("bea@example.com");
+		expect(res.status).toBe(200);
+		expect(res.headers["set-auth-token"]).toBeTruthy();
+
+		const session = await request(app)
+			.get("/api/auth/get-session")
+			.set("Authorization", `Bearer ${res.headers["set-auth-token"]}`);
+		expect(session.body.user.email).toBe("bea@example.com");
+	});
+
+	it("rejects a wrong password, and an unknown email, without saying which", async () => {
+		await signUp("bob@example.com");
+		const wrong = await signIn("bob@example.com", "not-the-password");
+		expect(wrong.status).toBe(401);
+		expect(wrong.headers["set-auth-token"]).toBeFalsy();
+
+		const unknown = await signIn("nobody@example.com");
+		expect(unknown.status).toBe(401);
+	});
+
+	it("refuses a password under 8 characters", async () => {
+		const res = await request(app)
+			.post("/api/auth/sign-up/email")
+			.send({ name: "shorty", email: "shorty@example.com", password: "short" });
+		expect(res.status).toBe(400);
+		expect(String(res.body.message)).toMatch(/password/i);
+	});
+
+	it("refuses a second sign-up with an email that already exists", async () => {
+		await signUp("twice@example.com");
+		const again = await request(app)
+			.post("/api/auth/sign-up/email")
+			.send({ name: "twice", email: "twice@example.com", password: "another-password" });
+		expect(again.status).toBe(422);
+		expect(String(again.body.message)).toMatch(/already exists/i);
 	});
 
 	it("signs out and the token stops working", async () => {
-		const token = await signIn("carol@example.com");
+		const token = await signUp("carol@example.com");
 		const out = await request(app).post("/api/auth/sign-out").set("Authorization", `Bearer ${token}`).send({});
 		expect(out.status).toBe(200);
 		const after = await request(app).get("/api/profile").set("Authorization", `Bearer ${token}`);
 		expect(after.status).toBe(401);
+	});
+
+	it("no longer serves the v1 email-OTP endpoints", async () => {
+		const send = await request(app)
+			.post("/api/auth/email-otp/send-verification-otp")
+			.send({ email: "ada@example.com", type: "sign-in" });
+		expect(send.status).toBe(404);
+		const verify = await request(app)
+			.post("/api/auth/sign-in/email-otp")
+			.send({ email: "ada@example.com", otp: "000000" });
+		expect(verify.status).toBe(404);
+	});
+});
+
+describe("reset-password script", () => {
+	it("replaces the password of an existing account", async () => {
+		await signUp("reset@example.com");
+		const result = await setUserPassword(auth, "reset@example.com", "brand-new-password");
+		expect(result.account).toBe("updated");
+
+		expect((await signIn("reset@example.com")).status).toBe(401);
+		expect((await signIn("reset@example.com", "brand-new-password")).status).toBe(200);
+	});
+
+	it("gives a password to an account that never had one (a v1 email-OTP user)", async () => {
+		// What v1 left behind: a user row and a profile, but no credential account.
+		await db.pool.query(
+			`INSERT INTO "user" ("id", "name", "email", "emailVerified", "updatedAt")
+			 VALUES ($1, $2, $3, true, NOW())`,
+			["otp-era-user", "otp", "otp-era@example.com"]
+		);
+		await db.pool.query(`INSERT INTO profiles (id) VALUES ($1)`, ["otp-era-user"]);
+
+		const result = await setUserPassword(auth, "otp-era@example.com", "a-first-password");
+		expect(result).toMatchObject({ userId: "otp-era-user", account: "created" });
+
+		const res = await signIn("otp-era@example.com", "a-first-password");
+		expect(res.status).toBe(200);
+		expect(res.headers["set-auth-token"]).toBeTruthy();
+	});
+
+	it("refuses an unknown email and a too-short password", async () => {
+		await expect(setUserPassword(auth, "ghost@example.com", "long-enough")).rejects.toThrow(/No account/);
+		await expect(setUserPassword(auth, "reset@example.com", "short")).rejects.toThrow(/at least 8/);
 	});
 });
 
@@ -104,8 +181,8 @@ describe("entries", () => {
 	let token: string;
 	let otherToken: string;
 	beforeAll(async () => {
-		token = await signIn("dana@example.com");
-		otherToken = await signIn("eve@example.com");
+		token = await signUp("dana@example.com");
+		otherToken = await signUp("eve@example.com");
 	});
 
 	it("creates, lists, reads, updates and deletes a meal — scoped to the owner", async () => {
@@ -183,7 +260,7 @@ describe("entries", () => {
 
 describe("free-text log", () => {
 	it("parses and saves meals, movement and weight in one call, returning ids in input order", async () => {
-		const token = await signIn("frank@example.com");
+		const token = await signUp("frank@example.com");
 		const auth = { Authorization: `Bearer ${token}` };
 		nextParse = [
 			{ type: "movement", description: "30 min walk", kcal: 120, confidence: "medium" },

@@ -9,7 +9,7 @@ TrackDown is a React Native (Expo) iOS/Android app for weight loss tracking with
 - **State Management:** Zustand
 - **Data Fetching:** TanStack Query
 - **Charts:** Victory Native / Skia
-- **Backend:** `backend/` — Express 5 + Better Auth (email OTP, bearer tokens) + self-hosted Postgres 17 in Docker. Migrated off Supabase 2026-08-28; see `docs/supabase-migration-plan.md`
+- **Backend:** `backend/` — Express 5 + Better Auth (email + password, bearer tokens) + self-hosted Postgres 17 in Docker. Migrated off Supabase 2026-08-28; see `docs/supabase-migration-plan.md`
 - **AI text parsing:** Claude Haiku 4.5 via `backend/src/services/parseLog.ts` (the former `parse-log` edge function)
 - **AI Vision (planned):** Claude Sonnet for food/scale/equipment photo analysis
 - **Voice:** OpenAI Whisper for voice transcription
@@ -30,7 +30,7 @@ TrackDown is a React Native (Expo) iOS/Android app for weight loss tracking with
 
 ## Database Schema (Postgres — `backend/migrations/`)
 Tables:
-- `user`, `session`, `account`, `verification` - Better Auth (0001)
+- `user`, `session`, `account`, `verification` - Better Auth (0001, `account.issuer` added in 0003)
 - `profiles` - User profiles, goals, TDEE settings
 - `meals` - Meal entries (breakfast, lunch, dinner, snacks)
 - `meal_items` - Individual food items within meals
@@ -116,7 +116,13 @@ Config lives in `backend/src/config/index.ts` (the only file that reads `process
 URL from `EXPO_PUBLIC_API_URL` (repo-root `.env`, inlined at bundle time).
 
 ### Auth flow
-Email OTP through Better Auth's `email-otp` plugin — the same UX Supabase gave us:
-`POST /api/auth/email-otp/send-verification-otp` then `POST /api/auth/sign-in/email-otp`.
-The session token comes back in the `set-auth-token` header and is stored in
-`expo-secure-store` (`lib/token-store.ts`); every API call sends it as a bearer token.
+Email + password through Better Auth's `emailAndPassword` (min 8 characters):
+`POST /api/auth/sign-up/email` (name, email, password — auto-signs in) and
+`POST /api/auth/sign-in/email`. The v1 email-OTP endpoints are gone (404). The session
+token comes back in the `set-auth-token` header and is stored in `expo-secure-store`
+(`lib/token-store.ts`); every API call sends it as a bearer token.
+
+There is no SMTP server, so there is no self-service password reset. Recovery is an
+operator command on the host that owns the database:
+`cd backend && npm run reset-password -- <email> <newPassword>`. It also gives a v1
+OTP-era account (which has no password at all) its first one.

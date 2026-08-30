@@ -1,4 +1,3 @@
-import { emailOTPClient } from 'better-auth/client/plugins';
 import { createAuthClient } from 'better-auth/react';
 
 import { API_URL, setUnauthorizedHandler } from './api';
@@ -7,10 +6,14 @@ import { clearToken, getToken, setToken } from './token-store';
 // Better Auth client, replacing supabase.auth. The backend enables the `bearer` plugin,
 // so the session token travels in an Authorization header (returned once in the
 // `set-auth-token` response header at sign-in) instead of a cookie.
+//
+// v1 signed in with a 6-digit emailed code; v2 uses email + password because there is no
+// SMTP server (backend/src/auth.ts). Sign-up auto-signs in, so both calls end with a
+// session. Forgot your password? An operator runs `npm run reset-password` on the host —
+// there is no self-service reset until mail works.
 
 export const authClient = createAuthClient({
   baseURL: API_URL,
-  plugins: [emailOTPClient()],
   fetchOptions: {
     auth: { type: 'Bearer', token: () => getToken() ?? '' },
     onSuccess: (ctx) => {
@@ -20,18 +23,20 @@ export const authClient = createAuthClient({
   },
 });
 
-/** Step 1 of sign-in: email a 6-digit code (creates the account on first use). */
-export async function sendSignInCode(email: string): Promise<{ error: string | null }> {
-  const { error } = await authClient.emailOtp.sendVerificationOtp({ email, type: 'sign-in' });
+/** Must match `MIN_PASSWORD_LENGTH` in backend/src/auth.ts. */
+export const MIN_PASSWORD_LENGTH = 8;
+
+/** Sign in to an existing account. `useSession` updates on success. */
+export async function signIn(email: string, password: string): Promise<{ error: string | null }> {
+  const { error } = await authClient.signIn.email({ email, password });
   return { error: error?.message ?? null };
 }
 
-/** Step 2: exchange the code for a session. `useSession` updates on success. */
-export async function verifySignInCode(
-  email: string,
-  otp: string,
-): Promise<{ error: string | null }> {
-  const { error } = await authClient.signIn.emailOtp({ email, otp });
+/** Create an account. Better Auth signs the new user in straight away. */
+export async function signUp(email: string, password: string): Promise<{ error: string | null }> {
+  // `name` is required by Better Auth and unused by any screen; the address is the
+  // only thing we know about a brand-new user.
+  const { error } = await authClient.signUp.email({ email, password, name: email.split('@')[0] });
   return { error: error?.message ?? null };
 }
 
