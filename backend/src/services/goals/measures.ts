@@ -37,6 +37,14 @@ export interface FactActivity {
 	duration_min: number | null;
 	distance_mi: number | null;
 	kcal: number | null;
+	/**
+	 * How the row was produced and how sure the reading was. No measure calculator reads
+	 * either — they are here for WP5's coach, which discounts low-confidence data and
+	 * surfaces it as a nudge (concept-v2 §Principles: "confidence is stored, and the coach
+	 * discounts low-confidence data"). Optional so every existing fixture stays valid.
+	 */
+	source?: "manual" | "fused" | "health" | null;
+	confidence?: "low" | "medium" | "high" | null;
 }
 
 export interface FactWeight {
