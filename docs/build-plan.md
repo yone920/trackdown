@@ -118,20 +118,41 @@ keeps functioning until WP6. **(built:** those routes also accept the new activi
 the SQL — `npm run db:seed-exercises` re-runs just that.**)**
 
 ### WP2 — Evidence storage + fusion endpoint
+Shipped; the deltas from what is written below are marked **(built:)**.
 - `EvidenceStore` local adapter → Docker volume `trackdown_uploads` (add to compose), served by
   `GET /api/evidence/:id` (auth + ownership), `multer` for upload, images downscaled server-side
-  too (sharp, max 1600 px) as a safety net.
+  too (sharp, max 1600 px) as a safety net. **(built:** the port is
+  `{describe, put, get, delete, stat}`, root from `EVIDENCE_DIR`; keys are `YYYY/MM/<uuid>.jpg`.
+  `sweepUnlinkedEvidence` runs at boot and deletes evidence no confirm kept after 24 h — which
+  is what pays for storing a photo before the user has confirmed it. Migration
+  `0005_evidence_confirm.sql` adds `evidence.confirmed_at` for that test, since a weight or a
+  constraint has no owner column to point at.**)**
 - `POST /api/log/analyze` (multipart: `photos[]` ≤ 4, `text`, `kind_hint` optional) → Claude
   with images + text + context (today's items, user vocabulary from `exercise_catalog` +
   their past activity names, units) → discriminated result: `{kind: "activities", items[]} |
   {kind: "meal", meal, items[]} | {kind: "weight", ...} | {kind: "plan_update", fields} |
   {kind: "coach_context", text}`; each with per-field confidence and `sources`
-  (photo|text) map. Preview only — nothing saved.
+  (photo|text) map. Preview only — nothing saved. **(built:** `plan_update` split into the
+  three kinds concept-v2 §Goals actually routes to — `goal` (spec + `proposed_timeline`),
+  `constraint`, `preference` — plus `unclear`, which asks one question instead of guessing.
+  `client_time` and `tz_offset_min` come with the upload, because the day is the user's, not
+  the server's. **The eight-branch union does not compile:** Anthropic refuses a
+  structured-output grammar over roughly 4.5 KB and the union is 8.9 KB — on Haiku and Sonnet
+  alike. The model is given a lean 4.0 KB routing schema which the service widens back to the
+  public shape; see the note at the top of `services/fusion/schema.ts`. Consequence for WP4
+  and WP6: a goal's spec and a constraint's plan fields come from a **second focused call**,
+  while logging a workout or a meal stays one call.**)**
 - `POST /api/log/confirm` saves the (possibly edited) preview + links evidence, in one
-  transaction. Client sends an idempotency key (uuid) — repeat = same result.
+  transaction. Client sends an idempotency key (uuid) — repeat = same result. **(built:** the
+  ledger is `log_confirmations` and the first attempt's response is replayed verbatim, so a
+  retry cannot log the workout twice. `POST /api/log` (text-only) now saves through the same
+  path, its request and response shapes untouched for the shipped app.**)**
 - Prompt lives in `services/fusion/prompt.ts`; schema in `services/fusion/schema.ts`;
   provider via `LlmPort`. Tests with the fake port cover routing of every `kind`, evidence
-  linking, idempotency, ownership on `/api/evidence/:id`.
+  linking, idempotency, ownership on `/api/evidence/:id`. **(built:** plus a contract test
+  against the real Anthropic adapter with a generated image — the test that found the grammar
+  limit. New dependencies: `sharp` and `multer`. Also: DATE columns now come back as
+  `YYYY-MM-DD` strings rather than instants (`db/client.ts`), which WP3's day model wants.**)**
 
 ### WP3 — Day model, blocks, calorie model, day readings
 - `services/day.ts`: `computeDay(userId, date)` → items, blocks (90-min clustering of
