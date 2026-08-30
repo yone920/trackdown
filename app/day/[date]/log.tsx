@@ -115,7 +115,7 @@ function LogRow({ entry, onPress }: { entry: DayLogEntry; onPress: () => void })
         </View>
         <View style={{ flex: 1 }}>
           {entry.raw_text ? (
-            <Body style={{ lineHeight: 21 }}>&ldquo;{entry.raw_text}&rdquo;</Body>
+            <Body style={{ lineHeight: 21 }}>{`\u201C${entry.raw_text}\u201D`}</Body>
           ) : (
             <Body style={{ fontStyle: 'italic', color: C.mute }}>
               {photos.length > 0 ? (photos.length === 1 ? 'photo' : `${photos.length} photos`) : 'no words recorded'}
