@@ -10,6 +10,7 @@ import { describeTarget, pool } from "./db/client.js";
 import { sweepUnlinkedEvidence } from "./services/evidence.js";
 import { createFusionAnalyzer } from "./services/fusion/analyze.js";
 import { createLogParser } from "./services/parseLog.js";
+import { createDayReadings } from "./services/readings/readings.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -53,6 +54,9 @@ const app = createApp({
 	parser: createLogParser(container.llm),
 	fusion: createFusionAnalyzer(container.llm),
 	evidence: container.evidence,
+	// The day readings run on the coach model: they are two sentences of judgement, not
+	// an extraction (config COACH_LLM_PROVIDER / LLM_MODEL_COACH).
+	readings: createDayReadings(container.coachLlm),
 	allowedOrigins: config.allowedOrigins,
 	version: resolveVersion(),
 	commit: resolveCommit(),

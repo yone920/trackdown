@@ -7,6 +7,7 @@ import type { Auth } from "./auth.js";
 import { checkDatabase } from "./db/client.js";
 import { createRequireUser } from "./middleware/auth.js";
 import type { EvidenceStore } from "./ports/storage.js";
+import { dayRouter } from "./routes/day.js";
 import { entriesRouter } from "./routes/entries.js";
 import { evidenceRouter } from "./routes/evidence.js";
 import { fusionRouter } from "./routes/fusion.js";
@@ -14,6 +15,7 @@ import { logRouter } from "./routes/log.js";
 import { profileRouter } from "./routes/profile.js";
 import { weightRouter } from "./routes/weight.js";
 import type { FusionAnalyzer } from "./services/fusion/analyze.js";
+import type { DayReadings } from "./services/readings/readings.js";
 import type { LogParser } from "./services/parseLog.js";
 
 export interface AppDeps {
@@ -24,6 +26,8 @@ export interface AppDeps {
 	fusion: FusionAnalyzer;
 	/** Where uploaded photos live; served back by GET /api/evidence/:id. */
 	evidence: EvidenceStore;
+	/** The two generated sentences on a day, and their cache (WP3). */
+	readings: DayReadings;
 	allowedOrigins: string[];
 	version: string;
 	commit: string;
@@ -39,6 +43,7 @@ export function createApp({
 	parser,
 	fusion,
 	evidence,
+	readings,
 	allowedOrigins,
 	version,
 	commit,
@@ -86,6 +91,7 @@ export function createApp({
 	app.use(logRouter(pool, parser));
 	app.use(fusionRouter(pool, fusion, evidence));
 	app.use(evidenceRouter(pool, evidence));
+	app.use(dayRouter(pool, readings));
 
 	app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 		const message = error instanceof Error ? error.message : String(error);

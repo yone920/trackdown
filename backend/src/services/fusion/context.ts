@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { localDay } from "../localTime.js";
 import type { FusionKind } from "./schema.js";
 
 // Everything the fusion prompt is told about the user before it reads their photo.
@@ -15,6 +16,10 @@ import type { FusionKind } from "./schema.js";
 //   * units            — pounds, always (docs/agent-brief.md §Units).
 
 type Queryable = pg.Pool | pg.PoolClient;
+
+// The local-day arithmetic moved to services/localTime.ts in WP3 (the day model, the close
+// job and the week all need it). Re-exported so this module's callers did not have to move.
+export { localDay, type LocalDay } from "../localTime.js";
 
 /** Catalogue names cost prompt tokens; four aliases each is enough to resolve gym slang. */
 const MAX_ALIASES_PER_EXERCISE = 4;
@@ -62,33 +67,6 @@ export interface FusionContext {
 	goals: ActiveGoal[];
 	/** What the app thinks the user was doing ("meal", "goal"); a hint, never an order. */
 	kindHint: FusionKind | null;
-}
-
-export interface LocalDay {
-	/** YYYY-MM-DD in the user's timezone. */
-	date: string;
-	/** HH:MM in the user's timezone. */
-	time: string;
-	/** UTC instants bounding that local day: [start, end). */
-	startUtc: Date;
-	endUtc: Date;
-}
-
-const MS_PER_MINUTE = 60_000;
-const MS_PER_DAY = 86_400_000;
-
-/**
- * The user's local day around `instant`. `tzOffsetMin` is minutes to *add* to UTC to get
- * local time (Berlin in summer = +120), which is `-new Date().getTimezoneOffset()` on the
- * phone. The server's own timezone is never consulted: it is a container in UTC and has
- * no opinion about when the user's day starts.
- */
-export function localDay(instant: Date, tzOffsetMin: number): LocalDay {
-	const shifted = new Date(instant.getTime() + tzOffsetMin * MS_PER_MINUTE);
-	const date = shifted.toISOString().slice(0, 10);
-	const time = shifted.toISOString().slice(11, 16);
-	const startUtc = new Date(Date.parse(`${date}T00:00:00Z`) - tzOffsetMin * MS_PER_MINUTE);
-	return { date, time, startUtc, endUtc: new Date(startUtc.getTime() + MS_PER_DAY) };
 }
 
 export interface BuildContextOptions {

@@ -71,7 +71,7 @@ describe("upgrading a database that is already carrying v1 data", () => {
 
 	it("applies only the pending migration", async () => {
 		const applied = await migrateToHead(db.url);
-		expect(applied).toEqual(["0004_v2.sql", "0005_evidence_confirm.sql"]);
+		expect(applied).toEqual(["0004_v2.sql", "0005_evidence_confirm.sql", "0006_day_readings.sql"]);
 		const { rows } = await db.pool.query<{ name: string }>(`SELECT name FROM schema_migrations ORDER BY name`);
 		expect(rows.map((r) => r.name)).toEqual([
 			"0001_better_auth.sql",
@@ -79,6 +79,7 @@ describe("upgrading a database that is already carrying v1 data", () => {
 			LAST_V1_MIGRATION,
 			"0004_v2.sql",
 			"0005_evidence_confirm.sql",
+			"0006_day_readings.sql",
 		]);
 	});
 
@@ -212,6 +213,7 @@ describe("a database that has never been migrated", () => {
 			LAST_V1_MIGRATION,
 			"0004_v2.sql",
 			"0005_evidence_confirm.sql",
+			"0006_day_readings.sql",
 		]);
 
 		const client = new pg.Client({ connectionString: freshUrl() });
@@ -230,6 +232,8 @@ describe("a database that has never been migrated", () => {
 				"evidence",
 				"health_samples",
 				"coach_briefs",
+				"day_readings",
+				"log_confirmations",
 			]) {
 				expect({ table, exists: await tableExists(client, table) }).toEqual({ table, exists: true });
 			}
