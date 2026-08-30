@@ -13,6 +13,7 @@ import type { FusionResult, FusionRoute } from "./services/fusion/schema.js";
 import { addDays, localDay } from "./services/localTime.js";
 import { startTestDatabase, type TestDatabase } from "./test/db.js";
 import { createFakeLlm } from "./test/fakes/llm.js";
+import { createFakeCoach, SAMPLE_BRIEF } from "./test/fakes/coach.js";
 import { createFakeEvidenceStore } from "./test/fakes/storage.js";
 
 // End-to-end through Express + Better Auth + a real Postgres: the sign-up/sign-in flow the
@@ -34,6 +35,8 @@ const store = createFakeEvidenceStore();
 // sharing one would make a Today request eat the answer queued for the next parse.
 const coachLlm = createFakeLlm("fake-coach-model");
 const readings = createDayReadings(coachLlm);
+// The brief is its own port (src/ports/coach.ts), so it gets its own fake.
+const coach = createFakeCoach("fake-coach-model");
 
 function nextParse(items: ParsedItem[]): void {
 	llm.nextOutput = { items };
@@ -68,6 +71,7 @@ beforeAll(async () => {
 		fusion,
 		evidence: store,
 		readings,
+		coach,
 		allowedOrigins: [],
 		version: "test",
 		commit: "test",
@@ -718,7 +722,10 @@ describe("fusion — confirm", () => {
 		const before = await request(app).get("/api/entries/movement").set(auth);
 		const res = await confirm({ kind: "coach_context", text: "only 30 minutes today" });
 		expect(res.status).toBe(201);
-		expect(res.body.coach_context).toEqual({ text: "only 30 minutes today" });
+		// WP5 gives the statement a home: one row on the user's local day (migration 0008),
+		// which the coach reads back when it is asked that day.
+		expect(res.body.coach_context).toMatchObject({ text: "only 30 minutes today" });
+		expect(res.body.coach_context.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 		expect(res.body.activities).toEqual([]);
 		const after = await request(app).get("/api/entries/movement").set(auth);
 		expect(after.body).toHaveLength(before.body.length);
@@ -1790,5 +1797,324 @@ describe("goals — set by talking", () => {
 			});
 		expect(proposed.body.goal.active_to).toBe(proposed.body.proposal.projected_date);
 		expect(proposed.body.goal.active_to > soon).toBe(true);
+	});
+});
+
+// ── WP5: the coach ───────────────────────────────────────────────────────────────────
+// The brief end to end over the fake CoachPort: the inputs the route builds from real
+// rows, the per-day cache, the explicit regenerate, the context that comes in through the
+// same input as everything else, and the nudge WP4's detection makes possible. The
+// features and the progression arithmetic are unit-tested in src/services/coach/.
+
+describe("coach — the brief", () => {
+	const tz = tzForLocalHour(17);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+
+	async function lift(date: string, clock: string, exercise: string, load: number, sets = 3, reps = 8) {
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({
+				description: `${sets} × ${reps} ${exercise.toLowerCase()} at ${load} lb`,
+				exercise,
+				sets,
+				reps,
+				load_lb: load,
+				kcal: 110,
+				confidence: "high",
+				logged_at: localInstant(date, clock, tz),
+			});
+	}
+
+	beforeAll(async () => {
+		const token = await signUp("wes@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+
+		await request(app)
+			.patch("/api/profile")
+			.set(headers)
+			.send({
+				sex: "male",
+				birth_year: new Date().getUTCFullYear() - 38,
+				height_cm: 180,
+				activity_level: "moderate",
+				goal_pace: "standard",
+				goal_weight_lb: 170,
+				training_days: 4,
+				diet_style: "higher protein",
+				environment: "gym",
+				constraints: ["bad left knee"],
+			});
+		await request(app).post("/api/weight").set(headers).send({ weight_lb: 193.4, logged_at: localInstant(today, "06:40", tz) });
+		await request(app)
+			.post("/api/entries/meals")
+			.set(headers)
+			.send({ description: "eggs and toast", kcal: 520, protein_g: 34, logged_at: localInstant(today, "07:30", tz) });
+
+		// Two sessions at 135 lb × 3 × 8 after a jump from 130 — the history the
+		// progression rules step from, and old enough that the step is not "this week".
+		await lift(addDays(today, -14), "18:05", "Bench Press", 130);
+		await lift(addDays(today, -9), "18:05", "Bench Press", 135);
+		await lift(addDays(today, -3), "18:05", "Bench Press", 135);
+		await lift(addDays(today, -3), "18:25", "Lat Pulldown", 110, 3, 10);
+	}, 60_000);
+
+	it("builds the brief from computed features, prescribed loads and the plan", async () => {
+		const before = coach.inputs.length;
+		const res = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+		expect(coach.inputs.length).toBe(before + 1);
+
+		const inputs = coach.inputs.at(-1)!;
+		expect(inputs.date).toBe(today);
+		// The plan the user stated, including the constraint that outranks everything.
+		expect(inputs.plan).toMatchObject({ diet_style: "higher protein", training_days: 4, environment: "gym", units: "lb" });
+		expect(inputs.plan.constraints).toContain("bad left knee");
+		expect(inputs.plan.targets.kcal).toBeGreaterThan(1500);
+
+		// Features off the real rows: three days since the last session, chest recovering.
+		expect(inputs.features.days_since_last_workout).toBe(3);
+		expect(inputs.features.sessions_this_week).toBe(1);
+		const bench = inputs.features.exercises.find((exercise) => exercise.exercise === "Bench Press");
+		expect(bench).toMatchObject({ best_load_lb: 135, trend: "up" });
+		expect(bench?.last).toMatchObject({ load_lb: 135, sets: 3, reps: 8 });
+
+		// The gap rule and the loads, computed rather than asked for.
+		expect(inputs.rules.gap.level).toBe("ease_back");
+		const prescribed = inputs.rules.prescriptions.find((item) => item.exercise === "Bench Press");
+		expect(prescribed).toMatchObject({ rule: "ease_back", load_lb: 135, sets: 2 });
+
+		// The prompt carries all of it, and tells the model the numbers are not its to pick.
+		expect(res.body.brief).toMatchObject({ headline: SAMPLE_BRIEF.headline, model: "fake-coach-model", cached: false });
+		expect(res.body.brief.why).toBe(SAMPLE_BRIEF.why);
+		expect(res.body.brief.workout.exercises[0]).toMatchObject({ name: "Lat Pulldown", load_lb: 110 });
+		expect(res.body.gap.level).toBe("ease_back");
+	});
+
+	it("serves the same brief for the rest of the day, free", async () => {
+		const first = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		const before = coach.inputs.length;
+		const again = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+
+		expect(again.body.brief.id).toBe(first.body.brief.id);
+		expect(again.body.brief.cached).toBe(true);
+		// The whole point of the cache: asking twice costs nothing.
+		expect(coach.inputs.length).toBe(before);
+		const { rows } = await db.pool.query<{ count: string }>(
+			`SELECT COUNT(*)::text AS count FROM coach_briefs WHERE date = $1::date`,
+			[today]
+		);
+		expect(Number(rows[0]!.count)).toBeGreaterThan(0);
+	});
+
+	it("generates a new one when something is logged", async () => {
+		const before = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		coach.nextBrief = { ...SAMPLE_BRIEF, headline: "Rest — you trained today" };
+		coachLlm.nextOutput = READING;
+		await lift(today, "12:10", "Overhead Press", 65);
+
+		const after = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(after.body.brief.headline).toBe("Rest — you trained today");
+		expect(after.body.brief.id).not.toBe(before.body.brief.id);
+		expect(after.body.brief.cached).toBe(false);
+		// Today's workout is in the inputs, so the model can refuse to prescribe a second one.
+		expect(coach.inputs.at(-1)!.today.trained.length).toBeGreaterThan(0);
+		coach.nextBrief = SAMPLE_BRIEF;
+	});
+
+	it("takes context on the ask, and caches per context", async () => {
+		const asked = await request(app)
+			.get(`/api/coach/next?tz=${tz}&context=${encodeURIComponent("only 30 minutes and my knee hurts")}`)
+			.set(headers);
+		expect(asked.status).toBe(200);
+		expect(coach.inputs.at(-1)!.context).toContain("only 30 minutes");
+		expect(asked.body.brief.context).toContain("only 30 minutes");
+
+		// The same context again is the same answer; a different one is a different answer.
+		const before = coach.inputs.length;
+		const same = await request(app)
+			.get(`/api/coach/next?tz=${tz}&context=${encodeURIComponent("only 30 minutes and my knee hurts")}`)
+			.set(headers);
+		expect(same.body.brief.id).toBe(asked.body.brief.id);
+		expect(same.body.brief.cached).toBe(true);
+
+		const other = await request(app)
+			.get(`/api/coach/next?tz=${tz}&context=${encodeURIComponent("feel like cardio")}`)
+			.set(headers);
+		expect(other.body.brief.id).not.toBe(asked.body.brief.id);
+		// The repeat was free; only the new context cost a call.
+		expect(coach.inputs.length).toBe(before + 1);
+	});
+
+	it("regenerates only when asked to", async () => {
+		const first = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		const res = await request(app).post("/api/coach/next/regenerate").set(headers).send({ tz_offset_min: tz });
+		expect(res.status).toBe(200);
+		expect(res.body.brief.cached).toBe(false);
+		// Same inputs, so the same cache row is rewritten rather than a duplicate added.
+		expect(res.body.brief.id).toBe(first.body.brief.id);
+		expect(Date.parse(res.body.brief.asked_at)).toBeGreaterThanOrEqual(Date.parse(first.body.brief.asked_at));
+	});
+
+	it("picks up a coach_context said through the Log sheet", async () => {
+		nextFusion({ kind: "statement", scope: "coach_context", text: "travelling, hotel gym only" });
+		const analyzed = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("text", "travelling, hotel gym only")
+			.field("tz_offset_min", String(tz));
+		expect(analyzed.status).toBe(200);
+
+		const confirmed = await request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({ client_id: randomUUID(), result: analyzed.body.result, tz_offset_min: tz });
+		expect(confirmed.status).toBe(201);
+		expect(confirmed.body.coach_context).toMatchObject({ date: today, text: "travelling, hotel gym only" });
+
+		const res = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(coach.inputs.at(-1)!.context).toContain("hotel gym only");
+		expect(res.body.brief.context).toContain("hotel gym only");
+	});
+
+	it("shows the day's brief on the Day view as the coach-ask card", async () => {
+		const day = await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
+		expect(day.status).toBe(200);
+		expect(day.body.coach).toMatchObject({ date: today, headline: expect.any(String) });
+		expect(day.body.coach.workout.type).toBe("strength");
+	});
+});
+
+describe("coach — the nudge", () => {
+	const tz = tzForLocalHour(11);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("xan@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+		await request(app).post("/api/weight").set(headers).send({ weight_lb: 169.4, logged_at: localInstant(today, "07:00", tz) });
+	}, 60_000);
+
+	it("turns WP4's reached candidate into an action the app can take", async () => {
+		const created = await request(app)
+			.post("/api/goals")
+			.set(headers)
+			.send({
+				spec: {
+					kind: "lose_fat",
+					title: "Down to 170 lb",
+					metrics: [{ measure: "body_weight", target: 170, unit: "lb", direction: "decrease" }],
+				},
+				tz_offset_min: tz,
+			});
+		expect(created.status).toBe(201);
+		const goalId = created.body.goal.id as string;
+
+		// What the day close would have written (services/goals/detect.ts) — the coach's
+		// half of it is turning the candidate into a question with a button.
+		await db.pool.query(`UPDATE goals SET reached_candidate_at = NOW() WHERE id = $1`, [goalId]);
+
+		coach.nextBrief = { ...SAMPLE_BRIEF, nudge: "Looks like you reached 170 — mark it done?" };
+		const res = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+		expect(res.body.nudge_action).toEqual({ kind: "mark_reached", goal_id: goalId, label: "Mark it done" });
+		expect(res.body.brief.nudge).toContain("mark it done");
+		expect(res.body.brief.nudge_action).toEqual(res.body.nudge_action);
+		// The model was told what the nudge is about, and told not to close anything itself.
+		expect(coach.inputs.at(-1)!.rules.nudge.subject).toContain("only the user closes a goal");
+		coach.nextBrief = SAMPLE_BRIEF;
+	});
+
+	it("offers to adjust a stalled goal when nothing has been reached", async () => {
+		const created = await request(app)
+			.post("/api/goals")
+			.set(headers)
+			.send({
+				spec: {
+					kind: "build_strength",
+					title: "Bench 185",
+					metrics: [{ measure: "exercise_load", scope: "Bench Press", target: 185, unit: "lb", direction: "increase" }],
+				},
+				tz_offset_min: tz,
+			});
+		const stalledId = created.body.goal.id as string;
+		await db.pool.query(`UPDATE goals SET reached_candidate_at = NULL WHERE user_id IS NOT NULL AND id <> $1`, [stalledId]);
+		await db.pool.query(`UPDATE goals SET stalled_since = $2::date WHERE id = $1`, [stalledId, addDays(today, -21)]);
+
+		const res = await request(app).post("/api/coach/next/regenerate").set(headers).send({ tz_offset_min: tz });
+		expect(res.body.nudge_action).toMatchObject({ kind: "adjust_goal", goal_id: stalledId });
+	});
+});
+
+describe("coach — a return after two weeks off", () => {
+	const tz = tzForLocalHour(9);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("yara@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({
+				description: "3 × 8 bench at 155 lb",
+				exercise: "Bench Press",
+				sets: 3,
+				reps: 8,
+				load_lb: 155,
+				kcal: 120,
+				logged_at: localInstant(addDays(today, -18), "18:00", tz),
+			});
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({
+				description: "3 × 8 bench at 150 lb",
+				exercise: "Bench Press",
+				sets: 3,
+				reps: 8,
+				load_lb: 150,
+				kcal: 120,
+				logged_at: localInstant(addDays(today, -25), "18:00", tz),
+			});
+	}, 60_000);
+
+	it("plans a restart rather than resuming the progression", async () => {
+		const res = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+		expect(res.body.gap).toMatchObject({ days: 18, level: "restart" });
+
+		const inputs = coach.inputs.at(-1)!;
+		expect(inputs.rules.prescriptions[0]).toMatchObject({ exercise: "Bench Press", rule: "restart", load_lb: 150, sets: 2 });
+		// It never scolds about the gap; that is in the rule the model is handed.
+		expect(inputs.rules.gap.text).toContain("Do not mention the gap as a failing");
+	});
+
+	it("says the coach is unavailable rather than 500ing when the provider is down", async () => {
+		const token = await signUp("zed@example.com");
+		coach.failNext = new Error("ANTHROPIC_API_KEY is not set");
+		const res = await request(app).get(`/api/coach/next?tz=0`).set({ Authorization: `Bearer ${token}` });
+		expect(res.status).toBe(503);
+		expect(res.body.error).toContain("unavailable");
+	});
+
+	it("serves the last brief when the provider fails and there is one", async () => {
+		const good = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		coach.failNext = new Error("529 overloaded");
+		const res = await request(app).post("/api/coach/next/regenerate").set(headers).send({ tz_offset_min: tz });
+		expect(res.status).toBe(200);
+		expect(res.body.stale).toBe(true);
+		expect(res.body.brief.id).toBe(good.body.brief.id);
+	});
+
+	it("refuses an impossible timezone and an unauthenticated ask", async () => {
+		expect((await request(app).get(`/api/coach/next?tz=999`).set(headers)).status).toBe(400);
+		expect((await request(app).get(`/api/coach/next?tz=${tz}`)).status).toBe(401);
 	});
 });
