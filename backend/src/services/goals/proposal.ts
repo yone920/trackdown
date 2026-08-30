@@ -117,6 +117,14 @@ const GROWTH_MEASURES: readonly string[] = ["weekly_cardio_min", "distance_mi", 
 /** Half a week of slack, so a date that is off by a rounding is not called unrealistic. */
 const UNREALISTIC_GRACE_WEEKS = 0.5;
 
+/**
+ * The fastest pace that is still inside the safe band (concept-v2 §Goals gives a band —
+ * "fat loss 0.5–1 %/week" — not a single number). The *projection* runs at the profile's
+ * own pace; `unrealistic` is judged against this, so a user's date that is brisker than
+ * their usual pace but still safe is kept and simply described, rather than overruled.
+ */
+const FASTEST_SAFE_PACE: GoalPace = "aggressive";
+
 const DEFAULT_PACE: GoalPace = "standard";
 
 function round1(value: number): number {
@@ -261,28 +269,46 @@ function proposeMetric(
 
 	const projection = project(measure, current, target, metric.direction, pace);
 	if (!projection) {
-		return { ...base, note: describeNoProjection(measure, metric.direction) };
+		// A percentage of nothing is nothing: a cardio goal from a week with no cardio in
+		// it has no starting point to grow from, which is a different thing from a measure
+		// that has no journey at all.
+		const label = (getMeasure(measure)?.label ?? measure).toLowerCase();
+		return {
+			...base,
+			note:
+				GROWTH_MEASURES.includes(measure) && current <= 0
+					? `Nothing logged for ${label} yet — one week to grow from is all the projection needs.`
+					: describeNoProjection(measure, metric.direction),
+		};
 	}
 
 	const weeks = wholeWeeks(projection.weeks);
 	const projectedDate = addDays(today, weeks * 7);
 
 	// The user's date is never overwritten — it is kept beside the projection and the note
-	// says what the safe pace would give instead (concept-v2 §Goals).
+	// says what it would take (concept-v2 §Goals).
 	let unrealistic = false;
 	let note = `About ${weeks} week${weeks === 1 ? "" : "s"} at ${projection.rate} → ${projectedDate}.`;
 	if (statedBy) {
 		const statedWeeks = daysBetween(today, statedBy) / 7;
+		const fastest = project(measure, current, target, metric.direction, FASTEST_SAFE_PACE) ?? projection;
+		const needed = round1(Math.abs(target - current) / Math.max(statedWeeks, 1 / 7));
+		const neededText = unit ? `${needed} ${unit}` : `${needed}`;
 		if (statedWeeks <= 0) {
 			unrealistic = true;
 			note = `${statedBy} is not in the future. At ${projection.rate} you would get there around ${projectedDate}.`;
-		} else if (projection.weeks > statedWeeks + UNREALISTIC_GRACE_WEEKS) {
+		} else if (fastest.weeks > statedWeeks + UNREALISTIC_GRACE_WEEKS) {
+			// Faster than the safe band allows at any pace — the projection is what gets
+			// proposed, and the note says what their date would have cost.
 			unrealistic = true;
-			const needed = round1(Math.abs(target - current) / statedWeeks);
-			const neededText = unit ? `${needed} ${unit}` : `${needed}`;
 			note =
-				`${statedBy} would need about ${neededText} a week — faster than ${projection.rate}. ` +
-				`At a safe pace you would get there around ${projectedDate}.`;
+				`${statedBy} would need about ${neededText} a week, faster than is safe. ` +
+				`At ${projection.rate} you would get there around ${projectedDate}.`;
+		} else if (projection.weeks > statedWeeks + UNREALISTIC_GRACE_WEEKS) {
+			// Inside the safe band, but brisker than this profile's pace. Their call.
+			note =
+				`${statedBy} means about ${neededText} a week — still safe, but faster than ${projection.rate}. ` +
+				`Your usual pace would get there around ${projectedDate}.`;
 		} else {
 			note = `${statedBy} works: that is ${projection.rate} or slower. The safe-pace date is ${projectedDate}.`;
 		}

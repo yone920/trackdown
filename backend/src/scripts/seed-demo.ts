@@ -7,11 +7,12 @@ import { computeDay } from "../services/day.js";
 import { closeDueDays } from "../services/dayClose.js";
 import { insertEntries, insertWeights } from "../services/entries.js";
 import { addDays, localDay } from "../services/localTime.js";
+import { createGoal } from "../services/goals/store.js";
 import { setUserPassword } from "../services/password.js";
 import { createDayReadings } from "../services/readings/readings.js";
 import { RIGHT_NOW_SCHEMA_NAME } from "../services/readings/schema.js";
 
-// npm run seed-demo -- <email> [--tz <minutes>] [--password <password>]
+// npm run seed-demo -- <email> [--goal fat_loss|muscle|none] [--tz <minutes>] [--password <password>]
 //
 // Four days of realistic history for one account: a fat-loss goal, a profile the calorie
 // model can work from, three closed days and today half-lived. It exists because the app is
@@ -21,6 +22,11 @@ import { RIGHT_NOW_SCHEMA_NAME } from "../services/readings/schema.js";
 // Everything is written through the same services the API uses (insertEntries normalises
 // exercise names against the catalogue, closeDueDays writes the summaries), so what the
 // demo shows is what the app does, not a fixture that resembles it.
+//
+// `--goal` picks the scenario: a fat-loss goal (the default, calorie cards), a muscle goal
+// (protein and sets cards), or `none` — the no-goal state, which is a first-class screen
+// (concept-v2 §Goals: with no goal the app runs on a standing intention and shows no
+// judgement colours) and therefore something the morning demo has to be able to show.
 //
 // Safe to re-run: the user, the profile and the goal converge, and a day that has already
 // closed is left alone. It does add another day's logs each time, which is what you want
@@ -39,7 +45,9 @@ const flag = (name: string): string | undefined => {
 };
 
 if (!email) {
-	console.error("Usage: npm run seed-demo -- <email> [--tz <minutes>] [--password <password>] [--force]");
+	console.error(
+		"Usage: npm run seed-demo -- <email> [--goal fat_loss|muscle|none] [--tz <minutes>] [--password <password>] [--force]"
+	);
 	process.exit(2);
 }
 
@@ -48,6 +56,15 @@ const password = flag("password") ?? DEFAULT_PASSWORD;
 // is what someone running the script before a demo means.
 const tzOffsetMin = Number(flag("tz") ?? -new Date().getTimezoneOffset());
 const force = args.includes("--force");
+
+const GOAL_SCENARIOS = ["fat_loss", "muscle", "none"] as const;
+type GoalScenario = (typeof GOAL_SCENARIOS)[number];
+const goalScenario = (flag("goal") ?? "fat_loss") as GoalScenario;
+
+if (!GOAL_SCENARIOS.includes(goalScenario)) {
+	console.error(`❌ --goal ${flag("goal")} is not one of: ${GOAL_SCENARIOS.join(", ")}.`);
+	process.exit(2);
+}
 
 if (!Number.isInteger(tzOffsetMin) || Math.abs(tzOffsetMin) > 840) {
 	console.error(`❌ --tz ${flag("tz")} is not a timezone offset in minutes (e.g. 120 for Berlin in summer).`);
@@ -207,7 +224,7 @@ async function ensureUser(): Promise<string> {
 	return userId;
 }
 
-async function seedProfileAndGoal(userId: string): Promise<void> {
+async function seedProfile(userId: string): Promise<void> {
 	const birthYear = new Date().getUTCFullYear() - 38;
 	await pool.query(
 		`INSERT INTO profiles (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`,
@@ -224,36 +241,91 @@ async function seedProfileAndGoal(userId: string): Promise<void> {
 		 WHERE id = $1`,
 		[userId, birthYear]
 	);
+}
 
-	const { rows } = await pool.query<{ id: string }>(
-		`SELECT id FROM goals WHERE user_id = $1 AND status = 'active' AND kind = 'lose_fat'`,
-		[userId]
-	);
-	if (rows.length > 0) {
-		console.log("🎯 Goal already active; left as it is.");
+/** The specs behind `--goal`, in the shape POST /api/goals takes. */
+const GOAL_SPECS = {
+	fat_loss: {
+		kind: "lose_fat",
+		title: "Down to 170 lb",
+		metrics: [
+			{
+				measure: "body_weight",
+				scope: null,
+				target: 170,
+				unit: "lb",
+				direction: "decrease" as const,
+				rate: null,
+				by: null,
+			},
+		],
+	},
+	muscle: {
+		kind: "gain_muscle",
+		title: "Bench 185 and eat for it",
+		metrics: [
+			{
+				measure: "exercise_load",
+				scope: "Bench Press",
+				target: 185,
+				unit: "lb",
+				direction: "increase" as const,
+				rate: null,
+				by: null,
+			},
+			{
+				measure: "protein_g",
+				scope: null,
+				target: 175,
+				unit: "g",
+				direction: "at_least" as const,
+				rate: null,
+				by: null,
+			},
+		],
+	},
+} as const;
+
+/** Titles this script sets, so `--goal none` can clear its own goals and nobody else's. */
+const DEMO_GOAL_TITLES = Object.values(GOAL_SPECS).map((spec) => spec.title);
+
+async function seedGoal(userId: string): Promise<void> {
+	if (goalScenario === "none") {
+		// The no-goal state is the point of this scenario, so the demo's own goals are
+		// ended — dropped, with an active_to, exactly as PATCH /api/goals/:id would do it,
+		// which leaves the closed days they judged still judged. A goal the script did not
+		// write is left alone: it is not ours to end.
+		const { rowCount } = await pool.query(
+			`UPDATE goals SET status = 'dropped', active_to = $3::date
+			  WHERE user_id = $1 AND status = 'active' AND title = ANY($2::text[])`,
+			[userId, DEMO_GOAL_TITLES, today]
+		);
+		const others = await pool.query<{ title: string }>(
+			`SELECT title FROM goals WHERE user_id = $1 AND status = 'active'`,
+			[userId]
+		);
+		console.log(`🎯 No goal: dropped ${rowCount ?? 0} demo goal(s).`);
+		for (const row of others.rows) console.log(`   ⚠️  left "${row.title}" alone — this script did not set it.`);
 		return;
 	}
-	await pool.query(
-		`INSERT INTO goals (user_id, kind, title, metrics, priority, status, active_from, active_to, stated_at)
-		 VALUES ($1, 'lose_fat', 'Down to 170 lb', $2::jsonb, 1, 'active', $3::date, $4::date, NOW())`,
-		[
-			userId,
-			JSON.stringify([
-				{
-					measure: "body_weight",
-					scope: null,
-					target: 170,
-					unit: "lb",
-					direction: "decrease",
-					rate: "about 1 lb a week",
-					by: day(150),
-				},
-			]),
-			day(-30),
-			day(150),
-		]
+
+	const spec = GOAL_SPECS[goalScenario];
+	const { rows } = await pool.query<{ id: string }>(
+		`SELECT id FROM goals WHERE user_id = $1 AND status = 'active' AND title = $2`,
+		[userId, spec.title]
 	);
-	console.log("🎯 Goal: down to 170 lb, about 1 lb a week.");
+	if (rows.length > 0) {
+		console.log(`🎯 "${spec.title}" already active; left as it is.`);
+		return;
+	}
+
+	// Through the same service the API uses, so the demo's goal has the timeline the app
+	// would have proposed — projected from the weigh-ins seeded above.
+	const { goal, proposal } = await createGoal(pool, userId, {
+		spec: { ...spec, metrics: [...spec.metrics], active_from: day(-30) },
+		tzOffsetMin,
+	});
+	console.log(`🎯 Goal: ${goal.title} — ${proposal.note}`);
 }
 
 async function seedDays(userId: string): Promise<void> {
@@ -349,8 +421,11 @@ async function main(): Promise<void> {
 		return;
 	}
 
-	await seedProfileAndGoal(userId);
+	await seedProfile(userId);
+	// Days before the goal: the proposed timeline is projected from the weigh-ins, so
+	// there has to be something to project from.
 	await seedDays(userId);
+	await seedGoal(userId);
 
 	const readings = createDayReadings(hasCoachKey() ? createContainer(config).coachLlm : cannedLlm());
 	if (!hasCoachKey()) console.log("🤖 No coach API key — the readings use the built-in canned text.");
