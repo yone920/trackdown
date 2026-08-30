@@ -77,7 +77,7 @@ export function LogFab({ onPress }: { onPress: () => void }) {
         bottom: SPACE.tabBar + insets.bottom + 18,
         width: 64,
         height: 64,
-        borderRadius: RADIUS.pill,
+        borderRadius: 32,
         backgroundColor: C.ink,
         alignItems: 'center',
         justifyContent: 'center',

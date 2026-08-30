@@ -153,7 +153,7 @@ export function DayListRow({ row, onPress }: { row: DayRow; onPress?: () => void
               marginTop: 5,
               width: 10,
               height: 10,
-              borderRadius: RADIUS.pill,
+              borderRadius: 5,
               backgroundColor: open ? 'transparent' : color,
               borderWidth: open ? 1.5 : 0,
               borderColor: C.good,

@@ -147,7 +147,7 @@ function EmptyGoals({ onTell }: { onTell: () => void }) {
         style={{
           width: 56,
           height: 56,
-          borderRadius: RADIUS.pill,
+          borderRadius: 28,
           borderWidth: 1,
           borderColor: C.track,
           alignItems: 'center',

@@ -25,7 +25,10 @@ export const FONT = {
 /** Numerals are always tabular, so a changing figure does not shuffle the line. */
 export const TABULAR = { fontVariant: ['tabular-nums' as const] };
 
-export const RADIUS = { card: 20, tile: 14, thumb: 10, pill: 999 } as const;
+export const RADIUS = { card: 20, tile: 14, thumb: 10, pill: 26 } as const;
+// `pill` is 26, not 999: on iOS (new architecture) a borderRadius larger than half the element's
+// size stops the background from painting — the Read-it chip and the + button vanished. Circles
+// use exactly half their size; pill buttons are ≥ 52 tall.
 
 /** Screen padding 24, card padding 18, tab bar 84 (docs/design-system.md §Tokens). */
 export const SPACE = { screen: 24, card: 18, tabBar: 84 } as const;

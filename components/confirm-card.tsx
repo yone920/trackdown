@@ -46,7 +46,7 @@ function ConfidenceChip({ level }: { level: Confidence }) {
   return (
     <View
       style={{
-        borderRadius: 999,
+        borderRadius: 12,
         paddingHorizontal: 10,
         paddingVertical: 4,
         borderWidth: 1,

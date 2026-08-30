@@ -293,7 +293,7 @@ function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) 
           style={({ pressed }) => ({
             width: 40,
             height: 40,
-            borderRadius: RADIUS.pill,
+            borderRadius: 20,
             borderWidth: 1,
             borderColor: C.track,
             alignItems: 'center',

@@ -66,7 +66,7 @@ export function Chip({
       disabled={disabled || !onPress}
       style={({ pressed }) => ({
         opacity: disabled ? 0.45 : pressed ? 0.7 : 1,
-        borderRadius: RADIUS.pill,
+        borderRadius: 16,
         paddingHorizontal: 14,
         paddingVertical: 8,
         backgroundColor: primary ? C.ink : 'transparent',
