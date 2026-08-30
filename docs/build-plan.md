@@ -201,11 +201,34 @@ Shipped; the deltas from what is written below are marked **(built:)**.
   them and deletes the app-side copy.**)**
 
 ### WP4 — Goals and profile by talking
+Shipped; the deltas from what is written below are marked **(built:)**.
 `goal` / `constraint` / `preference` kinds from WP2 → `POST /api/goals` (with proposed timeline from
 safe rates, returned in the preview for confirmation), `PATCH /api/goals/:id` (status changes, edits),
 `GET /api/goals` (active + history), `PUT /api/profile` merge with `stated_at`. Reached-detection job
 (smoothed rules in concept-v2 §Goals) sets a `reached_candidate_at` the coach turns into a prompt.
 Tests: proposal maths, reached detection on fixtures, priority ordering, history retention.
+- **(built:** the profile route is **`PATCH /api/profile`**, not PUT — it was already a PATCH and the
+  shipped app calls it. `GET /api/profile` now also returns **`targets`** (TDEE, eat target, deficit,
+  safe floor, macros, source, tracking_only, eatback), so WP6 can delete the app's own `lib/tdee.ts`.**)**
+- **(built:** two more routes the screens need: **`POST /api/goals/reorder`** (priority is an order the
+  user sets, not a rank the app assigns) and **`GET /api/goals/:id/progress`** (per-metric current /
+  baseline / target / percent plus a trend series over the goal's life — what Progress and the goal
+  cards render). `GET /api/goals` carries a light `progress` per active goal for the ring.**)**
+- **(built:** the proposal is `services/goals/proposal.ts`, pure, and **the model is no longer asked
+  for a timeline at all** — `GoalDetailOutputSchema` dropped `proposed_timeline` and the prompt puts
+  the user's own date on the metric's `by`. `/api/log/analyze` and `/api/log/confirm` both go through
+  the same `createGoal`, so the date on the confirm card is the date in the row. `unrealistic` is
+  judged against the *top* of concept-v2's safe band rather than the profile's pace, so a user's
+  brisk-but-safe date is kept rather than overruled; `confirm_date` / `no_date` are how the user
+  answers the proposal.**)**
+- **(built:** detection is `services/goals/detect.ts`, pure, run from `dayClose` — not a job. It writes
+  `reached_candidate_at` **and `stalled_since`** (new in migration `0007_goal_progress.sql`), both
+  candidates that WP5's nudge reads; neither ever changes a goal's status.**)**
+- **(built:** every closing status writes `active_to`, and `services/day.ts` now judges a day by the
+  **date window alone** — closing WP3's note that a dropped goal lost the days it was live for. 0007
+  backfills the goals dropped before this.**)**
+- **(built:** `npm run seed-demo` gained **`--goal fat_loss|muscle|none`**, so the morning demo can show
+  the muscle cards and the no-goal state as well as the fat-loss one.**)**
 
 ### WP5 — Coach
 - `services/coach/features.ts`: pure functions over the last 28 days → features listed in
