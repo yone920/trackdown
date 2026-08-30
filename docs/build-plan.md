@@ -1,0 +1,188 @@
+# TrackDown v2 — build plan
+
+For the implementing agents (Opus). Read `docs/concept-v2.md` first — it is the product
+spec; this file is the engineering plan. Screens: the design canvas
+https://claude.ai/code/artifact/0b66a20c-e465-4e42-90ba-b37f89547796 (Today, Log, Coach, Day,
+Progress, Profile). Decisions already made — do not reopen them:
+
+| Decision | Value |
+|---|---|
+| Units | pounds in the UI (`profiles.units` stays; default `imperial`) |
+| Session model | none — the day is the container; auto-blocks (90 min) are presentation |
+| Coach | on demand only, Claude Sonnet by default, cached per day |
+| Fusion / vision | Claude Haiku 4.5 by default |
+| Voice | on-device transcription (`expo-speech-recognition`); no audio upload |
+| Health | optional source; every row has `source`; overlap rules in concept-v2 |
+| Providers | every third-party behind a port; swapping = one env var, zero refactor |
+| Branch | `migrate-off-supabase` (already deployed to the Docker host); PR to `main` at the end |
+
+## Architecture rules (SOLID, enforced by lint + tests)
+
+Same shape as My Read Coach (`~/Work/my-read-coach/backend/src/{ports,adapters,container.ts}`).
+
+```
+backend/src/
+  ports/          interfaces only — no SDK imports
+    llm.ts        LlmPort:        parseStructured({system, messages(text+images), schema}) → T
+    vision.ts     (folded into LlmPort — images are part of the message; keep one port)
+    coach.ts      CoachPort:      brief(inputs) → Brief   (default impl composes LlmPort)
+    transcription.ts TranscriptionPort: transcribe(audio) → text   (cloud fallback only)
+    storage.ts    EvidenceStore:  put(bytes, mime) → id; get(id) → stream; delete(id)
+    email.ts      EmailPort:      send({to, subject, text, html})
+    health.ts     (client-side port, see app)
+  adapters/
+    llm/anthropic.ts   llm/openai.ts        (openai is the proof the port is honest)
+    transcription/openai.ts
+    storage/local.ts   (volume) storage/s3.ts (later)
+    email/smtp.ts
+  container.ts    builds every port from config.*Provider; unknown name = refuse to start
+  config/index.ts the ONLY file that reads process.env (eslint rule exists)
+```
+
+- Routes and services import **ports** only. ESLint: `no-restricted-imports` for
+  `@anthropic-ai/sdk`, `openai`, `nodemailer` outside `adapters/**` (add to
+  `backend/eslint.config.js`).
+- Prompts and zod schemas live in `services/` (provider-neutral); an adapter receives the
+  schema and returns parsed output. Anthropic adapter uses `messages.parse` +
+  `zodOutputFormat`; OpenAI adapter uses `responses.parse` + `zodTextFormat`.
+- Every port has a **fake** in `src/test/fakes/` used by the integration tests; adapters get
+  contract tests that run only when the provider's key is present (skip otherwise).
+- Config: `LLM_PROVIDER=anthropic|openai`, `COACH_LLM_PROVIDER` (defaults to LLM_PROVIDER),
+  `LLM_MODEL_FUSION`, `LLM_MODEL_COACH`, `TRANSCRIPTION_PROVIDER=none|openai`,
+  `EVIDENCE_STORAGE=local|s3`. Document all in `.env.example`.
+- App side, same idea: `lib/ports/` (`speech.ts` → expo-speech-recognition adapter,
+  `health.ts` → HealthKit adapter / `null` adapter on Android/web), `lib/api.ts` is the one
+  HTTP client. Screens import hooks from `lib/queries.ts` only.
+
+## Work packages
+
+Run in order; each is one PR-sized change with its own tests. "Done" means: `make typecheck`,
+`make lint`, `make test` green; the WP's acceptance list checked; `docs/` updated where noted.
+
+### WP0 — Ports & container refactor (backend, ~small)
+Extract `LlmPort` from `services/parseLog.ts`; add `adapters/llm/anthropic.ts` and
+`adapters/llm/openai.ts`; `container.ts`; eslint boundary rule; fakes; config keys above.
+`parseLog` becomes provider-neutral. Accept: existing 13 tests pass unchanged; `LLM_PROVIDER=openai`
+boots and parses with a real key (contract test); lint fails on a direct SDK import in a route.
+
+### WP1 — Schema v2 (migration `0003_v2.sql`)
+- `calorie_expenditure` → `activities` (rename + add: exercise_id, category
+  cardio|strength|mobility|other, muscle_groups text[], sets int, reps int, load_lb numeric,
+  duration_min int, distance_mi numeric, source manual|fused|health, confidence low|medium|high,
+  external_id text unique nullable, block_id uuid nullable). All nullable; existing rows valid.
+- `exercise_catalog` (id, name unique, aliases text[], category, primary_muscles text[],
+  secondary_muscles text[], equipment text[]) — seed ~120 common exercises from a JSON file in
+  `backend/data/exercises.json`.
+- `evidence` (id, user_id, activity_id | meal_id | plan_id nullable, kind photo|transcript|text,
+  storage_key, mime, width, height, text, created_at).
+- `health_samples` (user_id, kind, external_id unique, start_at, end_at, value numeric, unit,
+  raw jsonb).
+- `plans` (user_id pk, goal, goal_weight_lb, target_date, pace, diet_style, protein_g, carbs_max_g,
+  training_days, environment, equipment text[], constraints text[], eatback none|half|all default
+  half, stated_at jsonb per field, updated_at).
+- `daily_summaries`: add eaten, earned, allowance, status, blocks jsonb, muscle_groups text[],
+  closed_at.
+- `coach_briefs` (id, user_id, date, asked_at, context text, workout jsonb, nutrition jsonb,
+  nudge, rationale, model, inputs_hash, created_at).
+Keep the old `/api/entries/movement` routes working (alias to activities) so the current app
+keeps functioning until WP6.
+
+### WP2 — Evidence storage + fusion endpoint
+- `EvidenceStore` local adapter → Docker volume `trackdown_uploads` (add to compose), served by
+  `GET /api/evidence/:id` (auth + ownership), `multer` for upload, images downscaled server-side
+  too (sharp, max 1600 px) as a safety net.
+- `POST /api/log/analyze` (multipart: `photos[]` ≤ 4, `text`, `kind_hint` optional) → Claude
+  with images + text + context (today's items, user vocabulary from `exercise_catalog` +
+  their past activity names, units) → discriminated result: `{kind: "activities", items[]} |
+  {kind: "meal", meal, items[]} | {kind: "weight", ...} | {kind: "plan_update", fields} |
+  {kind: "coach_context", text}`; each with per-field confidence and `sources`
+  (photo|text) map. Preview only — nothing saved.
+- `POST /api/log/confirm` saves the (possibly edited) preview + links evidence, in one
+  transaction. Client sends an idempotency key (uuid) — repeat = same result.
+- Prompt lives in `services/fusion/prompt.ts`; schema in `services/fusion/schema.ts`;
+  provider via `LlmPort`. Tests with the fake port cover routing of every `kind`, evidence
+  linking, idempotency, ownership on `/api/evidence/:id`.
+
+### WP3 — Day model, blocks, calorie model
+- `services/day.ts`: `computeDay(userId, date)` → items, blocks (90-min clustering of
+  activities, block title from muscle groups / "Walk" / "Run"), eaten, earned (manual/fused vs
+  health overlap rules from concept-v2 §Health), target (TDEE − pace deficit, port
+  `lib/tdee.ts` + `lib/recommendations.ts` to `backend/src/services/tdee.ts` and make the app
+  read the server's numbers), allowance, status (on_track|over|under), macros.
+- `GET /api/day/:date`, `GET /api/week?end=`; day-close job: on the first request after local
+  midnight (client sends its tz offset) write `daily_summaries` for every unclosed past day.
+- Unit tests: clustering, overlap rules with synthetic Health samples, status thresholds,
+  timezone edges.
+
+### WP4 — Plan by talking + Profile data
+`plan_update` kind from WP2 → `PUT /api/plan` merge with `stated_at`; `GET /api/plan`; the
+daily target derives from plan + latest weight. Tests: partial updates keep other fields;
+`stated_at` set per changed field.
+
+### WP5 — Coach
+- `services/coach/features.ts`: pure functions over the last 28 days → features listed in
+  concept-v2 (days since last workout, per-muscle recency and weekly sets, per-exercise last
+  load×sets×reps + best-in-4-weeks + trend, cardio minutes, adherence 1/3/7d, weight trend,
+  data-quality flags). Unit-tested on fixtures.
+- `services/coach/rules.ts`: progression + recovery + gap rules as data the prompt receives.
+- `CoachPort` default = `LlmCoach(LlmPort, model: LLM_MODEL_COACH)`; prompt + zod `Brief`
+  schema (`workout{type, targets[], why, exercises[{name, load_lb, sets, reps, note}]}`,
+  `nutrition{kcal, protein_g, carbs_max_g, ideas[], why}`, `nudge`).
+- `GET /api/coach/next?context=` returns today's cached brief or generates; `POST
+  /api/coach/next/regenerate`. Cache key = date + inputs_hash; context text is appended to
+  the day's key so a new context regenerates.
+
+### WP6 — App: new screens
+Rebuild on the canvas designs, keeping the existing tokens (tailwind.config.js) and Fraunces.
+- Navigation: tabs Today · Days · Progress · Profile; `+` FAB → Log modal; Coach and Day as
+  stack screens.
+- Log screen: Photo (expo-camera / image picker + expo-image-manipulator downscale), Speak
+  (expo-speech-recognition; transcript editable), Type; confirm card renders every `kind`;
+  Save → `/api/log/confirm`; "Add more" keeps the sheet open.
+- Today: ring (eaten/allowance), earned line, status line, week dots, coach button, blocks.
+- Day, Progress (weight sparkline with 7-day average, week grid of day dots, training coverage
+  bars), Coach (brief + context input + regenerate), Profile (plan rows with dates, "Tell me
+  what's changed" → Log sheet in plan mode, targets, Health toggle).
+- `lib/queries.ts` rewired to the new endpoints; old hooks removed once no screen uses them.
+- `app.json`: camera, microphone, speech-recognition, photo-library permission strings; EAS
+  profile for a dev build.
+Accept: `npx tsc --noEmit` and `npx expo lint` clean (fix the 8 pre-existing unescaped-quote
+errors while touching those files); every screen renders with the fake API in a Storybook-less
+smoke test (jest + react-native-testing-library for the Log confirm card and Today math).
+
+### WP7 — Health (iOS first)
+`lib/ports/health.ts` + HealthKit adapter (`react-native-health` or `expo-health`; pick the one
+with a maintained Expo config plugin); sync on foreground → `POST /api/health/sync`
+(idempotent by `external_id`); Profile toggle; Android/web adapter returns `null`.
+
+### WP8 — Hardening
+Offline evidence queue (persist pending confirms in SQLite/MMKV, retry with backoff), cloud
+transcription fallback behind `TranscriptionPort`, meal label photos, backup script extension
+for the uploads volume, rate limits on `/api/log/analyze`, cost logging per LLM call.
+
+## Overnight schedule (Opus)
+
+| Order | WP | Depends on |
+|---|---|---|
+| 1 | WP0 ports | — |
+| 2 | WP1 schema | WP0 |
+| 3 | WP2 fusion + evidence | WP1, ANTHROPIC key for the contract test |
+| 4 | WP3 day model | WP1 |
+| 5 | WP4 plan | WP2 |
+| 6 | WP5 coach | WP3, WP4 |
+| 7 | WP6 app screens | WP2–WP5 (can start on Log + Today after WP2/WP3) |
+| 8 | deploy to Docker host (`git pull && make docker-prod`), smoke test via LAN + tunnel | all |
+| 9 | WP7, WP8 | after the user has the dev build on the phone |
+
+Each WP: branch off `migrate-off-supabase` as `wp<N>-<slug>`, commit with tests, merge back
+with `--no-ff`. Deploy only from the integration branch. Never touch `.env.production`
+values except the ones the user filled in.
+
+## Definition of done for the overnight run
+- Backend: all WPs 0–5 merged, tests green, deployed, `/health` ok, `POST /api/log/analyze`
+  proven with one real photo + text through the tunnel, `GET /api/coach/next` returns a brief
+  for the user's account.
+- App: WP6 complete, typecheck/lint clean, `eas build` configured; the one command for the
+  user to run is written at the top of `docs/build-plan.md` under "Next for you".
+- `docs/concept-v2.md` and this file updated with anything that changed; a short
+  `docs/CHANGELOG-v2.md` of what was built and what was deferred.
