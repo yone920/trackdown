@@ -9,6 +9,8 @@ import { isAcceptedUploadMime, ACCEPTED_UPLOAD_MIMES } from "../services/images.
 import type { FusionAnalyzer, FusionPhoto } from "../services/fusion/analyze.js";
 import { buildFusionContext } from "../services/fusion/context.js";
 import { ConfirmBody, NothingToSaveError, confirmLog } from "../services/fusion/confirm.js";
+import { proposalForSpec } from "../services/goals/store.js";
+import { toProposedTimeline } from "../services/goals/proposal.js";
 
 // The multimodal log (docs/build-plan.md §WP2):
 //   POST /api/log/analyze   multipart: photos + text → a preview, nothing saved
@@ -118,8 +120,19 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 			context,
 		});
 
+		// The timeline is arithmetic, not language: whatever the model guessed is replaced
+		// by the projection from the user's own facts at the safe rates in concept-v2
+		// §Goals, so the confirm card shows the date the goal will actually be saved with
+		// (services/goals/proposal.ts).
+		const proposal =
+			result.kind === "goal"
+				? await proposalForSpec(pool, userId, result.spec, { tzOffsetMin: context.tzOffsetMin })
+				: null;
+		if (proposal && result.kind === "goal") result.proposed_timeline = toProposedTimeline(proposal);
+
 		res.json({
 			result,
+			...(proposal ? { proposal } : {}),
 			evidence: stored.map((s) => ({
 				id: s.row.id,
 				kind: s.row.kind,

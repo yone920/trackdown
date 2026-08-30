@@ -11,6 +11,7 @@ import { dayRouter } from "./routes/day.js";
 import { entriesRouter } from "./routes/entries.js";
 import { evidenceRouter } from "./routes/evidence.js";
 import { fusionRouter } from "./routes/fusion.js";
+import { goalsRouter } from "./routes/goals.js";
 import { logRouter } from "./routes/log.js";
 import { profileRouter } from "./routes/profile.js";
 import { weightRouter } from "./routes/weight.js";
@@ -92,6 +93,7 @@ export function createApp({
 	app.use(fusionRouter(pool, fusion, evidence));
 	app.use(evidenceRouter(pool, evidence));
 	app.use(dayRouter(pool, readings));
+	app.use(goalsRouter(pool));
 
 	app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 		const message = error instanceof Error ? error.message : String(error);

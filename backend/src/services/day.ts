@@ -368,15 +368,20 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 	).rows[0] ?? null;
 
 	// The goal active on *that* date — not today's goal. A goal set tomorrow must not
-	// retroactively judge yesterday, and a goal that has since been reached still judges
-	// the days it was live for (concept-v2 §Goals: "every closed day is judged against the
-	// goal active that day").
+	// retroactively judge yesterday, and a goal that has since been reached or dropped
+	// still judges the days it was live for (concept-v2 §Goals: "every closed day is
+	// judged against the goal active that day").
+	//
+	// The window is the whole filter, and WP4 is what makes that safe: every status change
+	// writes `active_to` (services/goals/store.ts), so a goal dropped today judges up to
+	// today and no further. WP3 had to exclude dropped goals outright, because nothing
+	// recorded when they were dropped.
 	const goal =
 		(
 			await db.query<GoalRow>(
 				`SELECT id, kind, title, metrics, priority, status, active_from, active_to
 				   FROM goals
-				  WHERE user_id = $1 AND status <> 'dropped'
+				  WHERE user_id = $1
 				    AND active_from <= $2::date AND (active_to IS NULL OR active_to >= $2::date)
 				  ORDER BY priority, active_from DESC LIMIT 1`,
 				[userId, date]

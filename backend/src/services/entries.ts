@@ -94,6 +94,20 @@ export const ProfilePatch = z
 		disclaimer_acknowledged_at: isoDate.nullable(),
 		daily_calorie_target: z.number().int().min(0).nullable(),
 		deficit_kcal: z.number().int().min(0).nullable(),
+		// The plan (0004_v2.sql), normally set by talking — concept-v2 §Goals and profile.
+		// Editable here too, because "single-field tap to correct" is part of that screen.
+		diet_style: z.string().trim().max(80).nullable(),
+		protein_g: z.number().int().min(0).max(1000).nullable(),
+		carbs_max_g: z.number().int().min(0).max(2000).nullable(),
+		training_days: z.number().int().min(0).max(7).nullable(),
+		environment: z.string().trim().max(80).nullable(),
+		equipment: z.array(z.string().trim().min(1).max(60)).max(30),
+		// A list edited on the Profile screen replaces the list; the spoken path appends
+		// and dedupes instead (services/fusion/confirm.ts), because saying "bad left knee"
+		// twice is one knee, and deleting a row is something only a tap can mean.
+		constraints: z.array(z.string().trim().min(1).max(200)).max(30),
+		preferences: z.array(z.string().trim().min(1).max(200)).max(30),
+		eatback: z.enum(["none", "half", "all"]),
 	})
 	.partial()
 	.refine((patch) => Object.keys(patch).length > 0, { message: "Empty patch." });
@@ -333,14 +347,25 @@ export async function getProfile(db: Queryable, userId: string) {
 	return rows[0];
 }
 
+/**
+ * Merge a patch into the profile, dating every field it touches. concept-v2 §Goals and
+ * profile: "each field with the date it was last stated, so the coach knows how old a plan
+ * is" — which only works if every path that writes a field also stamps it. `stated_at` is
+ * merged, never replaced, so patching one field does not erase the dates of the others.
+ */
 export async function updateProfile(db: Queryable, userId: string, patch: ProfilePatch) {
 	await getProfile(db, userId);
 	const sets: string[] = [];
 	const params: unknown[] = [userId];
+	const stated: Record<string, string> = {};
+	const now = new Date().toISOString();
 	for (const [key, value] of Object.entries(patch)) {
 		params.push(value);
 		sets.push(`${key} = $${params.length}`);
+		stated[key] = now;
 	}
+	params.push(JSON.stringify(stated));
+	sets.push(`stated_at = stated_at || $${params.length}::jsonb`);
 	const { rows } = await db.query(`UPDATE profiles SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, params);
 	return rows[0];
 }

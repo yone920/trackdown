@@ -20,7 +20,10 @@ import { MEASURE_IDS } from "../goals/measures.js";
 //     `statement` branch with a `scope`, since they have the same shape anyway;
 //   * a goal is routed as a title only, and a constraint/preference as its text; the spec
 //     and the plan fields come from a second, focused call. Those two are stated maybe
-//     once a month; logging a workout or a meal is the hot path and stays one call.
+//     once a month; logging a workout or a meal is the hot path and stays one call. The
+//     spec's *timeline* is not asked for at all — WP4 projects it from the user's own
+//     facts at the safe rates (services/goals/proposal.ts), because a date is arithmetic
+//     and the row, the confirm card and the Goals screen all have to show the same one.
 //   * `photo_fields: string[]` instead of a per-field source object — the same fact ("this
 //     came off the photo") in one array node instead of seven anyOf nodes.
 // Fields the catalogue derives on save (category, muscle_groups) are not asked for at all.
@@ -314,7 +317,6 @@ export const GoalDetailOutputSchema = z.object({
 		).max(6),
 		active_to: z.string().nullable(),
 	}),
-	proposed_timeline: ProposedTimelineSchema.nullable(),
 });
 export const GOAL_DETAIL_SCHEMA_NAME = "goal_spec";
 
@@ -421,7 +423,9 @@ export function toFusionResult(route: FusionRoute, detail: FusionDetail = {}): F
 					active_from: null,
 					active_to: goalDetail.spec.active_to,
 				},
-				proposed_timeline: goalDetail.proposed_timeline,
+				// Filled in by services/goals/proposal.ts once the user's facts are to
+				// hand; the analyzer itself has no database and no business guessing.
+				proposed_timeline: null,
 			};
 		}
 
