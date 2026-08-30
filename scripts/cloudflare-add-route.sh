@@ -23,12 +23,20 @@ import json, sys
 tmp, host, svc = sys.argv[1:]
 d = json.load(open(f"{tmp}/before.json")); cfg = d["result"]["config"]; ing = cfg["ingress"]
 assert str(ing[-1].get("service", "")).startswith("http_status"), "last rule is not the catch-all — refusing"
+changed = False
+# Remove what a buggy earlier run added: a hostname without a dot pointing at our service
+for r in [r for r in ing[:-1] if r.get("service") == svc and "." not in str(r.get("hostname", ""))]:
+    ing.remove(r); changed = True; print(f"ingress: removing bogus rule {r.get('hostname')!r} -> {svc}")
 if any(r.get("hostname") == host for r in ing):
-    print(f"ingress: {host} already present, unchanged"); open(f"{tmp}/skip", "w").close()
+    print(f"ingress: {host} already present")
 else:
-    ing.insert(len(ing) - 1, {"hostname": host, "service": svc})
+    ing.insert(len(ing) - 1, {"hostname": host, "service": svc}); changed = True
+    print(f"ingress: adding {host} -> {svc}")
+print(f"ingress: {len(ing)} rules, catch-all preserved")
+if changed:
     json.dump({"config": cfg}, open(f"{tmp}/new.json", "w"))
-    print(f"ingress: adding {host} -> {svc} ({len(ing)} rules, catch-all preserved)")
+else:
+    open(f"{tmp}/skip", "w").close()
 PY
 if [ ! -f "$TMP/skip" ]; then
   curl -sf -X PUT -H "$H" -H "Content-Type: application/json" --data @"$TMP/new.json" \
