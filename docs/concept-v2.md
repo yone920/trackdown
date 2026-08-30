@@ -102,6 +102,57 @@ days, constraints — each field with the date it was last stated, so the coach 
 plan is. Updating is the same sentence again ("switching to keto"); a single field can also be
 corrected with a tap.
 
+
+## Goals — measurable specs, optional, two kinds
+
+Goals are **optional**. With none, the app runs on a built-in standing intention (*stay
+consistent, train the whole body, eat around maintenance*) and shows no green/red judgement.
+
+- **Outcome goals** have a finish line: reach 170 lb, bench 185, run 5k under 27:00. Done when
+  the measure says so (smoothed: 7-day-average weight at/under target for a week; a lift logged at
+  target twice; weekly minutes hit two weeks running) — the coach then asks "Mark it done? What's
+  next?". Never auto-closed, never invented.
+- **Standing intentions** have no finish line: stay active, train 3×/week, keep weight steady,
+  "focus on upper body for two months" (optional window). End when replaced, expired, or dropped.
+
+A goal is stored as a **spec**, produced by the same input pipeline from what the user says and
+confirmed before saving:
+
+```
+{ kind: lose_fat | gain_muscle | build_strength | improve_endurance | maintain | custom,
+  title, metrics: [ { measure, scope?, target?, unit?, direction, rate?, by? } ],
+  priority, status: active | reached | expired | dropped, active_from, active_to, stated_at }
+```
+
+`measure` comes from a **catalog the app can actually compute** from logs/Health: body_weight
+(trend), calorie_balance, protein_g, carbs_g, weekly_sets (scope: muscle group), exercise_load
+(scope: exercise), weekly_cardio_min, distance_mi / pace, steps, resting_hr, vo2 (Health).
+Each measure has one calculator and one widget. New measure = one calculator + one widget.
+
+Timelines are **proposed, not required**: safe rates (fat loss 0.5–1 %/week, a plate step every
+1–2 weeks, cardio +10 %/week) give a projected date the user can accept, change, or drop. An
+unrealistic user date is kept alongside the projection and said so. A stalled outcome goal (no
+movement for 3 weeks) becomes the coach's nudge with an offer to adjust.
+
+Multiple goals are allowed with a priority order; the primary decides Today's headline cards and
+the coach's main focus; secondaries show as a strip. Past goals stay in history, and every closed
+day is judged against the goal active **that day**.
+
+The input classifier routes statements to: log · goal · constraint · preference · coach context,
+always showing what it understood before saving.
+
+## The two day views
+
+- **Today** is live: a header stating where you are (day N, on track), the goal banner and
+  goal-driven cards, a **Right now** reading (≤ 2 LLM sentences regenerated on each log: what's
+  done, what's short, the one best next action, with action chips), a **day arc** (6a–11p line:
+  logs as dots, workout as a bar, NOW, expected-but-missing as dashed), then Training and Eating
+  organised like the closed day with a placeholder for the next meal.
+- **Day** (closed) is a reading, not a replay: verdict vs the goal active that day, an **In
+  short** paragraph written at day close, training by muscle group with each exercise's load and
+  its delta vs last time, eating as macros vs targets + a pattern line + meals by slot, body,
+  the coach ask made that day. The raw entries live behind "See the log as recorded" with export.
+
 ## Calories — no negative counter
 
 The original brief's model (start the day at −3,000, eat toward zero, workouts push it further

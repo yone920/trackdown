@@ -14,6 +14,9 @@ Progress, Profile). Decisions already made — do not reopen them:
 | Voice | on-device transcription (`expo-speech-recognition`); no audio upload |
 | Health | optional source; every row has `source`; overlap rules in concept-v2 |
 | Providers | every third-party behind a port; swapping = one env var, zero refactor |
+| Design | **direction A** — `docs/design-system.md` is the spec; the old cream/Fraunces look is gone |
+| Goals | optional, spec + measure catalog (`concept-v2.md` §Goals); Today/Progress/Days judge against the active goal; no goal = no judgement colours |
+| Morning test | the user tests on an iPhone in **Expo Go** over Tailscale at 07:00 — a running Metro (`npx expo start --offline`, `REACT_NATIVE_PACKAGER_HOSTNAME=100.64.198.50`) and Expo-Go-safe modules are part of "done". Native-only modules (speech) sit behind ports with a null adapter |
 | Auth | **email + password** (Better Auth `emailAndPassword`); the email-OTP flow is removed; no SMTP. Password reset = admin script until SMTP exists |
 | Branch | `migrate-off-supabase` (already deployed to the Docker host); PR to `main` at the end |
 
@@ -91,9 +94,11 @@ boots and parses with a real key (contract test); lint fails on a direct SDK imp
   storage_key, mime, width, height, text, created_at).
 - `health_samples` (user_id, kind, external_id unique, start_at, end_at, value numeric, unit,
   raw jsonb).
-- `plans` (user_id pk, goal, goal_weight_lb, target_date, pace, diet_style, protein_g, carbs_max_g,
-  training_days, environment, equipment text[], constraints text[], eatback none|half|all default
-  half, stated_at jsonb per field, updated_at).
+- `goals` (id, user_id, kind, title, metrics jsonb, priority int, status active|reached|expired|dropped,
+  active_from, active_to, stated_at, created_at) + `measure_catalog` as code (`services/goals/measures.ts`:
+  one calculator per measure, unit-tested).
+- `profiles` gains: diet_style, protein_g, carbs_max_g, training_days, environment, equipment text[],
+  constraints text[], preferences text[], eatback none|half|all default half, stated_at jsonb.
 - `daily_summaries`: add eaten, earned, allowance, status, blocks jsonb, muscle_groups text[],
   closed_at.
 - `coach_briefs` (id, user_id, date, asked_at, context text, workout jsonb, nutrition jsonb,
@@ -117,7 +122,7 @@ keeps functioning until WP6.
   provider via `LlmPort`. Tests with the fake port cover routing of every `kind`, evidence
   linking, idempotency, ownership on `/api/evidence/:id`.
 
-### WP3 — Day model, blocks, calorie model
+### WP3 — Day model, blocks, calorie model, day readings
 - `services/day.ts`: `computeDay(userId, date)` → items, blocks (90-min clustering of
   activities, block title from muscle groups / "Walk" / "Run"), eaten, earned (manual/fused vs
   health overlap rules from concept-v2 §Health), target (TDEE − pace deficit, port
@@ -125,13 +130,20 @@ keeps functioning until WP6.
   read the server's numbers), allowance, status (on_track|over|under), macros.
 - `GET /api/day/:date`, `GET /api/week?end=`; day-close job: on the first request after local
   midnight (client sends its tz offset) write `daily_summaries` for every unclosed past day.
+- `GET /api/day/:date` also returns: `verdict` (served|missed|unlogged, judged against the goal
+  active that day; `none` when no goal), per-exercise `delta_vs_last` (same/+5 lb/+1 set/−), the
+  eating pattern line, the **reading** (`in_short` for closed days, written once at close;
+  `right_now` for today, regenerated on each log — both via `LlmPort`, ≤ 2 sentences + next action
+  with `actions[]` chips), the day-arc events, and `expected` items (next meal, weigh-in).
 - Unit tests: clustering, overlap rules with synthetic Health samples, status thresholds,
-  timezone edges.
+  timezone edges, delta_vs_last, verdict per goal kind.
 
-### WP4 — Plan by talking + Profile data
-`plan_update` kind from WP2 → `PUT /api/plan` merge with `stated_at`; `GET /api/plan`; the
-daily target derives from plan + latest weight. Tests: partial updates keep other fields;
-`stated_at` set per changed field.
+### WP4 — Goals and profile by talking
+`goal` / `constraint` / `preference` kinds from WP2 → `POST /api/goals` (with proposed timeline from
+safe rates, returned in the preview for confirmation), `PATCH /api/goals/:id` (status changes, edits),
+`GET /api/goals` (active + history), `PUT /api/profile` merge with `stated_at`. Reached-detection job
+(smoothed rules in concept-v2 §Goals) sets a `reached_candidate_at` the coach turns into a prompt.
+Tests: proposal maths, reached detection on fixtures, priority ordering, history retention.
 
 ### WP5 — Coach
 - `services/coach/features.ts`: pure functions over the last 28 days → features listed in
@@ -146,9 +158,13 @@ daily target derives from plan + latest weight. Tests: partial updates keep othe
   /api/coach/next/regenerate`. Cache key = date + inputs_hash; context text is appended to
   the day's key so a new context regenerates.
 
-### WP6 — App: new screens
-Rebuild on the canvas designs, keeping the existing tokens (tailwind.config.js) and Fraunces.
-- Navigation: tabs Today · Days · Progress · Profile; `+` FAB → Log modal; Coach and Day as
+### WP6 — App: new screens (direction A)
+Rebuild per `docs/design-system.md` — new tokens, Barlow / Barlow Condensed, dark UI. Remove the
+old theme. Screens: Today, Log, Days, Day, DayLog, Progress, Goals (incl. empty/propose/reached/
+history), plus account rows inside Goals. Must run in **Expo Go** (SDK 54): speech behind
+`lib/ports/speech.ts` with a null adapter when the native module is missing; camera/image picker
+via expo modules that Expo Go bundles.
+- Navigation: tabs Today · Days · Progress · Goals; `+` FAB → Log modal; Coach, Day, DayLog as
   stack screens.
 - Log screen: Photo (expo-camera / image picker + expo-image-manipulator downscale), Speak
   (expo-speech-recognition; transcript editable), Type; confirm card renders every `kind`;
@@ -191,6 +207,18 @@ for the uploads volume, rate limits on `/api/log/analyze`, cost logging per LLM 
 Each WP: branch off `migrate-off-supabase` as `wp<N>-<slug>`, commit with tests, merge back
 with `--no-ff`. Deploy only from the integration branch. Never touch `.env.production`
 values except the ones the user filled in.
+
+## Morning-testable minimum (do these fully before polishing anything)
+1. Sign-up / sign-in with email + password against the deployed backend.
+2. Log by typing and by photo (Expo Go camera) → confirm card → saved; Today shows it.
+3. Today: header, goal banner (no-goal state included), goal-driven cards, Right now, day arc,
+   Training/Eating sections.
+4. Set a goal by talking/typing → proposal → confirm; Today switches its cards.
+5. Days list and Day reading for yesterday (seed the user's account with two closed days of
+   realistic fake data via a script so the morning demo has history: `npm run seed-demo -- <email>`).
+6. Coach ask → brief.
+7. Metro running on this VM with the Tailscale hostname; instructions at the top of
+   `docs/CHANGELOG-v2.md` ("Open Expo Go, scan this QR / open exp://100.64.198.50:8081").
 
 ## Definition of done for the overnight run
 - Backend: all WPs 0–5 merged, tests green, deployed, `/health` ok, `POST /api/log/analyze`
