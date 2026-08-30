@@ -3,7 +3,9 @@
 One section per work package (`docs/build-plan.md`): what shipped, what was deferred, and
 every decision that had to be made along the way. This file is the handover.
 
-## Testing on the phone
+## Morning test — read this first
+
+**On this VM** (the Omarchy desktop, 100.64.198.50), start Metro:
 
 ```bash
 cd ~/Work/trackdown
@@ -11,8 +13,208 @@ export REACT_NATIVE_PACKAGER_HOSTNAME=100.64.198.50   # Tailscale address of thi
 npx expo start --offline
 ```
 
-Open **Expo Go** on the iPhone (Tailscale must be on and connected) and scan the QR, or
+**On the iPhone**: Tailscale on and connected, then open **Expo Go** and scan the QR — or
 open `exp://100.64.198.50:8081` directly.
+
+**Sign in**: the demo account's password is `demo-pass-123`. If the account has no data,
+seed it from `backend/` on the Docker host:
+`npm run seed-demo -- <email> --tz <your offset in minutes>` — three closed days and a
+half-lived today.
+
+### What to try, in this order
+
+1. **Today** — day number and status in the header, the goal banner (or the "no goal"
+   state), the cards the goal chose, the *Right now* paragraph with its chips, the day
+   arc, Training and Eating.
+2. **Log by typing** — the `+`, type "chicken and rice, about 700 calories", *Read it*,
+   correct a number on the confirm card, Save. Today updates.
+3. **Log by photo** — the `+`, Photo, snap a machine display or a plate, add a line of
+   narration, *Read it*, Save.
+4. **Set a goal** — the `+`, "I want to get down to 170 pounds by December". The card
+   comes back with the server's projected date and three choices: use the projection,
+   keep my date, no date. Confirm — Today's cards change to match the goal.
+5. **Days** — the list grouped by week with each week's tally. Scroll to the bottom: it
+   pages. Tap yesterday.
+6. **Day** — the verdict, the *In short* paragraph, the three stats, training by muscle
+   group with each lift's delta, macros against targets, the meals, the body. Use ‹ › to
+   walk back through the week. Tap the export button: the share sheet has the day's JSON.
+7. **The log as recorded** — from the Day footer. Every entry as it arrived, quoted, with
+   what it was understood to be. Tap one → the same confirm card with the saved values in
+   it → *Save changes* → the Day updates.
+8. **Progress** — a section per goal (weight line with its 7-day average and target,
+   lifts, weekly bars), then Consistency and Coverage.
+9. **Goals** — the goal card with its ring and pace line, reorder with the arrows if there
+   is more than one, mark reached or drop. Below: How you train / How you eat /
+   Constraints / Health sync / Account, with **Sign out** at the bottom.
+10. **Coach** — the accent button on Today. The headline, the *why*, the Do list with
+    load × sets × reps, Eat, and *One thing* with a button that actually does something.
+    Type a line of context and *Ask again*.
+
+### What is deferred, on purpose
+
+- **Speak needs the dev build.** `expo-speech-recognition` is a native module; in Expo Go
+  the port reports unavailable and the mic control is simply not drawn. Photo and typing
+  cover everything, including goals and coach context.
+- **Health sync is WP7.** The toggle on the Goals tab is a labelled placeholder; nothing
+  reads HealthKit yet, and no screen depends on it.
+- The **Resting HR** card on Today and the resting-HR metric on Progress stay hidden until
+  Health arrives — an absent number is not drawn as a zero.
+
+---
+
+## WP6b — Days, Day, DayLog, Progress, Goals and the Coach screen
+
+The second half of WP6: every screen WP6a left as a routed placeholder, plus the one
+endpoint the DayLog needed. `components/placeholder.tsx` is gone.
+
+**The one backend addition — `GET /api/day/:date/log?tz=`**
+
+WP6a's handover said the DayLog had no endpoint and WP6b had to add it or drop it. It is
+added, and two decisions shaped it.
+
+- **It is built record-first, not evidence-first.** One entry per saved row (activity,
+  meal, weigh-in, goal), with the evidence it was fused from hanging off it, plus any
+  confirmed evidence that owns nothing as a `statement`. Listing evidence rows and joining
+  outwards would have been the obvious reading of "list the evidence for a day", and it
+  would silently omit every row that has no evidence — a Health import, anything the seed
+  script wrote, anything logged before WP2. A log that quietly drops entries is worse than
+  no log.
+- **`0009_day_log.sql` adds `evidence.weight_id`.** A scale photo was linked with *no
+  owner at all* (`weight_logs` had no column to point at), so nothing could say which
+  weigh-in it was evidence for. The one-owner CHECK now counts four columns. Rows written
+  before the migration keep their NULL and show up as statements; nothing is back-filled
+  by guessing at timestamps.
+- **`PATCH /api/weight/:id`** is new, so "tap → correct" on a weigh-in is a correction
+  rather than a delete and a re-log. Meals and activities already had PATCH.
+
+Four backend tests cover it: the ordering and the raw text, the correction in place, the
+empty day and the two 400s, and that another user sees none of it. `npm test` is
+**315 passed, 2 skipped**.
+
+**Days** (`app/(tabs)/days.tsx`)
+
+Rows grouped by week, each week carrying "5 of 7 served · −3,100 · −0.9 lb". A `FlatList`
+that pages on `next_before`, so the list is as long as the history.
+
+- **`lib/days-weeks.ts` is the grouping and the tally**, pure and tested — the same shape
+  as `lib/today-cards.ts`. The tally is computed from the rows the page already carries;
+  asking `GET /api/week` once per week on screen would be seven requests to say "5 of 7".
+  The week the user is *living* is the exception: pass `GET /api/week` in and its `served`
+  and `weekly_deficit` win, because that is the week the rest of the app is judging.
+- Today's dot is an outline rather than a fill: the day is not over, and a filled dot is a
+  verdict.
+
+**Day** (`app/day/[date].tsx`)
+
+The verdict with ‹ › date navigation, *In short*, Eaten / Earned / Allowance, Training by
+muscle group with each lift's `delta_vs_last` and its evidence thumbnails, Health as one
+badged card rather than a section, Eating as macro bars against the targets plus the
+pattern line plus meals by slot, Body, the coach ask if there was one, and a footer.
+
+- **Export is React Native's own `Share`, not `expo-sharing`.** The day is JSON; `Share`
+  takes a string and needs no new dependency, while `expo-sharing` wants a file and
+  therefore `expo-file-system` too. Two packages for a string is not a trade worth making.
+- The route moved from `app/day.tsx` to `app/day/[date].tsx`, so the screen is addressable
+  and ‹ › is `router.replace` on a date rather than state.
+
+**DayLog** (`app/day/[date]/log.tsx`)
+
+Time · icon (keyboard / mic / camera / heart) · the words in quotes, or "photo" · a meta
+line of source, what was understood, and confidence.
+
+- **Tapping a row opens the Log sheet in edit mode**, not a second editor: the same
+  confirm card, seeded with the saved values, saving with PATCH. `lib/edit-record.ts` is
+  the round trip and is pure in both directions. The screen the user learned the first
+  time is the screen they get the second time (concept-v2 §Principles 7).
+- Edit mode re-reads the row from the endpoint rather than taking it through navigation
+  params — a screen that trusts its params shows a stale row after the previous edit.
+- A statement (a constraint, a preference, a line of coach context) is not editable: there
+  is no row to PATCH. It says so instead of offering a tap that would do nothing.
+
+**Progress** (`app/(tabs)/progress.tsx`)
+
+A section per active goal, then Consistency and Coverage.
+
+- **`lib/progress-sections.ts` picks the chart by measure, and the rule is one sentence**:
+  a measure whose number means something on a single day is a **line** (body weight, best
+  load, pace, resting HR, VO₂); one that only means something over a week is **columns**
+  (weekly sets, cardio minutes, macros, distance). New measure, no new decision.
+- The weight section draws two lines: the measure's series, which is already a 7-day
+  average, and the raw weigh-ins from the Days rows underneath it, thin and dim. The
+  average is the claim; the weigh-ins are the evidence for it.
+- Each goal fetches its own `/api/goals/:id/progress` — the goals list has the percentages
+  but not the series — which is why a goal's block is a component and not a loop.
+- Consistency and Coverage come from `GET /api/days?limit=60`, not from a new endpoint:
+  the day rows already carry `muscle_groups`.
+- No goal → no green and no orange, exactly as on Today.
+
+**Goals** (`app/(tabs)/goals.tsx`)
+
+Active goals as cards with a ring and a pace line, the empty state, the history, the plan
+and the account.
+
+- **The two prompts are questions, never actions.** `reached_candidate_at` renders "Looks
+  like you reached it — mark done?" and `stalled_since` renders "Stalled — adjust?"; the
+  PATCH happens on the tap. A goal is never auto-closed (concept-v2 §Goals).
+- **"Not yet" is a session-local dismissal.** The candidate stays on the row because only
+  the measure can clear it, and `PATCH /api/goals/:id` has no field for "the user said no"
+  — deliberately, since inventing one would let the app un-detect its own detection. The
+  prompt is back tomorrow if the goal really is done. If that turns out to be annoying in
+  use, the field to add is `reached_dismissed_at`, and the rule stays the same.
+- **Reorder is two arrows, not a drag.** `POST /api/goals/reorder` takes the whole order,
+  and two arrows need no gesture handler, no measurement and no autoscroll. Priority is
+  the user's order, so it moves only when they move it.
+- Setting a goal is not a form: "Tell me what you're after" opens the Log sheet with
+  `hint=goal`, and the proposal, the `confirm_date` / `no_date` choice and the confirm all
+  happen there — the flow WP6a already shipped.
+- Below the goals: **How you train** (days, environment, equipment), **How you eat** (diet
+  style, daily target, eat-back), **Constraints** (and preferences when there are any),
+  **Health sync** (a labelled, disabled toggle — WP7), and **Account** with the email and
+  **Sign out**, which was the one control with nowhere to live.
+
+**Coach** (`app/coach.tsx`)
+
+Finished to the spec: the headline, the *why*, **Do** with load × sets × reps per
+exercise, **Eat**, **One thing** with the button `nudge_action` names, the Photo / Speak /
+Type panel for context, *Ask again*, and an "asked at" line that also says when the answer
+came from the day's cache and when the log has moved since.
+
+- **The nudge's button only ever routes or PATCHes what `rules.ts` already chose**:
+  `mark_reached` → PATCH that goal, `adjust_goal` → the Log sheet in goal mode, `weigh_in`
+  → the Log sheet in weight mode, `close_items` → today's log as recorded. The coach
+  proposes; the tap disposes.
+- Typed context is the query parameter on this ask. Photo and Speak open the Log sheet in
+  `coach_context` mode, which saves the statement against today so every later ask reads
+  it back — the panel is the same panel, so `Control` moved out of `app/log.tsx` into
+  `components/control.tsx` rather than being copied.
+
+**Shared pieces** — `components/charts.tsx` gains `TrendLine` (several lines over one x
+domain, gaps for missing days, an optional dashed target) and `Columns` (vertical bars,
+scaled by the caller, because a chart that rescales itself lies about the week it left
+out). `components/icons.tsx` gains share, check-circle, alert-circle and the two vertical
+chevrons. `lib/queries.ts` gains `useDaysPages` (infinite), `useDayLog`, `usePatchRecord`,
+`useUpdateGoal` and `useReorderGoals`.
+
+**Tests** — 34 new, 62 in nine files: `days-weeks` (the grouping and every part of the
+tally), `progress-sections` (the chart per measure), `day` (the whole screen from one
+fixture day), `goals` (empty / active / reached / stalled, including that nothing is
+written until the tap) and `day-log` (the rows, the tap into edit mode, and the
+edit-record round trip).
+
+**Verified** — `npx tsc --noEmit` clean, `npx expo lint` clean, `npx expo export
+--platform ios` builds a 4.56 MB bundle, backend `typecheck` / `lint` / `test` green
+(315 passed, 2 skipped).
+
+**One trap** — `.expo/types/router.d.ts` is generated by `expo start` and gitignored, so a
+fresh checkout typechecks the new `/day/[date]` routes only after Metro has run once.
+Nothing to fix; just do not be surprised by five "not assignable to parameter of type
+Href" errors on a clean clone.
+
+**Deferred** — Health sync (WP7) is a labelled placeholder; the previous-briefs list on
+the Coach screen (concept-v2 §App mentions it) is not built, since `coach_briefs` keeps
+the history but no route lists it and the morning test only needs today's; and a goal's
+metrics cannot be edited from the Goals screen — the way to change a goal is to say it
+again, which is what "Adjust it" does.
 
 ---
 
