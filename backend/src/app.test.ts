@@ -8,6 +8,7 @@ import { sweepUnlinkedEvidence } from "./services/evidence.js";
 import { setUserPassword } from "./services/password.js";
 import { createLogParser, type ParsedItem } from "./services/parseLog.js";
 import { createFusionAnalyzer } from "./services/fusion/analyze.js";
+import { createDayReadings } from "./services/readings/readings.js";
 import type { FusionResult, FusionRoute } from "./services/fusion/schema.js";
 import { startTestDatabase, type TestDatabase } from "./test/db.js";
 import { createFakeLlm } from "./test/fakes/llm.js";
@@ -28,6 +29,10 @@ const llm = createFakeLlm();
 const parser = createLogParser(llm);
 const fusion = createFusionAnalyzer(llm);
 const store = createFakeEvidenceStore();
+// The readings run on the coach model — a second port in production, so a second fake here:
+// sharing one would make a Today request eat the answer queued for the next parse.
+const coachLlm = createFakeLlm("fake-coach-model");
+const readings = createDayReadings(coachLlm);
 
 function nextParse(items: ParsedItem[]): void {
 	llm.nextOutput = { items };
@@ -61,6 +66,7 @@ beforeAll(async () => {
 		parser,
 		fusion,
 		evidence: store,
+		readings,
 		allowedOrigins: [],
 		version: "test",
 		commit: "test",

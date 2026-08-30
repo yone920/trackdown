@@ -24,7 +24,13 @@ export default tseslint.config(
 					message: "Read configuration from src/config/index.ts, not process.env.",
 				},
 			],
-			"@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+			// ignoreRestSiblings: omitting a field by destructuring it out (`const { facts,
+			// ...rest } = view`) is the readable way to drop one key from a response, and
+			// naming the thing you are dropping is the point of it.
+			"@typescript-eslint/no-unused-vars": [
+				"error",
+				{ argsIgnorePattern: "^_", varsIgnorePattern: "^_", ignoreRestSiblings: true },
+			],
 		},
 	},
 	{
