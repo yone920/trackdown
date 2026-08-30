@@ -7,6 +7,11 @@ import { config } from "../config/index.js";
 pg.types.setTypeParser(pg.types.builtins.NUMERIC, (value) => parseFloat(value));
 pg.types.setTypeParser(pg.types.builtins.TIMESTAMPTZ, (value) => new Date(value).toISOString());
 pg.types.setTypeParser(pg.types.builtins.TIMESTAMP, (value) => new Date(value + "Z").toISOString());
+// DATE is a local calendar date (a goal's active_from, a day's summary), not an instant.
+// node-postgres would hand back a Date at the *server's* midnight, which JSON then
+// renders in UTC and turns 2026-12-01 into 2026-11-30 for anyone west of it. Keep the
+// string Postgres sent — the same thing PostgREST returned.
+pg.types.setTypeParser(pg.types.builtins.DATE, (value) => value);
 
 /** Host:port/database only — never log the connection string, it carries the password. */
 export function describeTarget(url: string): string {

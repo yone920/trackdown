@@ -107,6 +107,24 @@ if (!isTest) {
 	}
 }
 
+// ── Evidence storage ─────────────────────────────────────────────────────────────────
+// Where the photos behind a log live (src/ports/storage.ts). `local` is a directory — the
+// trackdown_uploads Docker volume in production, ./uploads in dev. `s3` arrives with its
+// adapter; naming it here today would be a config key with nothing behind it.
+const EVIDENCE_PROVIDERS = ["local"] as const;
+export type EvidenceProvider = (typeof EVIDENCE_PROVIDERS)[number];
+
+const evidenceProviderName = read("EVIDENCE_STORAGE") ?? "local";
+if (!(EVIDENCE_PROVIDERS as readonly string[]).includes(evidenceProviderName)) {
+	throw new Error(
+		`❌ EVIDENCE_STORAGE=${evidenceProviderName} is not a known evidence store. ` +
+			`Use one of: ${EVIDENCE_PROVIDERS.join(", ")}.`
+	);
+}
+// /app is the Docker image's WORKDIR, so the volume mounts at /app/uploads there; outside
+// a container the repo-relative ./uploads keeps a dev run self-contained.
+const evidenceDir = read("EVIDENCE_DIR") ?? (isProduction ? "/app/uploads" : "./uploads");
+
 const smtpHost = read("SMTP_HOST");
 const smtpPort = Number(read("SMTP_PORT") ?? 587);
 
@@ -164,6 +182,12 @@ export const config = Object.freeze({
 		apiKey: openaiApiKey,
 		/** Point at a compatible gateway (Azure, a proxy) without changing the adapter. */
 		baseUrl: read("OPENAI_BASE_URL"),
+	}),
+
+	evidence: Object.freeze({
+		provider: evidenceProviderName as EvidenceProvider,
+		/** Root directory for the local store; created on first upload. */
+		dir: evidenceDir,
 	}),
 
 	smtp: Object.freeze({

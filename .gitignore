@@ -51,3 +51,7 @@ backend/.env
 
 # Supabase CLI link state (project is no longer on Supabase)
 supabase/.temp/
+
+# Evidence photos written by the local EvidenceStore in dev (EVIDENCE_DIR)
+backend/uploads/
+uploads/

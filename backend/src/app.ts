@@ -6,16 +6,24 @@ import type pg from "pg";
 import type { Auth } from "./auth.js";
 import { checkDatabase } from "./db/client.js";
 import { createRequireUser } from "./middleware/auth.js";
+import type { EvidenceStore } from "./ports/storage.js";
 import { entriesRouter } from "./routes/entries.js";
+import { evidenceRouter } from "./routes/evidence.js";
+import { fusionRouter } from "./routes/fusion.js";
 import { logRouter } from "./routes/log.js";
 import { profileRouter } from "./routes/profile.js";
 import { weightRouter } from "./routes/weight.js";
+import type { FusionAnalyzer } from "./services/fusion/analyze.js";
 import type { LogParser } from "./services/parseLog.js";
 
 export interface AppDeps {
 	pool: pg.Pool;
 	auth: Auth;
 	parser: LogParser;
+	/** The multimodal classifier behind POST /api/log/analyze. */
+	fusion: FusionAnalyzer;
+	/** Where uploaded photos live; served back by GET /api/evidence/:id. */
+	evidence: EvidenceStore;
 	allowedOrigins: string[];
 	version: string;
 	commit: string;
@@ -25,7 +33,17 @@ export interface AppDeps {
 
 // Express 5 forwards rejected promises from async handlers to the error handler, so
 // routes can `await` without try/catch.
-export function createApp({ pool, auth, parser, allowedOrigins, version, commit, rateLimiting = true }: AppDeps) {
+export function createApp({
+	pool,
+	auth,
+	parser,
+	fusion,
+	evidence,
+	allowedOrigins,
+	version,
+	commit,
+	rateLimiting = true,
+}: AppDeps) {
 	const app = express();
 	app.set("trust proxy", 1); // behind cloudflared
 
@@ -66,6 +84,8 @@ export function createApp({ pool, auth, parser, allowedOrigins, version, commit,
 	app.use(weightRouter(pool));
 	app.use(profileRouter(pool));
 	app.use(logRouter(pool, parser));
+	app.use(fusionRouter(pool, fusion, evidence));
+	app.use(evidenceRouter(pool, evidence));
 
 	app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 		const message = error instanceof Error ? error.message : String(error);
