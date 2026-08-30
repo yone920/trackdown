@@ -1,4 +1,5 @@
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+import { router } from 'expo-router';
 import { Pressable, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -27,6 +28,11 @@ const LABELS: Record<string, string> = {
 export function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   return (
+    <View style={{ overflow: 'visible' }}>
+      {/* The `+` lives inside the tab bar's tree: the tab scenes are native views that can
+          cover siblings rendered after the navigator, which made a screen-level FAB
+          invisible on iOS. The navigator always draws the tab bar above the scenes. */}
+      <LogFab onPress={() => router.push('/log')} />
     <View
       style={{
         flexDirection: 'row',
@@ -59,12 +65,12 @@ export function TabBar({ state, navigation }: BottomTabBarProps) {
         );
       })}
     </View>
+    </View>
   );
 }
 
 /** The 64px `+`: `ink` on `bg`, bottom-right above the tab bar, opens the Log sheet. */
 export function LogFab({ onPress }: { onPress: () => void }) {
-  const insets = useSafeAreaInsets();
   return (
     <Pressable
       testID="log-fab"
@@ -74,7 +80,8 @@ export function LogFab({ onPress }: { onPress: () => void }) {
       style={({ pressed }) => ({
         position: 'absolute',
         right: SPACE.screen,
-        bottom: SPACE.tabBar + insets.bottom + 18,
+        top: -(64 + 18),
+        zIndex: 10,
         width: 64,
         height: 64,
         borderRadius: 32,
