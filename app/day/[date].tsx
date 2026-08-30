@@ -290,7 +290,7 @@ function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) 
           testID="export-day"
           accessibilityLabel="Export this day"
           onPress={exportDay}
-          style={({ pressed }) => ({
+          style={({
             width: 40,
             height: 40,
             borderRadius: 20,
@@ -298,7 +298,7 @@ function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) 
             borderColor: C.track,
             alignItems: 'center',
             justifyContent: 'center',
-            opacity: pressed ? 0.7 : 1,
+            opacity: 1,
           })}>
           <IconShare size={18} color={C.ink} />
         </Pressable>

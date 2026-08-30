@@ -135,7 +135,7 @@ export function DayListRow({ row, onPress }: { row: DayRow; onPress?: () => void
       testID={`day-${row.date}`}
       accessibilityRole="button"
       onPress={onPress}
-      style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}>
+      style={({ opacity: 1 })}>
       <View
         style={{
           flexDirection: 'row',

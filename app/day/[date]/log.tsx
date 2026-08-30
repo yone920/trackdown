@@ -100,7 +100,7 @@ function LogRow({ entry, onPress }: { entry: DayLogEntry; onPress: () => void })
       accessibilityRole="button"
       onPress={onPress}
       disabled={!entry.editable}
-      style={({ pressed }) => ({ opacity: pressed && entry.editable ? 0.7 : 1 })}>
+      style={{ opacity: 1 }}>
       <View
         style={{
           flexDirection: 'row',

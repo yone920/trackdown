@@ -77,7 +77,7 @@ export function LogFab({ onPress }: { onPress: () => void }) {
       accessibilityRole="button"
       accessibilityLabel="Log something"
       onPress={onPress}
-      style={({ pressed }) => ({
+      style={({
         position: 'absolute',
         right: SPACE.screen,
         top: -(64 + 18),
@@ -88,7 +88,7 @@ export function LogFab({ onPress }: { onPress: () => void }) {
         backgroundColor: C.ink,
         alignItems: 'center',
         justifyContent: 'center',
-        opacity: pressed ? 0.85 : 1,
+        opacity: 1,
       })}>
       <IconPlus size={28} color={C.bg} strokeWidth={2.2} />
     </Pressable>

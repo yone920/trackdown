@@ -64,8 +64,8 @@ export function Chip({
       testID={testID}
       onPress={onPress}
       disabled={disabled || !onPress}
-      style={({ pressed }) => ({
-        opacity: disabled ? 0.45 : pressed ? 0.7 : 1,
+      style={({
+        opacity: disabled ? 0.45 : 1,
         borderRadius: 16,
         paddingHorizontal: 14,
         paddingVertical: 8,
@@ -137,7 +137,7 @@ export function Row({
   );
   if (!onPress) return body;
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}>
+    <Pressable onPress={onPress} style={({ opacity: 1 })}>
       {body}
     </Pressable>
   );

@@ -32,7 +32,7 @@ export function GoalBanner({
       testID={testID}
       onPress={onPress}
       disabled={!onPress}
-      style={({ pressed }) => ({ opacity: pressed ? 0.8 : 1 })}>
+      style={({ opacity: 1 })}>
       <Card style={{ flexDirection: 'row', alignItems: 'center' }}>
         {hasGoal ? (
           <Ring size={56} stroke={5} fraction={percent ?? 0}>

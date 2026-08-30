@@ -109,13 +109,13 @@ export default function SignIn() {
             testID="auth-submit"
             onPress={submit}
             disabled={busy}
-            style={({ pressed }) => ({
+            style={({
               marginTop: 26,
               borderRadius: RADIUS.pill,
               backgroundColor: C.ink,
               paddingVertical: 16,
               alignItems: 'center',
-              opacity: busy ? 0.6 : pressed ? 0.85 : 1,
+              opacity: busy ? 0.6 : 1,
             })}>
             {busy ? (
               <ActivityIndicator size="small" color={C.bg} />

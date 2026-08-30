@@ -322,13 +322,13 @@ export default function Today() {
       <Pressable
         testID="coach-button"
         onPress={() => router.push('/coach')}
-        style={({ pressed }) => ({
+        style={({
           marginTop: 26,
           borderRadius: RADIUS.pill,
           backgroundColor: C.accent,
           paddingVertical: 16,
           alignItems: 'center',
-          opacity: pressed ? 0.85 : 1,
+          opacity: 1,
         })}>
         <Body style={{ fontFamily: FONT.semi, color: C.bg }}>
           {workoutDone ? 'What should I do tomorrow?' : 'What should I do today?'}

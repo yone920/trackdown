@@ -32,14 +32,14 @@ export function Control({
         accessibilityLabel={label}
         onPress={onPress}
         disabled={disabled}
-        style={({ pressed }) => ({
+        style={({
           width: 76,
           height: 76,
           borderRadius: RADIUS.tile,
           alignItems: 'center',
           justifyContent: 'center',
           backgroundColor: filled ? C.ink : C.card,
-          opacity: disabled ? 0.4 : pressed ? 0.8 : 1,
+          opacity: disabled ? 0.4 : 1,
         })}>
         {children}
       </Pressable>
