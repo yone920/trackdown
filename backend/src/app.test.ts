@@ -259,6 +259,69 @@ describe("entries", () => {
 		expect(profile.body).toMatchObject({ sex: "male", birth_year: 1990, height_cm: 180, goal_weight_lb: 170 });
 		expect((await request(app).patch("/api/profile").set(auth).send({ sex: "other" })).status).toBe(400);
 	});
+
+	// v2: "movement" is now an alias over `activities`, and the route takes the exercise
+	// fields WP2's fusion endpoint will fill in.
+	it("saves the v2 activity fields and normalises the exercise against the catalogue", async () => {
+		const auth = { Authorization: `Bearer ${token}` };
+		const created = await request(app)
+			.post("/api/entries/movement")
+			.set(auth)
+			.send({
+				description: "3 x 10 on the db bench",
+				kcal: 180,
+				exercise: "db bench",
+				sets: 3,
+				reps: 10,
+				load_lb: 45,
+				source: "fused",
+				confidence: "medium",
+				logged_at: "2026-08-10T18:00:00.000Z",
+			});
+		expect(created.status).toBe(201);
+		const [activity] = created.body;
+		expect(activity).toMatchObject({
+			description: "3 x 10 on the db bench",
+			kcal: 180,
+			// The catalogue's spelling, not the user's, so weeks of logs group together.
+			exercise: "Dumbbell Bench Press",
+			category: "strength",
+			muscle_groups: ["chest"],
+			sets: 3,
+			reps: 10,
+			load_lb: 45,
+			source: "fused",
+			confidence: "medium",
+		});
+		expect(activity.exercise_id).toMatch(/^[0-9a-f-]{36}$/);
+
+		const patched = await request(app)
+			.patch(`/api/entries/movement/${activity.id}`)
+			.set(auth)
+			.send({ load_lb: 50, exercise: "incline db press" });
+		expect(patched.status).toBe(200);
+		expect(patched.body).toMatchObject({ load_lb: 50, exercise: "Incline Dumbbell Press", category: "strength" });
+		expect(patched.body.exercise_id).not.toBe(activity.exercise_id);
+	});
+
+	it("still saves an exercise the catalogue has never heard of", async () => {
+		const auth = { Authorization: `Bearer ${token}` };
+		const created = await request(app)
+			.post("/api/entries/movement")
+			.set(auth)
+			.send({ description: "wall sits", exercise: "wall sit", kcal: 30, logged_at: "2026-08-10T19:00:00.000Z" });
+		expect(created.status).toBe(201);
+		expect(created.body[0]).toMatchObject({
+			exercise: "wall sit",
+			exercise_id: null,
+			category: null,
+			muscle_groups: null,
+			source: "manual",
+		});
+
+		const bad = await request(app).post("/api/entries/movement").set(auth).send({ description: "x", source: "guessed" });
+		expect(bad.status).toBe(400);
+	});
 });
 
 describe("free-text log", () => {

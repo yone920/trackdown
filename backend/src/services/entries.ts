@@ -1,10 +1,14 @@
 import type pg from "pg";
 import { z } from "zod";
+import { CATEGORIES, type ExerciseCategory } from "../db/exercises.js";
 
 // Data access for the four user-owned tables. Every function takes the session's
 // userId and scopes the SQL by it — this is what Supabase's RLS policies used to do.
 
-export const KINDS = { meals: "meals", movement: "calorie_expenditure" } as const;
+// "movement" is the v1 name the shipped app still calls; 0004_v2.sql renamed the table to
+// `activities` and gave it exercise/sets/reps/load columns. Keeping the alias here is what
+// lets /api/entries/movement go on working until WP6 replaces those screens.
+export const KINDS = { meals: "meals", movement: "activities" } as const;
 export type Kind = keyof typeof KINDS;
 export function isKind(value: string): value is Kind {
 	return value in KINDS;
@@ -14,6 +18,25 @@ type Queryable = pg.Pool | pg.PoolClient;
 
 const isoDate = z.string().datetime({ offset: true });
 const macro = z.number().min(0).nullable();
+
+export const ACTIVITY_SOURCES = ["manual", "fused", "health"] as const;
+export const CONFIDENCE_LEVELS = ["low", "medium", "high"] as const;
+
+// The v2 activity fields, accepted on the "movement" kind and ignored on "meals" (only
+// `activities` has these columns). All optional: a v1 client that sends none is still
+// writing a valid row.
+const activityFields = {
+	exercise: z.string().trim().min(1).max(120).nullable().optional(),
+	category: z.enum(CATEGORIES).nullable().optional(),
+	muscle_groups: z.array(z.string().trim().min(1).max(40)).max(12).nullable().optional(),
+	sets: z.number().int().min(0).max(100).nullable().optional(),
+	reps: z.number().int().min(0).max(1000).nullable().optional(),
+	load_lb: z.number().min(0).max(2000).nullable().optional(),
+	duration_min: z.number().int().min(0).max(1440).nullable().optional(),
+	distance_mi: z.number().min(0).max(1000).nullable().optional(),
+	source: z.enum(ACTIVITY_SOURCES).nullable().optional(),
+	confidence: z.enum(CONFIDENCE_LEVELS).nullable().optional(),
+};
 
 export const RangeQuery = z.object({
 	from: isoDate.optional(),
@@ -31,6 +54,7 @@ export const NewEntry = z.object({
 	fat_g: macro.optional(),
 	fiber_g: macro.optional(),
 	logged_at: isoDate.optional(),
+	...activityFields,
 });
 export type NewEntry = z.infer<typeof NewEntry>;
 
@@ -43,6 +67,7 @@ export const EntryPatch = z
 		fat_g: macro,
 		fiber_g: macro,
 		logged_at: isoDate,
+		...activityFields,
 	})
 	.partial()
 	.refine((patch) => Object.keys(patch).length > 0, { message: "Empty patch." });
@@ -75,6 +100,66 @@ export const ProfilePatch = z
 export type ProfilePatch = z.infer<typeof ProfilePatch>;
 
 const MACRO_COLUMNS = ["protein_g", "carbs_g", "fat_g", "fiber_g"] as const;
+
+// Written in this order by insertEntries; exercise_id is derived, never sent by a client.
+const ACTIVITY_COLUMNS = [
+	"exercise",
+	"exercise_id",
+	"category",
+	"muscle_groups",
+	"sets",
+	"reps",
+	"load_lb",
+	"duration_min",
+	"distance_mi",
+	"source",
+	"confidence",
+] as const;
+
+/** Patchable activity columns: everything above except the derived exercise_id. */
+const ACTIVITY_PATCH_COLUMNS = ACTIVITY_COLUMNS.filter((c) => c !== "exercise_id");
+
+export interface CatalogMatch {
+	id: string;
+	name: string;
+	category: ExerciseCategory;
+	primary_muscles: string[];
+	secondary_muscles: string[];
+	aliases: string[];
+}
+
+/**
+ * Resolves spoken exercise names to catalogue rows, by name or alias, case-insensitively —
+ * "db bench" and "Dumbbell bench press" both find "Dumbbell Bench Press". Keyed by the
+ * lower-cased name that was asked for. Unknown names are simply absent: the catalogue
+ * normalises, it does not gate what the user is allowed to log.
+ */
+export async function lookupExercises(
+	db: Queryable,
+	names: readonly (string | null | undefined)[]
+): Promise<Map<string, CatalogMatch>> {
+	const wanted = [
+		...new Set(
+			names
+				.filter((n): n is string => typeof n === "string" && n.trim() !== "")
+				.map((n) => n.trim().toLowerCase())
+		),
+	];
+	const matches = new Map<string, CatalogMatch>();
+	if (wanted.length === 0) return matches;
+
+	const { rows } = await db.query<CatalogMatch>(
+		`SELECT id, name, category, primary_muscles, secondary_muscles, aliases
+		 FROM exercise_catalog WHERE lower(name) = ANY($1::text[]) OR aliases && $1::text[]`,
+		[wanted]
+	);
+	for (const row of rows) {
+		for (const key of [row.name.toLowerCase(), ...row.aliases]) {
+			if (wanted.includes(key)) matches.set(key, row);
+		}
+	}
+	return matches;
+}
 
 function rangeSql(q: RangeQuery, params: unknown[], startIndex: number): string {
 	const clauses: string[] = [];
@@ -112,11 +197,42 @@ export async function getEntry(db: Queryable, userId: string, kind: Kind, id: st
 export async function insertEntries(db: Queryable, userId: string, kind: Kind, entries: NewEntry[]) {
 	if (entries.length === 0) return [];
 	const withMacros = kind === "meals";
-	const columns = ["user_id", "description", "kcal", "logged_at", ...(withMacros ? MACRO_COLUMNS : [])];
+	const withActivity = kind === "movement";
+	// One catalogue lookup for the whole batch.
+	const catalog: Map<string, CatalogMatch> = withActivity
+		? await lookupExercises(db, entries.map((e) => e.exercise))
+		: new Map();
+	const columns = [
+		"user_id",
+		"description",
+		"kcal",
+		"logged_at",
+		...(withMacros ? MACRO_COLUMNS : []),
+		...(withActivity ? ACTIVITY_COLUMNS : []),
+	];
 	const params: unknown[] = [];
 	const tuples = entries.map((e) => {
 		const values: unknown[] = [userId, e.description, e.kcal, e.logged_at ?? new Date().toISOString()];
 		if (withMacros) values.push(e.protein_g ?? null, e.carbs_g ?? null, e.fat_g ?? null, e.fiber_g ?? null);
+		if (withActivity) {
+			const match = e.exercise ? (catalog.get(e.exercise.trim().toLowerCase()) ?? null) : null;
+			values.push(
+				// Store the catalogue's spelling when we recognise the name, so the coach's
+				// "last time you benched" matches across weeks of differently worded logs.
+				match?.name ?? e.exercise ?? null,
+				match?.id ?? null,
+				e.category ?? match?.category ?? null,
+				e.muscle_groups ?? match?.primary_muscles ?? null,
+				e.sets ?? null,
+				e.reps ?? null,
+				e.load_lb ?? null,
+				e.duration_min ?? null,
+				e.distance_mi ?? null,
+				// NOT NULL in the schema: a row with no stated source was typed by the user.
+				e.source ?? "manual",
+				e.confidence ?? null
+			);
+		}
 		const placeholders = values.map((v) => {
 			params.push(v);
 			return `$${params.length}`;
@@ -131,13 +247,32 @@ export async function insertEntries(db: Queryable, userId: string, kind: Kind, e
 }
 
 export async function updateEntry(db: Queryable, userId: string, kind: Kind, id: string, patch: EntryPatch) {
-	const allowed = kind === "meals" ? ["description", "kcal", "logged_at", ...MACRO_COLUMNS] : ["description", "kcal", "logged_at"];
+	const allowed: string[] =
+		kind === "meals"
+			? ["description", "kcal", "logged_at", ...MACRO_COLUMNS]
+			: ["description", "kcal", "logged_at", ...ACTIVITY_PATCH_COLUMNS];
 	const sets: string[] = [];
 	const params: unknown[] = [userId, id];
 	for (const [key, value] of Object.entries(patch)) {
 		if (!allowed.includes(key)) continue;
+		// source is NOT NULL; clearing it is not a correction anyone means to make.
+		if (key === "source" && value === null) continue;
+		// exercise is assigned below, together with the exercise_id it resolves to.
+		if (kind === "movement" && key === "exercise") continue;
 		params.push(value);
 		sets.push(`${key} = $${params.length}`);
+	}
+	// Correcting the exercise re-points exercise_id (or clears it, when the new name is not
+	// in the catalogue). category and muscle_groups are left as they are unless the patch
+	// names them: an edit should change what was asked for and nothing else.
+	if (kind === "movement" && patch.exercise !== undefined) {
+		const match = patch.exercise
+			? (await lookupExercises(db, [patch.exercise])).get(patch.exercise.trim().toLowerCase())
+			: undefined;
+		params.push(match?.name ?? patch.exercise ?? null);
+		sets.push(`exercise = $${params.length}`);
+		params.push(match?.id ?? null);
+		sets.push(`exercise_id = $${params.length}`);
 	}
 	if (sets.length === 0) return getEntry(db, userId, kind, id);
 	const { rows } = await db.query(

@@ -30,10 +30,12 @@ const SOURCE_URL = process.env.SUPABASE_DB_URL;
 const TARGET_URL = process.env.DATABASE_URL;
 
 /** Copied after users. Conflict target = primary key column. */
-const DATA_TABLES: { table: string; pk: string; owner: string }[] = [
+// `target` differs from `table` where our schema renamed one: Supabase still has the
+// pre-v2 name (0004_v2.sql renamed calorie_expenditure to activities on our side).
+const DATA_TABLES: { table: string; target?: string; pk: string; owner: string }[] = [
 	{ table: "profiles", pk: "id", owner: "id" },
 	{ table: "meals", pk: "id", owner: "user_id" },
-	{ table: "calorie_expenditure", pk: "id", owner: "user_id" },
+	{ table: "calorie_expenditure", target: "activities", pk: "id", owner: "user_id" },
 	{ table: "weight_logs", pk: "id", owner: "user_id" },
 	{ table: "daily_summaries", pk: "user_id,date", owner: "user_id" },
 ];
@@ -166,14 +168,14 @@ async function main(): Promise<void> {
 
 		const report: { table: string; source: number; copied: number; orphans: number; note?: string }[] = [];
 
-		for (const { table, pk, owner } of DATA_TABLES) {
+		for (const { table, target: targetTable = table, pk, owner } of DATA_TABLES) {
 			const sourceCols = await columnsOf(source, table);
-			const targetCols = await columnsOf(target, table);
+			const targetCols = await columnsOf(target, targetTable);
 			if (!sourceCols) {
 				report.push({ table, source: 0, copied: 0, orphans: 0, note: "not in Supabase, skipped" });
 				continue;
 			}
-			if (!targetCols) throw new Error(`Target is missing table ${table} — run npm run db:migrate first`);
+			if (!targetCols) throw new Error(`Target is missing table ${targetTable} — run npm run db:migrate first`);
 
 			const targetNames = new Set(targetCols.map((c) => c.name));
 			const shared = targetCols.filter((c) => sourceCols.some((s) => s.name === c.name));
@@ -191,8 +193,8 @@ async function main(): Promise<void> {
 			const orphans = rows.length - kept.length;
 			if (orphans > 0) console.warn(`⚠️  ${table}: ${orphans} row(s) belong to deleted users, skipped`);
 
-			await upsertBatched(target, table, shared, kept, pk);
-			report.push({ table, source: rows.length, copied: kept.length, orphans });
+			await upsertBatched(target, targetTable, shared, kept, pk);
+			report.push({ table: targetTable, source: rows.length, copied: kept.length, orphans });
 		}
 
 		await target.query("COMMIT");
