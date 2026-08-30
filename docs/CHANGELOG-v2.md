@@ -16,6 +16,205 @@ open `exp://100.64.198.50:8081` directly.
 
 ---
 
+## WP3 — Day model, blocks, calorie model, day readings
+
+The day is now a thing the server computes. One function answers "what happened on this
+day, and was it any good", and Today, the closed Day, the week, the Days list, the close
+job and (next) the coach all read that one answer.
+
+**The calorie maths moved server-side**
+
+- `src/services/tdee.ts` is `lib/tdee.ts` + `lib/recommendations.ts`, ported: Mifflin-St
+  Jeor, the ISSN percentage deficit, the 1 %/week cap, the NHLBI/0.8×BMR floor, the macro
+  split, the projection. Same constants, same rounding — `tdee.test.ts` pins it to the
+  **app's own outputs**, produced by running the shipped `lib/` code over four profiles and
+  pasting the numbers in, so a change on either side fails here instead of quietly giving
+  the phone and the server two different targets.
+- One deliberate difference: `computeTdee` takes **the day being computed** as the date to
+  age against. The app read `new Date().getFullYear()` at the call site, which is fine in a
+  UI and wrong in a server recomputing March for a December birthday — and untestable.
+- `computeDayTargets(profile, weightLb, day)` is the bridge the day model calls: the target
+  is derived from **the day's own body weight** (the day's weigh-in, else the most recent
+  one before it), falls back to the profile's stated `daily_calorie_target` when the TDEE
+  inputs are incomplete, and is `null` when there is neither. A stated `protein_g` /
+  `carbs_max_g` beats the computed macro.
+
+**`src/services/day.ts` — `computeDay(db, { userId, date, tzOffsetMin, now })`**
+
+Returns items, blocks, the calorie model, macros, weight, muscle groups, the eating
+pattern, the day arc, `expected`, the verdict and a one-line summary. Highlights:
+
+- **Blocks** (`day/blocks.ts`): activities within **90 minutes** of each other, measured
+  from the *end* of the previous one so a 60-minute bike does not split the visit. Title
+  from the muscle groups with the most sets ("Back & Chest"), or "Walk" / "Run" /
+  "Mobility" / "Cardio" for a block with no lifting. Nothing writes `activities.block_id`:
+  blocks are computed on every read, which is what makes them something the user never has
+  to manage.
+- **Health overlap rules** (concept-v2 §Health), the double-count mitigation, unit-tested
+  with synthetic samples: a workout overlapping a block is *attached* to it and fills in
+  the calories and minutes **only where the user gave none**; one overlapping nothing
+  becomes an activity with `source: health` and is counted; a sample already materialised
+  as an `activities` row is the same event and is counted once; two workouts over one block
+  keep the longest and drop the other. A ±15-minute grace covers a watch started before the
+  first log. **Daily active energy is never added to `earned`** — it is the baseline the
+  TDEE already accounts for. Body-mass samples become the day's weigh-in only when the user
+  logged none themselves.
+- **The calorie model**: `eaten = Σ meals`, `earned = Σ blocks + standalone Health`,
+  `allowance = target + eatback × earned` (`none|half|all`, default half),
+  `balance = TDEE + earned − eaten`.
+- **Status** `on_track | over | under | none`: `none` whenever there is nothing to judge
+  against — no allowance, or a goal the calorie number does not speak for (a strength goal
+  is not served by eating less). Over needs to clear a **100 kcal** tolerance; under is
+  more than **25 %** below the allowance, or under the safe floor — and a **live** day is
+  not called under-fed before **20:00 local**, because a day that is short at lunchtime is
+  a day that is not finished.
+- **`delta_vs_last`** per exercise (`day/deltas.ts`): the previous occurrence of the same
+  exercise, earlier today or weeks ago. Load first, then sets, then reps, then duration and
+  distance — "+5 lb", "+1 set", "-10 lb", "same", "first time".
+- **The eating-pattern line and the day arc are computed, not generated** (`day/narrative.ts`):
+  back-loaded / front-loaded / the longest gap / evenly spread, and the 6a→11p events with
+  the block as a span, NOW, and the dashed `expected` dots (the next meal slot the clock is
+  waiting for, and a weigh-in if the day has had none).
+- **Verdict** (`services/goals/verdict.ts`), judged against the goal active **on that
+  date** (not today's), via the measure catalog: fat loss / maintain → the calorie status;
+  muscle / strength → protein against target **plus** training done, with a rest-day rule
+  (trained yesterday, or the week already has the planned number of sessions); endurance →
+  trailing-7-day cardio minutes against the goal's weekly target at 90 % tolerance; custom
+  → its own first metric when that metric is computable; no goal → `none`; nothing logged →
+  `unlogged`, never `missed`.
+
+**Readings — the one generated part of a day** (`services/readings/`)
+
+- `right_now` for the live day (≤ 2 sentences + `next_action {label, kind, hint}` and up to
+  three `actions` chips) and `in_short` for a closed one, both through `LlmPort` on the
+  **coach** model (`COACH_LLM_PROVIDER` / `LLM_MODEL_COACH`).
+- The model is given the **computed day sheet** — totals, blocks, deltas, the verdict, what
+  is still expected — never the rows, and never a database id.
+- Cached in the new `day_readings` table by an **inputs hash** over the day's material
+  facts. The clock moving is not a regeneration; a logged meal is. `in_short` is written
+  once at close and never revised.
+- A missing key or a provider outage returns the last good reading, or `null`, and the day
+  renders without it. The reading is the one part of a day allowed to be absent.
+
+**Day close** (`services/dayClose.ts`)
+
+No cron: the close runs on the **first request after the user's local midnight**, because
+only the phone knows when that was. Every day-shaped route calls it first; a second request
+costs one indexed query. It writes every column from 0004 plus the new ones, and
+`closed_at` is the idempotency guard — a closed day is a record, not a cache, so a retry,
+a burst at 00:01 and `POST /api/day/close` all converge and the reading is generated once.
+Reach is 60 days; days with nothing logged are never written.
+
+**Migration — `backend/migrations/0006_day_readings.sql`**
+
+- `day_readings (user_id, date, kind, inputs_hash, text, next_action, actions, model)`. The
+  live day's reading could not live in `daily_summaries`: that row's existence means "this
+  day is finished", and Right now belongs to a day that is not.
+- `daily_summaries.summary_line`, `.meal_count`, `.tdee`. The Days list has to be one
+  indexed read rather than a sentence re-derived from `blocks` jsonb, and the week's
+  deficit is Σ(TDEE + earned − eaten) — with no column, recomputing a TDEE for June from
+  today's weight would quietly rewrite June.
+
+**Routes**
+
+- `GET /api/day/:date?tz=` — `today` or `YYYY-MM-DD`; live for today (with `right_now`),
+  the day plus its `in_short` for a past one. 400 for a future date.
+- `GET /api/week?end=&tz=` — seven days of status/verdict, `weekly_deficit`, `served`,
+  `judged`. Closed days come from their record, today is computed.
+- `GET /api/days?before=&tz=&limit=` — the Days list: verdict words, the one-line summary,
+  the day number, `next_before` for the next page. The open day leads the list.
+- `POST /api/day/close` — `{ tz_offset_min, date? }`, for tests, admin and the seed script.
+  Refuses the day the user is still living.
+- The old entry, weight, profile, log, fusion and evidence routes are untouched.
+
+**`npm run seed-demo -- <email> [--tz <min>] [--password …] [--force]`**
+
+Creates or reuses the account (password `demo-pass-123`, set through the same code path as
+`reset-password`), a fat-loss goal, a profile the calorie model can work from, and four
+days: three closed with a gym block of four exercises, a Health-only rest day, weigh-ins
+and macro-bearing meals — with deltas across the two gym days (+5 lb bench, +5 lb row,
++1 set press, pulldown held) — then **today half-lived**, breakfast and lunch in and dinner
+still expected. It writes through the same services the API uses and closes the past days
+so `in_short` exists. Without an API key its own canned readings stand in, parsed through
+the caller's schema. Re-running converges; it refuses an account with more than 10 closed
+days unless `--force`.
+
+**Decisions**
+
+- **The day view recomputes; `daily_summaries` is the frozen record.** `computeDay` never
+  reads the summary back, so correcting yesterday's lunch shows up immediately in the day
+  view, while the closed record stays what was true at close (and the week and Days list
+  read that). The cost: after an edit to a closed day, the list and the day can disagree
+  until something re-closes it. Judged the right way round — the record is evidence, and
+  silently rewriting history to match a late edit is worse than a stale summary line.
+- **`under` is `served` for a fat-loss goal.** A deficit day served the goal; the
+  under-eating caution is a health signal and the status line already carries it. Marking a
+  light day as a failure would be judging the user twice for one number.
+- **Status has a `none` that the schema does not.** `daily_summaries.status` allows
+  `on_track|over|under` only (0004), so "no judgement" is written as NULL, not a fourth
+  value.
+- **A dropped goal still judges the days it was live for**, since 0004 has no record of
+  *when* it was dropped; the query filters `status <> 'dropped'` and by the date window.
+  WP4 owns status changes and can tighten this by setting `active_to` on drop.
+- **`localDay` moved out of `services/fusion/context.ts`** into `services/localTime.ts` (it
+  re-exports it, so nothing else moved). The day model, the close and the week all need the
+  same local-midnight arithmetic, and two copies of it is how a log at 23:30 in Los Angeles
+  lands on two different dates.
+- **The eating pattern is computed, not an LLM sentence.** Paying a model to notice that
+  60 % of the calories came after 6 pm would be slower, dearer and less reliable than
+  counting them (concept-v2 §Principles).
+- `eslint.config.js`: `no-unused-vars` gained `ignoreRestSiblings` — dropping one key from
+  a response by destructuring it out is the readable way, and naming what you drop is the
+  point of it.
+- No new dependencies.
+
+**Tests** — 185 passing, 2 skipped (was 104 / 2).
+
+- `src/services/day/day.test.ts` (41): clustering (the gym hour, the gap measured from the
+  end of an activity, the 90-minute split, titles, Health rows kept out); the overlap rules
+  on synthetic samples (attach, fill in only missing calories, standalone, the grace
+  window, two workouts over one block); `delta_vs_last` for every field and the
+  earlier-today case; the status thresholds including the live-day rule; the verdict for
+  every goal kind, the rest-day rule and the unlogged/no-goal cases; the eating-pattern
+  lines; `expected`; and the local-day edges (23:30 in Los Angeles, 00:30 in Auckland).
+- `src/services/tdee.test.ts` (14): the app's four golden profiles, the exclusions, and
+  `computeDayTargets` including the stated-target fallback and tracking-only.
+- `src/services/readings/readings.test.ts` (10): both schemas under a 1.5 KB budget against
+  the ~4.5 KB grammar ceiling, the day sheet's contents (and that it carries no row ids),
+  and the inputs hash — unchanged by the clock, changed by a log.
+- `src/app.test.ts` (+13): the live day end to end (one block, the calorie model, macros,
+  the weight trend, `+5 lb` against last week's bench, `first time`, the arc, no goal → no
+  judgement); the reading generated once and reused until the day changes; Health merging
+  over real rows (block attached, walk standalone, active energy excluded from `earned`);
+  the close writing every column and its reading, being idempotent, and refusing today;
+  the closed day served from its record; the week; the paged Days list; and a meal logged
+  at 23:30 local at UTC−7 landing on that local day in the day view *and* in the close.
+- `src/scripts/seed-demo.test.ts` (3): the script spawned for real against a real database
+  — three closed days with readings, the blocks, the goal, safe to re-run, and it wants an
+  email.
+- `src/adapters/llm/anthropic.readings.contract.test.ts` (2, skipped without a key, run and
+  green here): both reading grammars compile on the coach model and `right_now` comes back
+  as at most two sentences with a valid action kind.
+
+**Deferred**
+
+- **The app still computes its own targets.** `lib/tdee.ts` and `lib/recommendations.ts`
+  are untouched and the phone reads neither `/api/day` nor `/api/week` yet — WP6 rewires
+  the screens and deletes the app-side copy. Until then the two agree because the port is
+  pinned to the app's outputs.
+- **`activities.block_id` is still unwritten.** Blocks are computed; the column is there
+  for a future "the user split this block" edit.
+- **No `/api/health/sync`** — WP7 owns it. The overlap rules are already live and read
+  whatever is in `health_samples`, which is how the tests and the seed script exercise them.
+- **The week and the Days list can lag an edit to a closed day** (see the decision above);
+  nothing re-closes a day today.
+- **`GET /api/day` is not paginated for a very long day** and returns the whole day's items;
+  a day is small.
+- **No coach-ask card on the Day view** — `coach_briefs` is WP5's, and the day view has the
+  shape ready for it.
+
+---
+
 ## WP2 — Evidence storage + fusion endpoints
 
 Logging became multimodal. A photo, a transcript and a typed note now go up together, come

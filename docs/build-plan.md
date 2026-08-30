@@ -155,20 +155,50 @@ Shipped; the deltas from what is written below are marked **(built:)**.
   `YYYY-MM-DD` strings rather than instants (`db/client.ts`), which WP3's day model wants.**)**
 
 ### WP3 — Day model, blocks, calorie model, day readings
+Shipped; the deltas from what is written below are marked **(built:)**.
 - `services/day.ts`: `computeDay(userId, date)` → items, blocks (90-min clustering of
   activities, block title from muscle groups / "Walk" / "Run"), eaten, earned (manual/fused vs
   health overlap rules from concept-v2 §Health), target (TDEE − pace deficit, port
   `lib/tdee.ts` + `lib/recommendations.ts` to `backend/src/services/tdee.ts` and make the app
   read the server's numbers), allowance, status (on_track|over|under), macros.
+  **(built:** `computeDay(db, { userId, date, tzOffsetMin, now })`; `services/tdee.ts` is
+  pinned to the app's own outputs by golden values, and takes **the day being computed** as
+  the date to age against rather than the wall clock. Status gained a fourth value,
+  **`none`** — no allowance, or a goal the calorie number does not speak for — with a
+  100 kcal over-tolerance, a 25 %-below under-rule, and no "under" on a live day before
+  20:00 local. `earned` never adds Health's daily active energy: that is the baseline the
+  TDEE already covers. The pure halves live in `services/day/{blocks,deltas,narrative,types}.ts`
+  and `services/goals/verdict.ts`, so the arithmetic is unit-tested without a database;
+  `localDay` moved to `services/localTime.ts` (fusion/context.ts re-exports it).
+  **`activities.block_id` is still unwritten** — blocks are computed on every read.**)**
 - `GET /api/day/:date`, `GET /api/week?end=`; day-close job: on the first request after local
   midnight (client sends its tz offset) write `daily_summaries` for every unclosed past day.
+  **(built:** plus `GET /api/days?before=&tz=` for the Days list and `POST /api/day/close`
+  for tests and admin. The close is idempotent on `closed_at`, reaches back 60 days, skips
+  days with nothing logged, and writes `summary_line`, `meal_count` and `tdee` as well as
+  the 0004 columns — see the migration note below.**)**
 - `GET /api/day/:date` also returns: `verdict` (served|missed|unlogged, judged against the goal
   active that day; `none` when no goal), per-exercise `delta_vs_last` (same/+5 lb/+1 set/−), the
   eating pattern line, the **reading** (`in_short` for closed days, written once at close;
   `right_now` for today, regenerated on each log — both via `LlmPort`, ≤ 2 sentences + next action
   with `actions[]` chips), the day-arc events, and `expected` items (next meal, weigh-in).
+  **(built:** the reading is regenerated when the day's **inputs hash** changes rather than
+  on every log — the clock moving is not a regeneration — and both readings are cached in a
+  new `day_readings` table (migration `0006_day_readings.sql`), which also adds
+  `daily_summaries.summary_line`, `.meal_count` and `.tdee`. Right now could not live in
+  `daily_summaries`: that row's existence means the day is finished. A missing key returns
+  the last good reading or null and the day renders without it. `verdict` is judged per goal
+  kind — calories for fat loss/maintain, protein + training (with a rest-day rule) for
+  muscle/strength, weekly cardio pace for endurance — and `under` counts as **served** for a
+  fat-loss goal.**)**
 - Unit tests: clustering, overlap rules with synthetic Health samples, status thresholds,
   timezone edges, delta_vs_last, verdict per goal kind.
+  **(built:** plus close idempotency, readings cache invalidation, the reading schemas'
+  size against the provider's grammar ceiling (a contract test on the coach model), and
+  `npm run seed-demo -- <email>`, which is spawned for real against a real database in
+  `src/scripts/seed-demo.test.ts`. **The app still computes its own targets** — `lib/tdee.ts`
+  and `lib/recommendations.ts` are untouched and no screen calls `/api/day` yet; WP6 rewires
+  them and deletes the app-side copy.**)**
 
 ### WP4 — Goals and profile by talking
 `goal` / `constraint` / `preference` kinds from WP2 → `POST /api/goals` (with proposed timeline from
@@ -248,6 +278,10 @@ values except the ones the user filled in.
 4. Set a goal by talking/typing → proposal → confirm; Today switches its cards.
 5. Days list and Day reading for yesterday (seed the user's account with two closed days of
    realistic fake data via a script so the morning demo has history: `npm run seed-demo -- <email>`).
+   **(built in WP3:** three closed days plus a half-lived today, run it from `backend/`:
+   `npm run seed-demo -- <email> --tz <minutes>`; the password is `demo-pass-123`. The
+   backend half of 3 and 5 — `/api/day/:date`, `/api/week`, `/api/days` — is done; the
+   screens are WP6.**)**
 6. Coach ask → brief.
 7. Metro running on this VM with the Tailscale hostname; instructions at the top of
    `docs/CHANGELOG-v2.md` ("Open Expo Go, scan this QR / open exp://100.64.198.50:8081").
