@@ -1,7 +1,7 @@
 import * as Crypto from 'expo-crypto';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Image } from 'expo-image';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -14,13 +14,15 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ConfirmCard, type DateChoice } from '@/components/confirm-card';
+import { Control } from '@/components/control';
 import { IconCamera, IconClose, IconKeyboard, IconMic } from '@/components/icons';
 import { Chip, Chips } from '@/components/kit';
-import { Disp, Eyebrow, Sub } from '@/components/type';
+import { Disp, Sub } from '@/components/type';
 import { ApiError } from '@/lib/api';
+import { recordToResult, resultToPatch, type EditKind } from '@/lib/edit-record';
 import { MAX_PHOTOS, pickPhotos, takePhoto, type LocalPhoto } from '@/lib/photos';
 import { getSpeech } from '@/lib/ports/speech';
-import { useAnalyze, useConfirm } from '@/lib/queries';
+import { useAnalyze, useConfirm, useDayLog, usePatchRecord } from '@/lib/queries';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
 import type { FusionResult } from '@/lib/types';
 
@@ -32,11 +34,25 @@ import type { FusionResult } from '@/lib/types';
 // Speak goes through lib/ports/speech.ts. In Expo Go the native module is absent, the port
 // reports unavailable, and the control is simply not drawn: the morning test still logs by
 // typing and by photo.
+//
+// The same sheet is also the **editor**: the DayLog pushes `editDate`/`editId`/`editKind`
+// here, the row comes back as a confirm card with its saved values in it, and Save PATCHes
+// instead of confirming. One card for "is this right?" and for "that was wrong" — the
+// screen the user learned the first time is the screen they get the second time.
 
 export default function LogSheet() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ hint?: string }>();
+  const params = useLocalSearchParams<{
+    hint?: string;
+    editDate?: string;
+    editId?: string;
+    editKind?: string;
+  }>();
+  const editId = typeof params.editId === 'string' ? params.editId : null;
+  const editKind = (typeof params.editKind === 'string' ? params.editKind : null) as EditKind | null;
+  const editDate = typeof params.editDate === 'string' ? params.editDate : '';
+  const editing = !!editId && !!editKind;
   const inputRef = useRef<TextInput>(null);
 
   const speech = useMemo(() => getSpeech(), []);
@@ -52,6 +68,20 @@ export default function LogSheet() {
 
   const analyze = useAnalyze();
   const confirm = useConfirm();
+  const patch = usePatchRecord();
+
+  // Edit mode reads the row back from the same endpoint the DayLog drew it with, rather
+  // than being handed it through navigation params: a screen that trusts its params is a
+  // screen that shows a stale row after the previous edit.
+  const dayLog = useDayLog(editing ? editDate : '');
+  const editEntry = editing ? (dayLog.data?.entries.find((entry) => entry.id === editId) ?? null) : null;
+  useEffect(() => {
+    if (!editEntry || result) return;
+    const seeded = recordToResult(editEntry.record);
+    if (seeded) setResult(seeded);
+    // Only seeds once — after that the card owns the values the user is editing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editEntry]);
 
   const reset = () => {
     setText('');
@@ -81,6 +111,19 @@ export default function LogSheet() {
       setDateChoice('proposed');
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not read that.');
+    }
+  };
+
+  const saveEdit = async () => {
+    if (!result || !editing || !editKind) return;
+    const body = resultToPatch(editKind, result);
+    if (!body) return;
+    setError(null);
+    try {
+      await patch.mutateAsync({ kind: editKind, id: editId!, patch: body });
+      router.back();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not save that change.');
     }
   };
 
@@ -163,9 +206,18 @@ export default function LogSheet() {
         </Pressable>
 
         <Disp size={34} style={{ marginTop: 4 }}>
-          What did you do?
+          {editing ? 'Fix what was saved' : 'What did you do?'}
         </Disp>
 
+        {editing ? (
+          <Sub style={{ marginTop: 10, lineHeight: 18 }}>
+            {editEntry?.raw_text
+              ? `You said: “${editEntry.raw_text}”`
+              : 'Change what was understood; the words that were recorded stay as they were.'}
+          </Sub>
+        ) : null}
+
+        {editing ? null : (
         <TextInput
           ref={inputRef}
           testID="log-text"
@@ -189,8 +241,9 @@ export default function LogSheet() {
             padding: SPACE.card,
           }}
         />
+        )}
 
-        {photos.length > 0 ? (
+        {editing || photos.length === 0 ? null : (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -210,8 +263,10 @@ export default function LogSheet() {
               </Pressable>
             ))}
           </ScrollView>
-        ) : null}
+        )}
 
+        {editing ? null : (
+        <View>
         {/* Photo · Speak · Type */}
         <View style={{ flexDirection: 'row', gap: 12, marginTop: 18 }}>
           <Control label="Photo" onPress={() => addPhotos('camera')} testID="control-photo">
@@ -247,7 +302,10 @@ export default function LogSheet() {
           </Chips>
         </View>
 
-        {analyze.isPending ? (
+        </View>
+        )}
+
+        {analyze.isPending || (editing && !editEntry && dayLog.isLoading) ? (
           <View style={{ marginTop: 24, alignItems: 'center' }}>
             <ActivityIndicator color={C.mute} />
           </View>
@@ -261,54 +319,20 @@ export default function LogSheet() {
             onChange={setResult}
             dateChoice={dateChoice}
             onDateChoice={setDateChoice}
-            onSave={() => void save(false)}
+            onSave={() => void (editing ? saveEdit() : save(false))}
             // "Add more" saves and keeps the sheet; an unclear reading has nothing to save.
             onAddMore={() => {
               if (result.kind === 'unclear') setResult(null);
               else void save(true);
             }}
-            saving={confirm.isPending}
+            saving={confirm.isPending || patch.isPending}
             error={error}
+            saveLabel={editing ? 'Save changes' : 'Save'}
+            showAddMore={!editing}
+            eyebrow={editing ? `As recorded · ${editKind}` : undefined}
           />
         ) : null}
       </ScrollView>
     </KeyboardAvoidingView>
-  );
-}
-
-/** One of the three 76px controls. Speak is the filled one when it is available. */
-function Control({
-  label,
-  onPress,
-  filled = false,
-  testID,
-  children,
-}: {
-  label: string;
-  onPress: () => void;
-  filled?: boolean;
-  testID?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <View style={{ alignItems: 'center', gap: 8 }}>
-      <Pressable
-        testID={testID}
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        onPress={onPress}
-        style={({ pressed }) => ({
-          width: 76,
-          height: 76,
-          borderRadius: RADIUS.tile,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: filled ? C.ink : C.card,
-          opacity: pressed ? 0.8 : 1,
-        })}>
-        {children}
-      </Pressable>
-      <Eyebrow>{label}</Eyebrow>
-    </View>
   );
 }

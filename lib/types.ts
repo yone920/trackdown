@@ -263,7 +263,81 @@ export type WeekView = {
 
 export type DaysView = { days: DayRow[]; next_before: IsoDate | null };
 
+// ---------------------------------------------------------------------------
+// The log, as recorded (GET /api/day/:date/log — backend/src/services/dayLog.ts)
+// ---------------------------------------------------------------------------
+
+export type DayLogKind = 'activity' | 'meal' | 'weight' | 'goal' | 'statement';
+export type DayLogIcon = 'camera' | 'mic' | 'keyboard' | 'heart';
+
+export type DayLogEvidence = {
+  id: string;
+  kind: 'photo' | 'transcript' | 'text';
+  text: string | null;
+  mime: string | null;
+  width: number | null;
+  height: number | null;
+};
+
+export type DayLogRecord =
+  | {
+      kind: 'activity';
+      description: string;
+      exercise: string | null;
+      category: ActivityCategory | null;
+      muscle_groups: string[];
+      sets: number | null;
+      reps: number | null;
+      load_lb: number | null;
+      duration_min: number | null;
+      distance_mi: number | null;
+      kcal: number;
+    }
+  | {
+      kind: 'meal';
+      description: string;
+      meal_type: MealSlot | null;
+      kcal: number;
+      protein_g: number | null;
+      carbs_g: number | null;
+      fat_g: number | null;
+      fiber_g: number | null;
+    }
+  | { kind: 'weight'; weight_lb: number }
+  | { kind: 'goal'; title: string; goal_kind: GoalKind; metrics: GoalMetric[] }
+  | { kind: 'statement'; text: string };
+
+export type DayLogEntry = {
+  /** The saved row's id — what a correction PATCHes. A statement carries its evidence id. */
+  id: string;
+  kind: DayLogKind;
+  logged_at: string;
+  raw_text: string | null;
+  icon: DayLogIcon;
+  evidence: DayLogEvidence[];
+  source: ActivitySource | null;
+  confidence: Confidence | null;
+  understood: string;
+  editable: boolean;
+  record: DayLogRecord;
+};
+
+export type DayLogView = {
+  date: IsoDate;
+  tz_offset_min: number;
+  entries: DayLogEntry[];
+};
+
 export type CoachBrief = {
+  id?: string;
+  date?: IsoDate;
+  /** When the user asked — the Coach screen's "asked at" line. */
+  asked_at?: string;
+  /** What they said when asking, plus the day's saved coach-context statements. */
+  context?: string | null;
+  model?: string | null;
+  /** True when this answer came back from the day's cache rather than the model. */
+  cached?: boolean;
   headline?: string;
   why?: string;
   workout?: {
@@ -286,7 +360,7 @@ export type CoachBrief = {
     why?: string | null;
   } | null;
   nudge?: string | null;
-  nudge_action?: { kind: string; goal_id?: string | null } | null;
+  nudge_action?: { kind: string; goal_id?: string | null; label?: string } | null;
 };
 
 export type CoachNext = {

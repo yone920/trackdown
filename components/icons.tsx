@@ -166,3 +166,51 @@ export function IconAvatar(p: IconProps) {
     </Frame>
   );
 }
+
+/** Export — a sheet with an arrow leaving it (the Day's share button). */
+export function IconShare(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Path d="M8 6H5.5A1.5 1.5 0 0 0 4 7.5v12A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5v-12A1.5 1.5 0 0 0 18.5 6H16" {...base(p)} />
+      <Line x1={12} y1={3} x2={12} y2={14} {...base(p)} />
+      <Polyline points="8.5,6.5 12,3 15.5,6.5" {...base(p)} />
+    </Frame>
+  );
+}
+
+/** The Day's verdict mark: a check inside a ring. */
+export function IconCheckCircle(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Circle cx={12} cy={12} r={9.5} {...base(p)} />
+      <Polyline points="7.5,12.5 10.8,15.8 16.5,8.8" {...base(p)} />
+    </Frame>
+  );
+}
+
+/** The Day's verdict mark when the day went over: the same ring, with an exclamation. */
+export function IconAlertCircle(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Circle cx={12} cy={12} r={9.5} {...base(p)} />
+      <Line x1={12} y1={7} x2={12} y2={13} {...base(p)} />
+      <Line x1={12} y1={16.5} x2={12} y2={16.6} {...base(p)} />
+    </Frame>
+  );
+}
+
+export function IconChevronUp(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Polyline points="5,15 12,8 19,15" {...base(p)} />
+    </Frame>
+  );
+}
+
+export function IconChevronDown(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Polyline points="5,9 12,16 19,9" {...base(p)} />
+    </Frame>
+  );
+}

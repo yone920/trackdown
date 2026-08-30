@@ -90,6 +90,9 @@ export function ConfirmCard({
   onAddMore,
   saving = false,
   error,
+  saveLabel = 'Save',
+  showAddMore = true,
+  eyebrow,
 }: {
   result: FusionResult;
   onChange: (next: FusionResult) => void;
@@ -99,6 +102,12 @@ export function ConfirmCard({
   onAddMore: () => void;
   saving?: boolean;
   error?: string | null;
+  /** "Save changes" when the card is correcting a row that already exists (DayLog). */
+  saveLabel?: string;
+  /** A correction has nothing to add more of. */
+  showAddMore?: boolean;
+  /** Overrides "Recognised · <kind>" — a correction was recognised a while ago. */
+  eyebrow?: string;
 }) {
   const patchActivity = (index: number, patch: Partial<ActivityItem>) => {
     if (result.kind !== 'activities') return;
@@ -109,7 +118,7 @@ export function ConfirmCard({
   return (
     <Card testID="confirm-card" style={{ marginTop: 20 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Eyebrow>Recognised · {KIND_LABEL[result.kind]}</Eyebrow>
+        <Eyebrow>{eyebrow ?? `Recognised · ${KIND_LABEL[result.kind]}`}</Eyebrow>
         {'confidence' in result ? <ConfidenceChip level={result.confidence} /> : null}
       </View>
 
@@ -335,12 +344,14 @@ export function ConfirmCard({
           <Chips>
             <Chip
               testID="confirm-save"
-              label={saving ? 'Saving…' : 'Save'}
+              label={saving ? 'Saving…' : saveLabel}
               variant="primary"
               onPress={onSave}
               disabled={saving}
             />
-            <Chip testID="confirm-add-more" label="Add more" onPress={onAddMore} disabled={saving} />
+            {showAddMore ? (
+              <Chip testID="confirm-add-more" label="Add more" onPress={onAddMore} disabled={saving} />
+            ) : null}
           </Chips>
         </View>
       )}

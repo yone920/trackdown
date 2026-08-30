@@ -1,14 +1,17 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api, tzOffsetMin, upload } from './api';
 import type {
   AnalyzeResponse,
   CoachNext,
   ConfirmResponse,
+  DayLogView,
   DayView,
   DaysView,
   FusionResult,
+  GoalMetric,
   GoalProgress,
+  GoalRecord,
   GoalsView,
   IsoDate,
   Profile,
@@ -62,6 +65,29 @@ export function useDays(before?: IsoDate, limit = 14) {
   return useQuery({
     queryKey: ['days', before ?? 'top', limit],
     queryFn: () => api<DaysView>('/api/days', { query: { tz: tzOffsetMin(), before, limit } }),
+  });
+}
+
+/**
+ * GET /api/days, one page at a time. The Days tab is a list of every day the user has
+ * logged; `next_before` is the server's cursor and null means there is nothing older.
+ */
+export function useDaysPages(limit = 21) {
+  return useInfiniteQuery({
+    queryKey: ['days', 'pages', limit],
+    initialPageParam: undefined as IsoDate | undefined,
+    queryFn: ({ pageParam }) =>
+      api<DaysView>('/api/days', { query: { tz: tzOffsetMin(), before: pageParam, limit } }),
+    getNextPageParam: (last) => last.next_before ?? undefined,
+  });
+}
+
+/** GET /api/day/:date/log — the day as it was recorded (raw text, evidence, corrections). */
+export function useDayLog(date: IsoDate) {
+  return useQuery({
+    queryKey: ['day', date, 'log'],
+    enabled: !!date,
+    queryFn: () => api<DayLogView>(`/api/day/${date}/log`, { query: { tz: tzOffsetMin() } }),
   });
 }
 
@@ -187,6 +213,75 @@ export function useConfirm() {
           ...(input.noDate === undefined ? {} : { no_date: input.noDate }),
         },
       }),
+    onSuccess: () => invalidateAfterLog(qc),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Corrections
+// ---------------------------------------------------------------------------
+
+/** Which endpoint corrects which kind of row (backend/src/routes/{entries,weight}.ts). */
+const PATCH_PATH: Record<string, (id: string) => string> = {
+  activity: (id) => `/api/entries/movement/${id}`,
+  meal: (id) => `/api/entries/meals/${id}`,
+  weight: (id) => `/api/weight/${id}`,
+  goal: (id) => `/api/goals/${id}`,
+};
+
+export type PatchInput = {
+  kind: 'activity' | 'meal' | 'weight' | 'goal';
+  id: string;
+  patch: Record<string, unknown>;
+};
+
+/**
+ * PATCH one saved row — the DayLog's "tap → correct". Every screen that could be showing
+ * the old value is invalidated, because a correction moves the day's totals and the
+ * verdict with it.
+ */
+export function usePatchRecord() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ kind, id, patch }: PatchInput) =>
+      api<Record<string, unknown>>(PATCH_PATH[kind]!(id), { method: 'PATCH', body: patch }),
+    onSuccess: () => invalidateAfterLog(qc),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Goals — the Goals tab's own writes
+// ---------------------------------------------------------------------------
+
+export type GoalPatch = {
+  title?: string;
+  metrics?: GoalMetric[];
+  priority?: number;
+  status?: 'active' | 'reached' | 'expired' | 'dropped';
+  active_to?: IsoDate | null;
+};
+
+/** PATCH /api/goals/:id — mark reached, drop, retitle. Never called by anything but a tap. */
+export function useUpdateGoal() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: GoalPatch }) =>
+      api<GoalRecord>(`/api/goals/${id}`, {
+        method: 'PATCH',
+        body: { ...patch, tz_offset_min: tzOffsetMin() },
+      }),
+    onSuccess: () => invalidateAfterLog(qc),
+  });
+}
+
+/** POST /api/goals/reorder — the user's order, most important first. */
+export function useReorderGoals() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ids: string[]) => api<{ active: GoalRecord[] }>('/api/goals/reorder', {
+      method: 'POST',
+      body: { ids },
+    }),
     onSuccess: () => invalidateAfterLog(qc),
   });
 }
