@@ -5,6 +5,7 @@ import type { AuthenticatedRequest } from "../middleware/auth.js";
 import { latestBrief } from "../services/coach/coach.js";
 import { computeDay, dayNumberFrom, firstActiveDate, type DayView } from "../services/day.js";
 import { closeDay, closeDueDays } from "../services/dayClose.js";
+import { dayLog } from "../services/dayLog.js";
 import { verdictWords, type DayStatus, type Verdict } from "../services/goals/verdict.js";
 import { addDays, datesEndingOn, isIsoDate, localDay, type IsoDate } from "../services/localTime.js";
 import type { DayReadings } from "../services/readings/readings.js";
@@ -12,6 +13,7 @@ import type { DayReadings } from "../services/readings/readings.js";
 // The day, the week and the list of days (docs/build-plan.md §WP3).
 //
 //   GET  /api/day/:date?tz=      one day — live when it is today, the record when it is past
+//   GET  /api/day/:date/log?tz=  the same day as it was recorded: raw text, evidence, edits
 //   GET  /api/week?end=&tz=      seven statuses and verdicts, plus the week's deficit
 //   GET  /api/days?before=&tz=   the Days list, paged
 //   POST /api/day/close          close past days now (tests, admin, the seed script)
@@ -166,6 +168,24 @@ export function dayRouter(pool: pg.Pool, readings: DayReadings): Router {
 		const coach = await latestBrief(pool, userId, date);
 
 		res.json({ ...toBody(view), reading, coach });
+	});
+
+	// "See the log as recorded" (docs/design-system.md §DayLog). No day close here: this
+	// route reads rows, it does not judge them, and a day with nothing in it is an empty
+	// list rather than a record that had to be written first.
+	router.get("/api/day/:date/log", async (req: AuthenticatedRequest, res) => {
+		const parsed = DayQuery.safeParse(req.query);
+		if (!parsed.success) return badRequest(res, "Invalid request.", parsed.error.issues);
+		const tzOffsetMin = parsed.data.tz;
+		const userId = req.userId!;
+		const today = localDay(new Date(), tzOffsetMin).date;
+
+		const asked = req.params.date as string;
+		const date = asked === "today" ? today : asked;
+		if (!isIsoDate(date)) return badRequest(res, `"${asked}" is not a date. Use YYYY-MM-DD or "today".`);
+		if (date > today) return badRequest(res, "That day has not happened yet.");
+
+		res.json(await dayLog(pool, { userId, date, tzOffsetMin }));
 	});
 
 	router.get("/api/week", async (req: AuthenticatedRequest, res) => {

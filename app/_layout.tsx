@@ -61,7 +61,9 @@ export default function RootLayout() {
             {/* The Log sheet is a modal from the `+` and from the Right now chips. */}
             <Stack.Screen name="log" options={{ presentation: 'modal' }} />
             <Stack.Screen name="coach" />
-            <Stack.Screen name="day" />
+            {/* A day and, one tap further in, the rows it was built from. */}
+            <Stack.Screen name="day/[date]" />
+            <Stack.Screen name="day/[date]/log" />
           </Stack.Protected>
           <Stack.Protected guard={!session}>
             <Stack.Screen name="(auth)" />

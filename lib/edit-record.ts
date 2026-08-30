@@ -1,0 +1,105 @@
+import type { DayLogRecord, FusionResult } from '@/lib/types';
+
+// The DayLog's "tap → correct" (docs/design-system.md §DayLog). A saved row is turned back
+// into the shape the confirm card already knows how to draw and edit, and the edited shape
+// is turned back into the patch its endpoint takes. Pure both ways, so the round trip is
+// testable and the Log sheet stays one screen rather than growing a second editor.
+//
+// Confidence comes back as "high" because the user is the one saying it now: a correction
+// is the most confident fact in the system (concept-v2 §Principles 3).
+
+export type EditKind = 'activity' | 'meal' | 'weight' | 'goal';
+
+/** A saved row as a confirm-card result. Null for a statement, which nothing can PATCH. */
+export function recordToResult(record: DayLogRecord): FusionResult | null {
+  switch (record.kind) {
+    case 'activity':
+      return {
+        kind: 'activities',
+        items: [
+          {
+            exercise: record.exercise,
+            description: record.description,
+            category: record.category,
+            muscle_groups: record.muscle_groups,
+            sets: record.sets,
+            reps: record.reps,
+            load_lb: record.load_lb,
+            duration_min: record.duration_min,
+            distance_mi: record.distance_mi,
+            kcal: record.kcal,
+            confidence: 'high',
+            sources: null,
+          },
+        ],
+      };
+    case 'meal':
+      return {
+        kind: 'meal',
+        description: record.description,
+        meal_type: record.meal_type,
+        kcal: record.kcal,
+        protein_g: record.protein_g,
+        carbs_g: record.carbs_g,
+        fat_g: record.fat_g,
+        fiber_g: record.fiber_g,
+        items: [],
+        confidence: 'high',
+        sources: null,
+      };
+    case 'weight':
+      return { kind: 'weight', weight_lb: record.weight_lb, confidence: 'high', sources: null };
+    case 'goal':
+      return {
+        kind: 'goal',
+        spec: {
+          kind: record.goal_kind,
+          title: record.title,
+          metrics: record.metrics,
+          active_from: null,
+          active_to: null,
+        },
+        proposed_timeline: null,
+      };
+    case 'statement':
+      return null;
+  }
+}
+
+/**
+ * The edited result as the patch its endpoint takes. Only the fields that endpoint owns:
+ * a PATCH that carries the whole row would overwrite the columns the user did not touch.
+ */
+export function resultToPatch(kind: EditKind, result: FusionResult): Record<string, unknown> | null {
+  if (kind === 'activity' && result.kind === 'activities') {
+    const item = result.items[0];
+    if (!item) return null;
+    return {
+      description: item.description || item.exercise || 'Exercise',
+      kcal: Math.max(0, Math.round(item.kcal ?? 0)),
+      exercise: item.exercise,
+      category: item.category,
+      muscle_groups: item.muscle_groups,
+      sets: item.sets,
+      reps: item.reps,
+      load_lb: item.load_lb,
+      duration_min: item.duration_min,
+      distance_mi: item.distance_mi,
+    };
+  }
+  if (kind === 'meal' && result.kind === 'meal') {
+    return {
+      description: result.description,
+      kcal: Math.max(0, Math.round(result.kcal ?? 0)),
+      protein_g: result.protein_g,
+      carbs_g: result.carbs_g,
+      fat_g: result.fat_g,
+      fiber_g: result.fiber_g,
+    };
+  }
+  if (kind === 'weight' && result.kind === 'weight') return { weight_lb: result.weight_lb };
+  if (kind === 'goal' && result.kind === 'goal') {
+    return { title: result.spec.title, metrics: result.spec.metrics };
+  }
+  return null;
+}

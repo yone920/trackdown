@@ -1,4 +1,4 @@
-import type { DayView, GoalKind, GoalWithProgress, MetricProgress, WeekView } from '@/lib/types';
+import type { DayRow, DayView, GoalKind, GoalWithProgress, MetricProgress, WeekView } from '@/lib/types';
 
 // Fixtures for the app tests. Small on purpose: every field here is one the screens
 // actually read, and a fixture that carries more than that stops being readable.
@@ -115,5 +115,26 @@ export function makeGoal(kind: GoalKind, metrics: MetricProgress[] = []): GoalWi
       percent: 0.43,
       metrics: metrics.length > 0 ? metrics : [makeMetric()],
     },
+  };
+}
+
+export function makeDayRow(overrides: Partial<DayRow> = {}): DayRow {
+  return {
+    date: '2026-08-30',
+    day_number: 12,
+    is_today: false,
+    closed: true,
+    status: 'on_track',
+    verdict: 'served',
+    verdict_words: 'Served your goal',
+    summary: 'Chest and triceps · 1,450 kcal',
+    in_short: null,
+    eaten: 1450,
+    earned: 300,
+    allowance: 2150,
+    balance: 500,
+    weight_lb: null,
+    muscle_groups: [],
+    ...overrides,
   };
 }

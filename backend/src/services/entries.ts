@@ -79,6 +79,13 @@ export const NewWeight = z.object({
 });
 export type NewWeight = z.infer<typeof NewWeight>;
 
+/** A correction to a weigh-in — the DayLog's edit card (docs/design-system.md §DayLog). */
+export const WeightPatch = z
+	.object({ weight_lb: z.number().positive().max(2000), logged_at: isoDate })
+	.partial()
+	.refine((patch) => Object.keys(patch).length > 0, { message: "Empty patch." });
+export type WeightPatch = z.infer<typeof WeightPatch>;
+
 export const ProfilePatch = z
 	.object({
 		display_name: z.string().trim().max(100).nullable(),
@@ -331,6 +338,22 @@ export async function insertWeights(db: Queryable, userId: string, weights: NewW
 		params
 	);
 	return rows;
+}
+
+export async function updateWeight(db: Queryable, userId: string, id: string, patch: WeightPatch) {
+	const sets: string[] = [];
+	const params: unknown[] = [userId, id];
+	for (const [key, value] of Object.entries(patch)) {
+		if (key !== "weight_lb" && key !== "logged_at") continue;
+		params.push(value);
+		sets.push(`${key} = $${params.length}`);
+	}
+	if (sets.length === 0) return getWeight(db, userId, id);
+	const { rows } = await db.query(
+		`UPDATE weight_logs SET ${sets.join(", ")} WHERE user_id = $1 AND id = $2 RETURNING *`,
+		params
+	);
+	return rows[0] ?? null;
 }
 
 export async function deleteWeight(db: Queryable, userId: string, id: string): Promise<boolean> {

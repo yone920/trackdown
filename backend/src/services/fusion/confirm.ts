@@ -244,9 +244,11 @@ export async function saveConfirmed(
 				{ weight_lb: result.weight_lb, ...(loggedAt ? { logged_at: loggedAt } : {}) },
 			]);
 			saved.weight = rows[0] ?? null;
-			// weight_logs has no evidence column; the scale photo stays user-owned and
-			// confirmed, which is what keeps the sweep off it.
-			saved.evidence = await linkEvidence(client, userId, evidenceIds);
+			// Since 0009 the scale photo points at the weigh-in it was read off, which is
+			// what lets "the log, as recorded" show the picture beside the number.
+			saved.evidence = await linkEvidence(client, userId, evidenceIds, {
+				weight_id: saved.weight?.id as string | undefined,
+			});
 			break;
 		}
 
