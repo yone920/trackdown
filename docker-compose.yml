@@ -61,18 +61,27 @@ services:
       - ANTHROPIC_WORKSPACE_ID=${ANTHROPIC_WORKSPACE_ID}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      # Photos behind a log (WP2). The volume below is what gets backed up to TrueNAS.
+      - EVIDENCE_STORAGE=${EVIDENCE_STORAGE:-local}
+      - EVIDENCE_DIR=/app/uploads
       - SMTP_HOST=${SMTP_HOST}
       - SMTP_PORT=${SMTP_PORT}
       - SMTP_USER=${SMTP_USER}
       - SMTP_PASSWORD=${SMTP_PASSWORD}
       - SMTP_SECURE=${SMTP_SECURE}
       - EMAIL_FROM=${EMAIL_FROM}
+    volumes:
+      # Evidence photos. A named volume, not a bind mount: it survives a rebuild, and
+      # nothing in the image writes here except the EvidenceStore.
+      - uploads:/app/uploads
     networks:
       - trackdown
 
 volumes:
   postgres_data:
     name: trackdown_postgres_data
+  uploads:
+    name: trackdown_uploads
 
 networks:
   trackdown:

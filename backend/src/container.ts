@@ -2,19 +2,23 @@ import { createSmtpEmailer } from "./adapters/email/smtp.js";
 import { createAnthropicLlm } from "./adapters/llm/anthropic.js";
 import { createOpenAiLlm } from "./adapters/llm/openai.js";
 import { createUnavailableLlm } from "./adapters/llm/unavailable.js";
-import type { Config, LlmProvider } from "./config/index.js";
+import { createLocalEvidenceStore } from "./adapters/storage/local.js";
+import type { Config, EvidenceProvider, LlmProvider } from "./config/index.js";
 import type { EmailPort } from "./ports/email.js";
 import type { LlmPort } from "./ports/llm.js";
+import type { EvidenceStore } from "./ports/storage.js";
 
 // The composition root: the only place that knows which adapter implements which port.
 // Everything else — routes, services, tests — takes a port. Same shape as My Read Coach.
 
 export interface Container {
-	/** Free-text log parsing today; photo fusion in WP2. */
+	/** Free-text log parsing and the photo fusion of /api/log/analyze. */
 	llm: LlmPort;
 	/** The coach (WP5). Same port, usually a bigger model. */
 	coachLlm: LlmPort;
 	email: EmailPort;
+	/** The bytes behind an evidence row (WP2). */
+	evidence: EvidenceStore;
 }
 
 export function createContainer(config: Config): Container {
@@ -22,7 +26,20 @@ export function createContainer(config: Config): Container {
 		llm: createLlm(config, config.llm.provider, config.llm.fusionModel),
 		coachLlm: createLlm(config, config.llm.coachProvider, config.llm.coachModel),
 		email: createSmtpEmailer(config.smtp),
+		evidence: createEvidenceStore(config.evidence.provider, config.evidence.dir),
 	};
+}
+
+function createEvidenceStore(provider: EvidenceProvider, root: string): EvidenceStore {
+	switch (provider) {
+		case "local":
+			return createLocalEvidenceStore({ root });
+
+		default:
+			// config/index.ts rejects unknown names at boot; this is here so adding one to
+			// EvidenceProvider without an adapter fails to compile.
+			throw new Error(`No evidence store adapter for provider "${String(provider)}".`);
+	}
 }
 
 function createLlm(config: Config, provider: LlmProvider, model: string): LlmPort {

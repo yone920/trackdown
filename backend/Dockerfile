@@ -23,6 +23,12 @@ COPY --from=builder /app/dist ./dist
 COPY migrations ./migrations
 COPY data ./data
 
+# The evidence volume mounts here (docker-compose.yml). It has to exist in the image and
+# be owned by `node`: Docker seeds a fresh named volume from the image's directory —
+# ownership included — and creates it root-owned if the path is missing, which the
+# unprivileged process could then not write to.
+RUN mkdir -p /app/uploads && chown node:node /app/uploads
+
 USER node
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
