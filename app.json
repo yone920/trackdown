@@ -16,7 +16,10 @@
         "NSCameraUsageDescription": "TrackDown uses the camera so you can photograph a machine, a display or a plate instead of typing what you did.",
         "NSPhotoLibraryUsageDescription": "TrackDown attaches photos from your library to a log as evidence for what you did or ate.",
         "NSMicrophoneUsageDescription": "TrackDown listens while you narrate a log. The audio never leaves your phone.",
-        "NSSpeechRecognitionUsageDescription": "TrackDown transcribes what you say on the device itself, so you can log a workout without typing."
+        "NSSpeechRecognitionUsageDescription": "TrackDown transcribes what you say on the device itself, so you can log a workout without typing.",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
       }
     },
     "android": {
@@ -29,7 +32,10 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "net.yonelab.trackdown",
-      "permissions": ["android.permission.CAMERA", "android.permission.RECORD_AUDIO"]
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "static",
