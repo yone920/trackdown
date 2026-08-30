@@ -14,6 +14,7 @@ Progress, Profile). Decisions already made — do not reopen them:
 | Voice | on-device transcription (`expo-speech-recognition`); no audio upload |
 | Health | optional source; every row has `source`; overlap rules in concept-v2 |
 | Providers | every third-party behind a port; swapping = one env var, zero refactor |
+| Auth | **email + password** (Better Auth `emailAndPassword`); the email-OTP flow is removed; no SMTP. Password reset = admin script until SMTP exists |
 | Branch | `migrate-off-supabase` (already deployed to the Docker host); PR to `main` at the end |
 
 ## Architecture rules (SOLID, enforced by lint + tests)
@@ -58,6 +59,19 @@ backend/src/
 
 Run in order; each is one PR-sized change with its own tests. "Done" means: `make typecheck`,
 `make lint`, `make test` green; the WP's acceptance list checked; `docs/` updated where noted.
+
+### WP0a — Email + password auth (backend + app, small)
+Replace the `emailOTP` plugin with `emailAndPassword: { enabled: true, minPasswordLength: 8 }`;
+delete the OTP send/verify code paths and `adapters/email/smtp.ts` usage from auth (keep the
+EmailPort for later reset emails, wired to a console logger when SMTP_HOST is unset).
+Add `npm run reset-password -- <email> <newPassword>` (`src/scripts/reset-password.ts`, uses
+Better Auth's internal adapter/`auth.api` to set the hash — never write bcrypt/scrypt by hand).
+App: `lib/auth.ts` exposes `signIn(email, password)`, `signUp(email, password)`; the sign-in
+screen gets a password field and a "Create account" toggle; keep the existing visual style.
+Delete the OTP user `yonas.fhs@gmail.com` row on the host DB only if the user asks — otherwise
+leave it; a fresh sign-up with the same email must produce a clear "already exists" error, and
+the reset script is the way to give that account a password.
+Accept: tests cover sign-up, sign-in, wrong password, sign-out, reset script; OTP endpoints 404.
 
 ### WP0 — Ports & container refactor (backend, ~small)
 Extract `LlmPort` from `services/parseLog.ts`; add `adapters/llm/anthropic.ts` and
