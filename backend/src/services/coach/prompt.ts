@@ -35,6 +35,10 @@ WHAT YOU DO NOT DECIDE
   choose from that list. Never round them, never "progress" them, never average them.
 - An exercise that is not in the list has no history: give it a null load, sets and reps and
   say in its note what to base the weight on. Prefer exercises that are in the list.
+- Which way a load points. A prescribed load marked "of assistance" is the HELP an assisted
+  machine gives, not resistance: more of it is easier, and progress is the number coming
+  DOWN towards an unassisted rep. Never describe a smaller one as "lighter", never praise a
+  bigger one, and never tell the user to add weight to one.
 - Calorie and protein numbers. Use the ones in EATING TARGETS.
 
 RULES YOU MUST FOLLOW
@@ -87,7 +91,13 @@ function prescription(item: Prescription): string {
 		item.minutes != null
 			? `${item.minutes} min`
 			: [
-					item.load_lb == null ? null : `${item.load_lb} lb`,
+					// "of assistance" is not decoration: it is the difference between telling
+					// someone to work harder and telling them to work easier (migration 0013).
+					item.load_lb == null
+						? null
+						: `${item.load_lb} lb${
+								item.load_direction === "assistance" ? " of assistance (help, not resistance — less is stronger)" : ""
+							}`,
 					item.sets == null || item.reps == null ? null : `${item.sets} × ${item.reps}`,
 				]
 					.filter(Boolean)

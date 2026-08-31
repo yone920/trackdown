@@ -14,6 +14,17 @@ import type pg from "pg";
 export const CATEGORIES = ["cardio", "strength", "mobility", "other"] as const;
 export type ExerciseCategory = (typeof CATEGORIES)[number];
 
+/**
+ * Which way the number on the stack points (migration 0013). On almost everything the load
+ * is what you are lifting: more of it is harder. On an assisted machine it is the help the
+ * machine gives, so more of it is *easier* and progress is the number coming down. The
+ * coach's progression and the day's delta both read this; it is a fact about the movement,
+ * which is why it lives in the catalogue and not on the log.
+ */
+export const LOAD_DIRECTIONS = ["resistance", "assistance"] as const;
+export type LoadDirection = (typeof LOAD_DIRECTIONS)[number];
+export const DEFAULT_LOAD_DIRECTION: LoadDirection = "resistance";
+
 export interface CatalogExercise {
 	name: string;
 	aliases: string[];
@@ -21,6 +32,7 @@ export interface CatalogExercise {
 	primary_muscles: string[];
 	secondary_muscles: string[];
 	equipment: string[];
+	load_direction: LoadDirection;
 }
 
 export const EXERCISES_FILE = path.resolve(
@@ -49,6 +61,11 @@ export async function loadExerciseCatalog(file: string = EXERCISES_FILE): Promis
 		for (const key of ["aliases", "primary_muscles", "secondary_muscles", "equipment"] as const) {
 			if (!isStringArray(e[key])) throw new Error(`${where} (${e.name}): ${key} must be an array of strings`);
 		}
+		// Optional, and absent on all but a handful: a load that is resistance is the rule,
+		// so the JSON only says so when it is not.
+		if (e.load_direction !== undefined && !LOAD_DIRECTIONS.includes(e.load_direction as LoadDirection)) {
+			throw new Error(`${where} (${e.name}): load_direction must be one of ${LOAD_DIRECTIONS.join(", ")}`);
+		}
 		const key = e.name.trim().toLowerCase();
 		if (seen.has(key)) throw new Error(`${where}: duplicate name "${e.name}"`);
 		seen.add(key);
@@ -60,6 +77,7 @@ export async function loadExerciseCatalog(file: string = EXERCISES_FILE): Promis
 			primary_muscles: e.primary_muscles as string[],
 			secondary_muscles: e.secondary_muscles as string[],
 			equipment: e.equipment as string[],
+			load_direction: (e.load_direction as LoadDirection | undefined) ?? DEFAULT_LOAD_DIRECTION,
 		};
 	});
 }
@@ -84,14 +102,15 @@ export async function seedExercises(
 	// One jsonb payload rather than parallel arrays: text[] columns of different lengths
 	// cannot travel as a rectangular multidimensional array.
 	const { rows } = await client.query<{ inserted: boolean }>(
-		`INSERT INTO exercise_catalog (name, aliases, category, primary_muscles, secondary_muscles, equipment)
+		`INSERT INTO exercise_catalog (name, aliases, category, primary_muscles, secondary_muscles, equipment, load_direction)
 		 SELECT
 			e->>'name',
 			ARRAY(SELECT jsonb_array_elements_text(e->'aliases')),
 			e->>'category',
 			ARRAY(SELECT jsonb_array_elements_text(e->'primary_muscles')),
 			ARRAY(SELECT jsonb_array_elements_text(e->'secondary_muscles')),
-			ARRAY(SELECT jsonb_array_elements_text(e->'equipment'))
+			ARRAY(SELECT jsonb_array_elements_text(e->'equipment')),
+			COALESCE(e->>'load_direction', 'resistance')
 		 FROM jsonb_array_elements($1::jsonb) AS e
 		 ON CONFLICT (name) DO UPDATE SET
 			aliases = EXCLUDED.aliases,
@@ -99,6 +118,7 @@ export async function seedExercises(
 			primary_muscles = EXCLUDED.primary_muscles,
 			secondary_muscles = EXCLUDED.secondary_muscles,
 			equipment = EXCLUDED.equipment,
+			load_direction = EXCLUDED.load_direction,
 			updated_at = NOW()
 		 RETURNING (xmax = 0) AS inserted`,
 		[JSON.stringify(catalog)]

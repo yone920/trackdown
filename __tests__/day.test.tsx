@@ -4,6 +4,7 @@ import React from 'react';
 
 import Day from '@/app/day/[date]';
 import { makeDay } from './fixtures';
+import { C } from '@/lib/theme';
 
 // The Day screen against a fixture day: the verdict, the reading, the three stats, and
 // each of the four sections built from what `GET /api/day/:date` returned.
@@ -181,6 +182,40 @@ describe('Day', () => {
     expect(screen.getByText('Bench Press')).toBeTruthy();
     expect(screen.getByText('3 × 8 · 135 lb')).toBeTruthy();
     expect(screen.getByText('+5 lb')).toBeTruthy();
+  });
+
+  it('colours the delta by whether it was progress, not by which way the number went', async () => {
+    // The field report at the end of its journey: on an assisted machine the load is the
+    // help the machine gives, so "-5 lb" is five pounds less help and reads green.
+    const assisted = JSON.parse(JSON.stringify(CLOSED)) as typeof CLOSED;
+    const lift = assisted.items.activities[0]!;
+    lift.exercise = 'Assisted Chin-Up';
+    lift.load_lb = 50;
+    lift.delta_vs_last = {
+      text: '-5 lb',
+      direction: 'down',
+      sentiment: 'good',
+      field: 'load_lb',
+      load_lb: -5,
+      sets: null,
+      reps: null,
+      previous: { logged_at: '2026-08-22T18:00:00.000Z', load_lb: 55, sets: 3, reps: 8 },
+    };
+    mockApi.mockImplementation((path: string) =>
+      path.startsWith('/api/day/') ? Promise.resolve(assisted) : Promise.resolve(null),
+    );
+
+    renderDay();
+    await waitFor(() => expect(screen.getByText('-5 lb')).toBeTruthy());
+    const style = screen.getByText('-5 lb').props.style as unknown[];
+    expect(JSON.stringify(style)).toContain(C.good);
+
+    // The same text with the resistance reading is the one to look at, not the good news.
+    lift.delta_vs_last.sentiment = 'watch';
+    screen.unmount();
+    renderDay();
+    await waitFor(() => expect(screen.getByText('-5 lb')).toBeTruthy());
+    expect(JSON.stringify(screen.getByText('-5 lb').props.style)).toContain(C.accent);
   });
 
   it('keeps a Health row out of the muscle groups and badges it instead', async () => {

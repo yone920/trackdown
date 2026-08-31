@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type pg from "pg";
 import type { Brief, BriefRevision, CoachBriefInputs, CoachPlan, CoachPort, CoachToday } from "../../ports/coach.js";
+import type { LoadDirection } from "../../db/exercises.js";
 import { computeDay, type DayView } from "../day.js";
 import { lookupExercises } from "../entries.js";
 import type { ReferenceLoad } from "../fusion/schema.js";
@@ -277,7 +278,14 @@ export async function loadCoachInputs(
 		},
 	});
 
-	const rules = buildRules({ features, goals, equipment: await equipmentFor(db, features), background });
+	const catalogFacts = await catalogFactsFor(db, features, background.reference_loads);
+	const rules = buildRules({
+		features,
+		goals,
+		equipment: catalogFacts.equipment,
+		loadDirection: catalogFacts.loadDirection,
+		background,
+	});
 
 	// Where they train, and what has been seen there (migration 0012). Two small reads and
 	// both skipped entirely when no place has ever been named, which is most accounts.
@@ -324,15 +332,36 @@ export async function loadCoachInputs(
 	};
 }
 
-/** Equipment per exercise, so the progression can step a stack by percentage (rules.ts). */
-async function equipmentFor(db: Queryable, features: CoachFeatures): Promise<Record<string, string[]>> {
-	const names = features.exercises.map((exercise) => exercise.exercise.trim().toLowerCase());
-	if (names.length === 0) return {};
-	const { rows } = await db.query<{ name: string; equipment: string[] | null }>(
-		`SELECT name, equipment FROM exercise_catalog WHERE lower(name) = ANY($1::text[])`,
+/**
+ * The two catalogue facts the progression reads: the equipment (so a stack steps by
+ * percentage) and the load direction (so an assisted machine progresses *downwards* —
+ * migration 0013). One query, because they are one row.
+ *
+ * Stated reference loads are looked up too: an exercise the log has never seen still gets
+ * a prescription from what the user says they lift, and "assisted pull-up, 60 lb" is
+ * exactly the kind of thing someone states.
+ */
+async function catalogFactsFor(
+	db: Queryable,
+	features: CoachFeatures,
+	referenceLoads: readonly ReferenceLoad[]
+): Promise<{ equipment: Record<string, string[]>; loadDirection: Record<string, LoadDirection> }> {
+	const names = [
+		...new Set(
+			[...features.exercises.map((exercise) => exercise.exercise), ...referenceLoads.map((load) => load.exercise)]
+				.map((name) => name.trim().toLowerCase())
+				.filter(Boolean)
+		),
+	];
+	if (names.length === 0) return { equipment: {}, loadDirection: {} };
+	const { rows } = await db.query<{ name: string; equipment: string[] | null; load_direction: LoadDirection }>(
+		`SELECT name, equipment, load_direction FROM exercise_catalog WHERE lower(name) = ANY($1::text[])`,
 		[names]
 	);
-	return Object.fromEntries(rows.map((row) => [row.name.trim().toLowerCase(), row.equipment ?? []]));
+	return {
+		equipment: Object.fromEntries(rows.map((row) => [row.name.trim().toLowerCase(), row.equipment ?? []])),
+		loadDirection: Object.fromEntries(rows.map((row) => [row.name.trim().toLowerCase(), row.load_direction])),
+	};
 }
 
 // ---------------------------------------------------------------------------

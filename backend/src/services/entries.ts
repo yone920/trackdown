@@ -1,6 +1,7 @@
 import type pg from "pg";
 import { z } from "zod";
-import { CATEGORIES, type ExerciseCategory } from "../db/exercises.js";
+import { CATEGORIES, type ExerciseCategory, type LoadDirection } from "../db/exercises.js";
+import { buildExerciseIndex } from "./exerciseMatch.js";
 import { EXPERIENCE_LEVELS, ReferenceLoadSchema } from "./fusion/schema.js";
 
 // Data access for the four user-owned tables. Every function takes the session's
@@ -158,6 +159,8 @@ export interface CatalogMatch {
 	primary_muscles: string[];
 	secondary_muscles: string[];
 	aliases: string[];
+	/** Which way its load points (migration 0013). See db/exercises.ts. */
+	load_direction: LoadDirection;
 }
 
 /**
@@ -165,6 +168,15 @@ export interface CatalogMatch {
  * "db bench" and "Dumbbell bench press" both find "Dumbbell Bench Press". Keyed by the
  * lower-cased name that was asked for. Unknown names are simply absent: the catalogue
  * normalises, it does not gate what the user is allowed to log.
+ *
+ * **It normalises spelling and nothing else.** A phrase carrying a qualifier the entry does
+ * not carry — "assisted chin up" against Chin-Up — is refused rather than snapped to the
+ * nearest name, and the caller keeps the user's own words with no `exercise_id`. That
+ * decision lives in services/exerciseMatch.ts, with the field report that paid for it.
+ *
+ * The whole catalogue is read (a curated list in the low hundreds) because the match is
+ * decided in TypeScript: expressing "every meaningful word is accounted for" in SQL would
+ * be a worse version of the same code.
  */
 export async function lookupExercises(
 	db: Queryable,
@@ -181,14 +193,13 @@ export async function lookupExercises(
 	if (wanted.length === 0) return matches;
 
 	const { rows } = await db.query<CatalogMatch>(
-		`SELECT id, name, category, primary_muscles, secondary_muscles, aliases
-		 FROM exercise_catalog WHERE lower(name) = ANY($1::text[]) OR aliases && $1::text[]`,
-		[wanted]
+		`SELECT id, name, category, primary_muscles, secondary_muscles, aliases, load_direction
+		   FROM exercise_catalog ORDER BY name`
 	);
-	for (const row of rows) {
-		for (const key of [row.name.toLowerCase(), ...row.aliases]) {
-			if (wanted.includes(key)) matches.set(key, row);
-		}
+	const index = buildExerciseIndex(rows);
+	for (const key of wanted) {
+		const match = index.find(key);
+		if (match) matches.set(key, match);
 	}
 	return matches;
 }

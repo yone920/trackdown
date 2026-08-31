@@ -16,7 +16,7 @@ import { clock, dateEyebrow, dateLabel, grams, kcal, slotLabel } from '@/lib/for
 import { localDateKey, useDay, useDeleteRecord, useGoals, useProfile, useWeek } from '@/lib/queries';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
 import { todayCards } from '@/lib/today-cards';
-import type { ActionKind, DayView, MealSlot } from '@/lib/types';
+import type { ActionKind, DayView, DeltaVsLast, MealSlot } from '@/lib/types';
 
 // Today (docs/design-system.md §Today). The live day: where you are, what the goal is,
 // the cards that goal decides, the model's two sentences about right now, the arc, and
@@ -271,7 +271,7 @@ export default function Today() {
                       deleteLabel={activity.exercise ?? activity.description}
                       divider={index < members.length - 1}>
                       {activity.delta_vs_last ? (
-                        <Sub style={{ marginTop: 3, color: deltaColor(activity.delta_vs_last.direction) }}>
+                        <Sub style={{ marginTop: 3, color: deltaColor(activity.delta_vs_last) }}>
                           {activity.delta_vs_last.text}
                         </Sub>
                       ) : null}
@@ -374,9 +374,16 @@ export default function Today() {
   );
 }
 
-function deltaColor(direction: 'up' | 'down' | 'same' | 'new'): string {
-  if (direction === 'up') return C.good;
-  if (direction === 'down') return C.accent;
+/**
+ * Green for progress, amber for a step back, quiet for neither. Read from `sentiment`, not
+ * from which way the number went: on an assisted machine the load is the help the machine
+ * gives, so "-5 lb" is less help and is the good news. `direction` is the fallback for a
+ * response from a build before the field existed.
+ */
+function deltaColor(delta: DeltaVsLast): string {
+  const sentiment = delta.sentiment ?? (delta.direction === 'up' ? 'good' : delta.direction === 'down' ? 'watch' : 'neutral');
+  if (sentiment === 'good') return C.good;
+  if (sentiment === 'watch') return C.accent;
   return C.mute;
 }
 

@@ -1,3 +1,4 @@
+import { missingQualifiers } from "../exerciseMatch.js";
 import type { ActivityItem, Refinement } from "./schema.js";
 
 // "Was it a Chest-Supported Row?" — the one-tap upgrade from a movement the user could only
@@ -129,9 +130,15 @@ export function bestCandidate({ said, catalog }: SuggestOptions): string | null 
 /**
  * The refinement offer for one activity item, if there is one worth making.
  *
- * Three gates, all of them cheap: the model was not certain; the name it kept is not already
+ * Four gates, all of them cheap: the model was not certain; the name it kept is not already
  * a catalogue name or alias (if it is, the save resolves it and there is nothing to upgrade);
- * and the words point at exactly one catalogue entry.
+ * the words point at exactly one catalogue entry; and that entry is not the user's movement
+ * with a qualifier taken off it.
+ *
+ * The last one is the field report ("assisted chin up" → "Was it a Chin-Up?"). This matcher
+ * is loose on purpose — it is reading a rambling description — so the whole word-accounting
+ * of services/exerciseMatch.ts would silence it entirely; only the qualifier half applies,
+ * and only to the movement phrase, because "assisted" in the words is never noise.
  */
 export function suggestRefinement(
 	item: Pick<ActivityItem, "exercise" | "equipment" | "description" | "confidence">,
@@ -144,5 +151,10 @@ export function suggestRefinement(
 	if (!name) return null;
 	// Suggesting what is already written is not an offer.
 	if (item.exercise && item.exercise.trim().toLowerCase() === name.toLowerCase()) return null;
-	return { question: `Was it a ${name}?`, exercise: name };
+	const suggested = catalog.find((entry) => entry.name === name);
+	if (item.exercise && suggested && missingQualifiers(item.exercise, suggested).length > 0) return null;
+	// "an Assisted Chin-Up", not "a Assisted Chin-Up": the assisted family made the article
+	// visible for the first time.
+	const article = /^[aeiou]/i.test(name) ? "an" : "a";
+	return { question: `Was it ${article} ${name}?`, exercise: name };
 }

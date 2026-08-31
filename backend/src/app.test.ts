@@ -3348,6 +3348,125 @@ describe("always log — a movement nobody could name", () => {
 	});
 });
 
+// ---------------------------------------------------------------------------
+// The qualifier is the movement · an assisted machine is help, not load
+// ---------------------------------------------------------------------------
+
+/** The field report, said the way it was said. */
+const ASSISTED_CHIN_UP = "assisted chin up with 55 pounds";
+
+describe("a qualifier the catalogue must not drop", () => {
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("assisted@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+	}, 60_000);
+
+	it("saves it as an Assisted Chin-Up, never as a Chin-Up", async () => {
+		// What the reader returns now the prompt tells it to keep the user's qualifiers.
+		nextFusion({
+			kind: "activities",
+			items: [
+				{
+					exercise: "assisted chin up",
+					equipment: "assisted pull-up machine",
+					description: "Assisted chin-up at 55 lb",
+					sets: null,
+					reps: null,
+					load_lb: 55,
+					duration_min: null,
+					distance_mi: null,
+					kcal: 40,
+					confidence: "high",
+				},
+			],
+		});
+		const analyzed = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("text", ASSISTED_CHIN_UP)
+			.field("tz_offset_min", "0");
+		expect(analyzed.status).toBe(200);
+		expect(analyzed.body.results[0].items[0]).toMatchObject({ exercise: "assisted chin up", load_lb: 55 });
+
+		const saved = await request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({
+				client_id: randomUUID(),
+				results: analyzed.body.results,
+				text: ASSISTED_CHIN_UP,
+				text_kind: "transcript",
+				tz_offset_min: 0,
+			});
+		expect(saved.status).toBe(201);
+		const row = saved.body.activities[0];
+		// The whole report, in four assertions: the qualifier survived, the row is the
+		// assisted movement and not the plain one, and the 55 is still 55.
+		expect(row.exercise).toBe("Assisted Chin-Up");
+		expect(row.exercise).not.toBe("Chin-Up");
+		expect(row.load_lb).toBe(55);
+		expect(row.exercise_id).not.toBeNull();
+
+		const { rows } = await db.pool.query<{ name: string; load_direction: string }>(
+			`SELECT name, load_direction FROM exercise_catalog WHERE id = $1`,
+			[row.exercise_id]
+		);
+		expect(rows[0]).toMatchObject({ name: "Assisted Chin-Up", load_direction: "assistance" });
+	});
+
+	it("shows five pounds LESS assistance as the good news on the day", async () => {
+		const today = localDay(new Date(), 0).date;
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({ description: "assisted chin-up at 50 lb", exercise: "assisted chin up", load_lb: 50, kcal: 40 });
+
+		const day = await request(app).get(`/api/day/${today}?tz=0`).set(headers);
+		const rows = day.body.items.activities.filter((item: { exercise: string }) => item.exercise === "Assisted Chin-Up");
+		expect(rows).toHaveLength(2);
+		// The second is 5 lb lighter: the number went down, and that is progress here.
+		expect(rows[1].delta_vs_last).toMatchObject({ text: "-5 lb", direction: "down", sentiment: "good" });
+	});
+
+	it("tells the coach the load is help, not resistance", async () => {
+		coachLlm.nextOutput = READING;
+		const asked = await request(app).get(`/api/coach/next?tz=0`).set(headers);
+		expect(asked.status).toBe(200);
+		const prompt = buildCoachPrompt(coach.inputs.at(-1)!);
+		expect(prompt).toContain("Assisted Chin-Up");
+		expect(prompt).toContain("of assistance (help, not resistance — less is stronger)");
+		expect(prompt).toContain("ASSISTED MACHINES");
+		expect(prompt).toContain("progress is the number coming\n  DOWN");
+	});
+
+	it("keeps the user's words verbatim for a variation the catalogue does not have", async () => {
+		// The other half of the rule, and what the old matcher got wrong: a qualifier with
+		// no entry behind it is not a licence to save the nearest name.
+		const created = await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({ description: "3 × 5 deficit deadlift at 225", exercise: "deficit deadlift", load_lb: 225, kcal: 90 });
+		expect(created.status).toBe(201);
+		expect(created.body[0]).toMatchObject({ exercise: "deficit deadlift", exercise_id: null });
+
+		// A correction obeys the same rule, in both directions.
+		const patched = await request(app)
+			.patch(`/api/entries/movement/${created.body[0].id}`)
+			.set(headers)
+			.send({ exercise: "paused bench press" });
+		expect(patched.body).toMatchObject({ exercise: "paused bench press", exercise_id: null });
+
+		const fixed = await request(app)
+			.patch(`/api/entries/movement/${created.body[0].id}`)
+			.set(headers)
+			.send({ exercise: "assisted dips" });
+		expect(fixed.body.exercise).toBe("Assisted Dip");
+		expect(fixed.body.exercise_id).not.toBeNull();
+	});
+});
+
 describe("the clarify loop — a question that remembers itself", () => {
 	let headers: Record<string, string>;
 

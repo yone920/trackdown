@@ -77,7 +77,15 @@ export type GoalsView = {
 
 export type DeltaVsLast = {
   text: string;
+  /** Which way the number went. */
   direction: 'up' | 'down' | 'same' | 'new';
+  /**
+   * Whether that was progress. Not the same question as `direction`: on an assisted machine
+   * the load is the help the machine gives, so "-5 lb" is five pounds less help and reads
+   * green. Colour by this, never by `direction`. Optional so a row cached from an older
+   * build still renders.
+   */
+  sentiment?: 'good' | 'watch' | 'neutral';
   field: 'load_lb' | 'sets' | 'reps' | 'duration_min' | 'distance_mi' | null;
   load_lb: number | null;
   sets: number | null;
