@@ -183,7 +183,7 @@ in both directions.
 - No new dependencies. No migration.
 
 **Tests** — 422 passing, 2 skipped in `backend` (was 410/2, with the key set so the contract
-tests run); 96 passing in the app (was 89).
+tests run); 97 passing in the app (was 89).
 
 - `src/services/fusion/fusion.test.ts` (+6): the kind each result revises through and the
   silence on a question; the compact part with the provenance and the chip taken out; the
@@ -197,10 +197,12 @@ tests run); 96 passing in the app (was 89).
   thirteen**: "reps were 4 and it was 50 pounds" changing two numbers and leaving the third,
   the movement, the machine and the muscle groups alone; and "that meal was lunch not
   dinner" moving the slot and nothing else.
-- `__tests__/log.test.tsx` (rewritten, 13): the button that says Log, the review page as its
+- `__tests__/log.test.tsx` (rewritten, 14): the button that says Log, the review page as its
   own page, **no TextInput anywhere on it**, the told change round trip with what goes out
-  on the wire, "never mind", the question that stays on the input step, the stack of parts
-  with one ✕ and one save, the clarify round, and the keyboard rule on both platforms.
+  on the wire, the confirm still carrying the words that were SAID rather than the
+  instruction that changed them, "never mind", the question that stays on the input step,
+  the stack of parts with one ✕ and one save, the clarify round, and the keyboard rule on
+  both platforms.
 - `__tests__/log-correction.test.tsx` (new, 2): the saved row read-only with nothing to save,
   then told → `revise.record` → the review again → the PATCH with the revised values and the
   muscle groups still on it.

@@ -88,6 +88,10 @@ export default function LogSheet() {
   // "yes" means something: an answer with no question attached is not a log (concept-v2
   // §One input mechanism — the app remembers what it asked).
   const [clarify, setClarify] = useState<{ originalText: string; question: string } | null>(null);
+  // The words the log was MADE from, kept apart from what is in the box. "Make a change"
+  // empties the box and puts an instruction in it, and an instruction is not the log: the
+  // DayLog has to go on quoting what the user actually said (design-system §DayLog).
+  const [said, setSaid] = useState<{ text: string; transcribed: boolean } | null>(null);
   // True from "Make a change" until the change is told: the box is then an instruction
   // about the parts on screen, not a new log.
   const [revising, setRevising] = useState(false);
@@ -125,6 +129,7 @@ export default function LogSheet() {
     setDateChoice('proposed');
     setTranscribed(false);
     setClarify(null);
+    setSaid(null);
     setRevising(false);
     setChanged(false);
     setError(null);
@@ -154,6 +159,9 @@ export default function LogSheet() {
         setText('');
       } else {
         setClarify(null);
+        // The words that produced these parts, kept for the confirm even after a change
+        // has been told into the same box.
+        setSaid({ text: withText.trim(), transcribed });
       }
       setEvidenceIds(response.evidence.map((item) => item.id));
       setEvidenceParts(response.evidence.map((item) => item.part ?? 0));
@@ -237,8 +245,10 @@ export default function LogSheet() {
         results: toSave,
         evidenceIds,
         evidenceParts,
-        text: text.trim() || null,
-        textKind: transcribed ? 'transcript' : 'text',
+        // What was said, not what is in the box: after a revision the box held the
+        // instruction and was emptied, and neither of those is the log.
+        text: said?.text || text.trim() || null,
+        textKind: (said ? said.transcribed : transcribed) ? 'transcript' : 'text',
         source: evidenceIds.length > 0 ? 'fused' : 'manual',
         ...(toSave.some((result) => result.kind === 'goal')
           ? { confirmDate: dateChoice === 'confirm_date', noDate: dateChoice === 'no_date' }
