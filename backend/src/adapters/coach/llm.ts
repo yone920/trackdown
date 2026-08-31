@@ -1,4 +1,4 @@
-import type { Brief, CoachBriefInputs, CoachPort } from "../../ports/coach.js";
+import type { Brief, BriefRevision, CoachBriefInputs, CoachPort } from "../../ports/coach.js";
 import type { LlmPort } from "../../ports/llm.js";
 import { buildCoachPrompt } from "../../services/coach/prompt.js";
 import { clampBrief, COACH_BRIEF_SCHEMA_NAME, CoachBriefSchema } from "../../services/coach/schema.js";
@@ -21,24 +21,25 @@ const MAX_TOKENS = 1200;
 export function createLlmCoach(llm: LlmPort): CoachPort {
 	return {
 		model: llm.model,
-		async brief(inputs: CoachBriefInputs): Promise<Brief> {
+		async brief(inputs: CoachBriefInputs, revision?: BriefRevision): Promise<Brief> {
+			const question = revision
+				? `Revise today's brief as I asked. Return the whole brief, and copy the prescribed numbers exactly.`
+				: "What should I do today? Answer from the facts above, and copy the prescribed numbers exactly.";
 			const ask = () =>
 				llm.parseStructured({
-					system: buildCoachPrompt(inputs),
+					system: buildCoachPrompt(inputs, revision),
 					schema: CoachBriefSchema,
 					schemaName: COACH_BRIEF_SCHEMA_NAME,
 					maxTokens: MAX_TOKENS,
-					messages: [
-						{
-							role: "user",
-							content: "What should I do today? Answer from the facts above, and copy the prescribed numbers exactly.",
-						},
-					],
+					messages: [{ role: "user", content: question }],
 				});
 			try {
 				return clampBrief(await ask());
 			} catch (error) {
 				// One retry: a malformed structured output is usually a one-off sample.
+				// A brief that parses but says nothing to do is retried a level up, in
+				// services/coach/coach.ts, so that guard holds for every CoachPort and not
+				// only for this one.
 				console.warn("⚠️  Coach brief failed once, retrying:", error instanceof Error ? error.message.split("\n")[0] : error);
 				return clampBrief(await ask());
 			}

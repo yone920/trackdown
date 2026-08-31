@@ -189,6 +189,23 @@ export const ProposedTimelineSchema = z.object({
 	realistic: z.boolean().nullable(),
 });
 
+/** How long the user has been training, in their own three words. */
+export const EXPERIENCE_LEVELS = ["beginner", "intermediate", "advanced"] as const;
+export type ExperienceLevel = (typeof EXPERIENCE_LEVELS)[number];
+
+/**
+ * "I bench 165 for 3×5" — a load the user *states* for an exercise this log has never
+ * seen. It is not a logged session and it never becomes one: it is what the coach
+ * prescribes from until there is real history, and the moment there is, the log wins
+ * (services/coach/rules.ts).
+ */
+export const ReferenceLoadSchema = z.object({
+	exercise: z.string().trim().min(1).max(120),
+	load_lb: z.number().min(0).max(2000),
+	reps: z.number().int().min(1).max(100).nullable(),
+});
+export type ReferenceLoad = z.infer<typeof ReferenceLoadSchema>;
+
 /** Plan fields a spoken constraint or preference may set on the profile. */
 export const ProfileFieldsSchema = z
 	.object({
@@ -199,6 +216,11 @@ export const ProfileFieldsSchema = z
 		environment: z.string().trim().max(80).nullable(),
 		equipment: z.array(z.string().trim().min(1).max(60)).max(30).nullable(),
 		eatback: z.enum(["none", "half", "all"]).nullable(),
+		// The training background (migration 0011). Stated once, usually on day one, and
+		// the reason a cold start does not have to assume a beginner.
+		experience: z.enum(EXPERIENCE_LEVELS).nullable(),
+		background: z.string().trim().max(600).nullable(),
+		reference_loads: z.array(ReferenceLoadSchema).max(12).nullable(),
 	})
 	.nullable();
 export type ProfileFields = z.infer<typeof ProfileFieldsSchema>;

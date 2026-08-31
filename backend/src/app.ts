@@ -6,6 +6,7 @@ import type pg from "pg";
 import type { Auth } from "./auth.js";
 import { checkDatabase } from "./db/client.js";
 import { createRequireUser } from "./middleware/auth.js";
+import { beginTiming } from "./middleware/timing.js";
 import type { CoachPort } from "./ports/coach.js";
 import type { ExerciseMediaStore } from "./ports/exerciseMedia.js";
 import type { EvidenceStore } from "./ports/storage.js";
@@ -63,6 +64,9 @@ export function createApp({
 	const app = express();
 	app.set("trust proxy", 1); // behind cloudflared
 
+	// First of all, so `total` on a Server-Timing header covers the whole stack.
+	app.use(beginTiming);
+
 	app.use(
 		cors({
 			origin: (origin, callback) => {
@@ -71,7 +75,7 @@ export function createApp({
 				else callback(new Error(`Origin ${origin} not allowed by CORS`));
 			},
 			credentials: true,
-			exposedHeaders: ["set-auth-token"],
+			exposedHeaders: ["set-auth-token", "Server-Timing"],
 		})
 	);
 

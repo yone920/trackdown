@@ -5,12 +5,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Control } from '@/components/control';
 import { IconCamera, IconChevronLeft, IconKeyboard, IconMic } from '@/components/icons';
-import { Card, Chip, Chips, GroupHeading, Row, Section } from '@/components/kit';
+import { Card, Chip, Chips, GroupHeading, Row, Section, SkeletonLines } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { openExercise } from '@/lib/exercise';
 import { clock } from '@/lib/format';
 import { getSpeech } from '@/lib/ports/speech';
-import { localDateKey, useCoachNext, useRegenerateCoach, useUpdateGoal } from '@/lib/queries';
+import { localDateKey, useAskCoach, useCoachNext, useUpdateGoal } from '@/lib/queries';
 import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
 import type { CoachBrief } from '@/lib/types';
 
@@ -20,9 +20,15 @@ import type { CoachBrief } from '@/lib/types';
 // twice is consistent and free, and *Regenerate* is explicit.
 //
 // Context comes the usual way (concept-v2 §Principles 7): the same Photo / Speak / Type
-// panel. Typed context is a query parameter on this ask; a photo or a spoken line goes
-// through the Log sheet in `coach_context` mode, which saves it against today and every
-// later ask reads it back.
+// panel. A photo or a spoken line goes through the Log sheet in `coach_context` mode,
+// which saves it against today and every later ask reads it back.
+//
+// The typed box does two different jobs and says which one it is doing. Before there is a
+// brief it is context for the first ask. Once there is one, the user is looking at an
+// answer and what they type is a change to *it* — "make it 8 exercises", "switch to legs"
+// — so it is sent as a `revision` and the server hands the model this brief to rewrite.
+// The brief on screen never goes away while that runs, and it never goes away when it
+// fails either: a note appears above it saying what happened.
 //
 // The nudge's button is not generated. `nudge_action` is chosen by
 // backend/src/services/coach/rules.ts and only ever routes — the coach proposes, the
@@ -35,20 +41,36 @@ export default function Coach() {
   const speech = useMemo(() => getSpeech(), []);
 
   const [context, setContext] = useState('');
-  const [asked, setAsked] = useState<string | null>(null);
 
-  const coach = useCoachNext(asked);
-  const regenerate = useRegenerateCoach();
+  const coach = useCoachNext();
+  const askCoach = useAskCoach();
   const updateGoal = useUpdateGoal();
 
   const brief: CoachBrief | null = coach.data?.brief ?? null;
-  const busy = coach.isLoading || coach.isFetching || regenerate.isPending;
+  const asking = askCoach.isPending;
+  const busy = coach.isLoading || coach.isFetching || asking;
   const action = brief?.nudge_action ?? coach.data?.nudge_action ?? null;
 
+  // Three ways this screen can have something to say above the brief, in the order they
+  // matter: the server kept the old answer and said why; the request never landed; the
+  // brief is simply older than the log. None of them replaces the brief.
+  const note =
+    (asking ? null : (coach.data?.note ?? null)) ??
+    (askCoach.isError && !asking ? (askCoach.error as Error).message : null);
+
+  /**
+   * With a brief on screen the input is an *adjustment* to it — that is what the user
+   * means by typing into a page that already answered them. With no brief yet it is
+   * context for the first ask. An empty box is a plain regenerate either way.
+   */
   const ask = () => {
-    const line = context.trim() || null;
-    setAsked(line);
-    regenerate.mutate(line);
+    const line = context.trim();
+    if (!line) {
+      askCoach.mutate({});
+      return;
+    }
+    askCoach.mutate(brief ? { revision: line } : { context: line });
+    setContext('');
   };
 
   const tellIt = () => router.push({ pathname: '/log', params: { hint: 'coach_context' } });
@@ -61,6 +83,11 @@ export default function Coach() {
     }
     if (action.kind === 'adjust_goal') router.push({ pathname: '/log', params: { hint: 'goal' } });
     else if (action.kind === 'weigh_in') router.push({ pathname: '/log', params: { hint: 'weight' } });
+    // The cold-start nudge: nothing logged and nothing said, so the one useful thing is
+    // for the user to say where they are starting from — which is a statement, and goes
+    // in through the same Log sheet as every other one.
+    else if (action.kind === 'tell_background')
+      router.push({ pathname: '/log', params: { hint: 'statement' } });
     else router.push(`/day/${localDateKey()}/log`);
   };
 
@@ -93,10 +120,33 @@ export default function Coach() {
         </Sub>
       ) : null}
 
+      {/* Nothing to keep yet: the shape of a brief while the first one is written. */}
       {busy && !brief ? (
-        <View style={{ marginTop: 40, alignItems: 'center' }}>
-          <ActivityIndicator color={C.mute} />
+        <Card testID="coach-skeleton" style={{ marginTop: 18 }}>
+          <Eyebrow>Thinking</Eyebrow>
+          <View style={{ marginTop: 10 }}>
+            <SkeletonLines lines={3} />
+          </View>
+        </Card>
+      ) : null}
+
+      {/* A brief IS on screen and a new one is being written: the old one stays exactly
+          where it is and the work says so on one line. Losing the answer you are reading
+          in order to ask for a better one is the thing this screen must never do. */}
+      {asking && brief ? (
+        <View
+          testID="coach-working"
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 }}>
+          <ActivityIndicator color={C.mute} size="small" />
+          <Sub>Rewriting your brief…</Sub>
         </View>
+      ) : null}
+
+      {/* What went wrong, above the brief that was kept. */}
+      {note && brief ? (
+        <Card testID="coach-note" style={{ marginTop: 14, borderLeftWidth: 3, borderLeftColor: C.accent }}>
+          <Sub style={{ lineHeight: 18 }}>{note}</Sub>
+        </Card>
       ) : null}
 
       {coach.error && !brief ? (
@@ -146,9 +196,16 @@ export default function Coach() {
                 divider={index < all.length - 1}
               />
             ))}
+            {/* An empty Do list is either a rest day or a brief that failed to fill
+                itself in. The second one is never drawn as blank space: the server
+                refuses to store it, and if one ever reaches here it says so. */}
             {(brief.workout.exercises ?? []).length === 0 ? (
               <View style={{ paddingVertical: 14 }}>
-                <Sub>Rest today.</Sub>
+                <Sub testID="coach-do-empty" style={{ lineHeight: 18 }}>
+                  {brief.workout.type === 'rest'
+                    ? 'Rest today.'
+                    : 'No exercises came back for this one. Ask again, or say what you want the session to be.'}
+                </Sub>
               </View>
             ) : null}
           </Card>
@@ -210,14 +267,20 @@ export default function Coach() {
         </Card>
       ) : null}
 
-      {/* Context — the same Photo / Speak / Type panel as everywhere else. */}
-      <Section title="Anything I should know?">
+      {/* Context — the same Photo / Speak / Type panel as everywhere else. Once there is
+          a brief the box changes what it is for: you are no longer telling the coach about
+          your day, you are telling it what to change about the answer in front of you. */}
+      <Section title={brief ? 'Not quite right?' : 'Anything I should know?'}>
         <TextInput
           ref={inputRef}
           testID="coach-context"
           value={context}
           onChangeText={setContext}
-          placeholder="Only 30 minutes · knee hurts today"
+          placeholder={
+            brief
+              ? "Adjust it — 'make it 8 exercises', 'switch to legs'…"
+              : 'Only 30 minutes · knee hurts today'
+          }
           placeholderTextColor={C.dim}
           multiline
           style={{
@@ -253,7 +316,15 @@ export default function Coach() {
           <Chips>
             <Chip
               testID="coach-regenerate"
-              label={busy ? 'Thinking…' : brief ? 'Ask again' : 'Ask'}
+              label={
+                busy
+                  ? 'Thinking…'
+                  : brief
+                    ? context.trim()
+                      ? 'Adjust it'
+                      : 'Ask again'
+                    : 'Ask'
+              }
               variant="primary"
               disabled={busy}
               onPress={ask}

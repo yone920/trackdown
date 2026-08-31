@@ -28,6 +28,13 @@ export interface CoachPlan {
 	constraints: string[];
 	preferences: string[];
 	eatback: string;
+	/**
+	 * The training background the user stated (migration 0011). Without it a cold start
+	 * has no way to tell a first-timer from a three-year lifter, and used to assume the
+	 * first. `reference_loads` reach the prompt as prescriptions, not as prose.
+	 */
+	experience: string | null;
+	background: string | null;
 	units: "lb";
 	targets: {
 		kcal: number | null;
@@ -74,12 +81,27 @@ export interface CoachBriefInputs {
 /** What the model produced, with the deterministic parts already merged in. */
 export type Brief = CoachBriefOutput;
 
+/**
+ * "Make it 8 exercises", "switch to legs", "I feel like chest". A revision is not a new
+ * question with extra context: the user is looking at an answer and wants *that answer*
+ * changed, so the model is handed today's brief and told what to do to it, and returns the
+ * whole revised brief rather than a patch. Everything the instruction does not touch is
+ * expected back unchanged.
+ */
+export interface BriefRevision {
+	/** What the user asked for, in their own words. */
+	instruction: string;
+	/** The brief they are looking at — today's current answer. */
+	current: Brief;
+}
+
 export interface CoachPort {
 	/** Which model this instance calls — stored on the brief and shown in the app. */
 	readonly model: string;
 	/**
 	 * One brief. Throws if the provider returned nothing usable, so a caller never has to
-	 * render half an answer.
+	 * render half an answer — including a training day with an empty Do list, which parses
+	 * but is not an answer (services/coach/schema.ts §assertUsableBrief).
 	 */
-	brief(inputs: CoachBriefInputs): Promise<Brief>;
+	brief(inputs: CoachBriefInputs, revision?: BriefRevision): Promise<Brief>;
 }

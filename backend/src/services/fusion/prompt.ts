@@ -28,8 +28,11 @@ FIRST decide what kind each thing is, then fill in that kind and nothing else:
   "scope" saying which:
     * "constraint": a hard limit the coach must respect — an injury, an exercise to avoid, a
       medical restriction ("bad left knee", "no overhead pressing").
-    * "preference": a soft steer — diet style, equipment, when they like to train ("switching
-      to keto", "mornings only", "I hate burpees").
+    * "preference": a soft steer, or a standing fact about how they train — diet style,
+      equipment, when they like to train, and their training background ("switching to
+      keto", "mornings only", "I hate burpees", "I've been lifting three years and I bench
+      165 for 3x5"). A load they say they lift NOW is a preference, not a workout they did
+      today and not a goal.
     * "coach_context": a passing state that should shape today's advice but is not a rule —
       "only 30 minutes today", "slept badly", "feel like cardio".
 - "unclear" — you cannot tell what happened and a guess would be a lie. Ask the one question
@@ -219,8 +222,9 @@ is not a body weight, and a weight they want to reach is a goal, not a reading.`
 and say in "scope" which of three it is:
 - "constraint": a hard limit the coach must respect — an injury, an exercise to avoid, a
   medical restriction ("bad left knee", "no overhead pressing").
-- "preference": a soft steer — diet style, equipment, when they like to train ("switching to
-  keto", "mornings only").
+- "preference": a soft steer, or a standing fact about how they train — diet style,
+  equipment, when they like to train, and their training background ("switching to keto",
+  "mornings only", "three years of lifting, I bench 165 for 3x5").
 - "coach_context": a passing state that should shape today's advice but is not a rule ("only
   30 minutes today", "slept badly", "knee is sore"). Leave every plan field null for one of
   these: a passing state changes no plan.
@@ -264,6 +268,20 @@ stays null. Do not restate the statement itself in a field; it is recorded as te
 - environment: "gym", "home", "outdoor", "mixed".
 - equipment: what they have to work with.
 - eatback: how much of the calories they burn they want back — none / half / all.
+
+TRAINING BACKGROUND — what they bring with them, when they say it. This is the only way the
+coach knows a new user is not a beginner, so read it whenever it is there:
+- experience: "beginner", "intermediate" or "advanced". Take a plain claim ("I'm a
+  beginner"), or judge it from what they say they have done — under a year, or nothing
+  serious: beginner; a year or more of consistent lifting: intermediate; many years, or
+  competing: advanced. Null if they said nothing about it.
+- background: their training history in their own words, one line ("three years of 5/3/1,
+  six months off after a shoulder injury"). Null if they gave none.
+- reference_loads: loads they say they lift NOW, one entry per exercise — "I bench 165 for
+  3x5" is { exercise: "Bench Press", load_lb: 165, reps: 5 }. Pounds; convert kg. reps is
+  the reps per set, null if they did not say. Use the catalogue's spelling when it is one of
+  those movements. Only what they actually stated: never a load they want to reach (that is
+  a goal) and never one you worked out yourself. Empty or null when they named none.
 
 Units are pounds and miles.`;
 

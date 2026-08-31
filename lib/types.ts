@@ -388,6 +388,11 @@ export type ExerciseSheet = {
 export type CoachNext = {
   brief: CoachBrief;
   stale: boolean;
+  /**
+   * One line saying why this is not the answer that was just asked for — set when the
+   * server had to fall back to the day's previous brief. Null on a normal answer.
+   */
+  note?: string | null;
   gap: unknown;
   nudge_action: CoachBrief['nudge_action'];
   goals: { id: string; title: string; priority: number }[];

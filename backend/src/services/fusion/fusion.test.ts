@@ -11,6 +11,8 @@ import {
 	GoalDetailOutputSchema,
 	MealDetailOutputSchema,
 	PlanFieldsOutputSchema,
+	ProfileFieldsSchema,
+	StatementDetailOutputSchema,
 	WeightDetailOutputSchema,
 	expandSources,
 	toFusionResult,
@@ -273,6 +275,7 @@ describe("the model-facing schema", () => {
 			["activities", ActivitiesDetailOutputSchema],
 			["meal", MealDetailOutputSchema],
 			["weigh_in", WeightDetailOutputSchema],
+			["statement", StatementDetailOutputSchema],
 		] as const) {
 			const bytes = schemaBytes(schema);
 			expect({ name, overBudget: bytes >= GRAMMAR_CEILING_BYTES }).toEqual({ name, overBudget: false });
@@ -286,6 +289,37 @@ describe("the model-facing schema", () => {
 	 * than its bytes, so the routing schema holds ONE branch plus cheap segments, and the
 	 * pin above is only an early warning: the contract test is the real gate.
 	 */
+	/**
+	 * The training background rides on the plan-fields shape, which is a *second* call and
+	 * not the routing union — so it costs the schema with 80 bytes of headroom nothing.
+	 * plan_fields went 964 → 1570 and statement 1081 → 1687; the routing schema is 3580,
+	 * exactly what it was.
+	 */
+	it("carries the training background on the second call, not on the routing schema", () => {
+		expect(schemaBytes(FusionRouteOutputSchema)).toBe(3580);
+		const fields = ProfileFieldsSchema.parse({
+			diet_style: null,
+			protein_g: null,
+			carbs_max_g: null,
+			training_days: null,
+			environment: null,
+			equipment: null,
+			eatback: null,
+			experience: "intermediate",
+			background: "three years of 5/3/1",
+			reference_loads: [{ exercise: "Bench Press", load_lb: 165, reps: 5 }],
+		});
+		expect(fields).toMatchObject({ experience: "intermediate", reference_loads: [{ load_lb: 165, reps: 5 }] });
+		// A stated load with no rep count is still a load; the scheme is the coach's job.
+		expect(
+			ProfileFieldsSchema.safeParse({ ...fields, reference_loads: [{ exercise: "Back Squat", load_lb: 225, reps: null }] })
+				.success
+		).toBe(true);
+		// Not a level we recognise, and a load with no exercise on it: both refused.
+		expect(ProfileFieldsSchema.safeParse({ ...fields, experience: "expert" }).success).toBe(false);
+		expect(ProfileFieldsSchema.safeParse({ ...fields, reference_loads: [{ load_lb: 165, reps: 5 }] }).success).toBe(false);
+	});
+
 	it("keeps the routing schema to one branch of the union plus a list of bare kinds", () => {
 		const answer = FusionRouteOutputSchema.parse({
 			result: { kind: "weight", weight_lb: 181, confidence: "high", photo_fields: [] },
@@ -308,7 +342,7 @@ describe("the model-facing schema", () => {
 		const statement = FusionRouteSchema.parse({ kind: "statement", scope: "constraint", text: "bad left knee" });
 		expect(toFusionResult(statement)).toEqual({ kind: "constraint", text: "bad left knee", fields: null });
 		// The plan fields, when there were any, come from the second call.
-		expect(toFusionResult(statement, { fields: { diet_style: "keto", protein_g: null, carbs_max_g: 50, training_days: null, environment: null, equipment: null, eatback: null } })).toMatchObject({
+		expect(toFusionResult(statement, { fields: { diet_style: "keto", protein_g: null, carbs_max_g: 50, training_days: null, environment: null, equipment: null, eatback: null, experience: null, background: null, reference_loads: null } })).toMatchObject({
 			kind: "constraint",
 			fields: { diet_style: "keto", carbs_max_g: 50 },
 		});
@@ -449,6 +483,9 @@ describe("createFusionAnalyzer", () => {
 					environment: null,
 					equipment: null,
 					eatback: null,
+					experience: null,
+					background: null,
+					reference_loads: null,
 				},
 			}
 		);
@@ -578,6 +615,9 @@ describe("splitting one input into parts", () => {
 					environment: null,
 					equipment: null,
 					eatback: null,
+					experience: null,
+					background: null,
+					reference_loads: null,
 				},
 			}
 		);

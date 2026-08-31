@@ -171,6 +171,29 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 		expect(results[0].items.length).toBeGreaterThanOrEqual(3);
 	}, 90_000);
 
+	// The training-background fix, against the real model. The extended plan-fields schema
+	// (964 → 1570 bytes) has to compile, and the model has to tell a load the user lifts
+	// NOW apart from a load they want to reach — which is a goal, not a reference.
+	it("reads a training background and a stated load out of one sentence", async () => {
+		const { results } = await analyzer().analyze({
+			text: "I've been lifting three years, I bench 165 for 3x5",
+			context,
+		});
+
+		const statement = results.find((part) => part.kind === "preference" || part.kind === "constraint");
+		expect(statement).toBeTruthy();
+		if (!statement || (statement.kind !== "preference" && statement.kind !== "constraint")) return;
+		expect(statement.fields?.experience).toBe("intermediate");
+		expect(statement.fields?.background ?? "").toMatch(/three years/i);
+		const loads = statement.fields?.reference_loads ?? [];
+		expect(loads).toHaveLength(1);
+		expect(loads[0]?.exercise.toLowerCase()).toContain("bench");
+		expect(loads[0]?.load_lb).toBeCloseTo(165, 0);
+		expect(loads[0]?.reps).toBe(5);
+		// It is a statement about how they train, not a workout they did today.
+		expect(results.some((part) => part.kind === "activities")).toBe(false);
+	}, 90_000);
+
 	it("assigns the photo to the part it belongs to", async () => {
 		const photo = await tinyImage();
 		const { results, photoParts } = await analyzer().analyze({

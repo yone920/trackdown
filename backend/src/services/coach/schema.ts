@@ -69,8 +69,14 @@ export const CoachBriefSchema = z.object({
 		type: z.enum(WORKOUT_TYPES),
 		/** Muscle groups or "cardio"/"recovery" — what today is for. */
 		targets: z.array(z.string().trim().min(1)).max(4),
-		/** 4–6 on a training day; empty on a rest day. */
-		exercises: z.array(BriefExerciseSchema).max(6),
+		/**
+		 * 4–6 on a training day; empty on a rest day. The ceiling is 10 rather than 6
+		 * because a revision can ask for more ("make it 8 exercises") and a cap the user
+		 * can ask past is a cap the model has to disobey or return nothing against — which
+		 * is how a regenerate came back with an empty Do list. A bound on an array costs no
+		 * grammar bytes, so raising it costs nothing the contract test can see.
+		 */
+		exercises: z.array(BriefExerciseSchema).max(10),
 	}),
 	nutrition: z.object({
 		kcal: z.number().int().min(0).max(10000),
@@ -85,3 +91,29 @@ export const CoachBriefSchema = z.object({
 });
 
 export type CoachBriefOutput = z.infer<typeof CoachBriefSchema>;
+
+/**
+ * A brief that says today is a training day and then lists nothing to do. It parses — the
+ * schema allows an empty array, because a rest day needs one — and it is useless: the
+ * Coach screen renders a headline, a paragraph of reasoning and an empty Do list, which is
+ * what the user saw when they asked for eight exercises and got a blank page.
+ *
+ * It is caught in two places on purpose. The adapter throws it so the retry it already has
+ * covers this as well as a malformed sample; services/coach/coach.ts checks again before
+ * writing, because a brief nobody can act on must never become the day's standing answer —
+ * once stored, every plain ask for the rest of the day replays it.
+ */
+export class UnusableBriefError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "UnusableBriefError";
+	}
+}
+
+/** The one thing a parsed brief can still get wrong. Returns the brief, for chaining. */
+export function assertUsableBrief<T extends { workout: { type: string; exercises: unknown[] } }>(brief: T): T {
+	if (brief.workout.type !== "rest" && brief.workout.exercises.length === 0) {
+		throw new UnusableBriefError(`the model called today a ${brief.workout.type} day and listed no exercises`);
+	}
+	return brief;
+}

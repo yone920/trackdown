@@ -1,4 +1,4 @@
-import type { Brief, CoachBriefInputs, CoachPort } from "../../ports/coach.js";
+import type { Brief, BriefRevision, CoachBriefInputs, CoachPort } from "../../ports/coach.js";
 import { CoachBriefSchema } from "../../services/coach/schema.js";
 
 // The fake CoachPort the integration tests run on. Like the LlmPort fake, it validates
@@ -12,6 +12,8 @@ export interface FakeCoach extends CoachPort {
 	readonly briefs: unknown[];
 	/** Every set of inputs the code under test built, oldest first. */
 	readonly inputs: CoachBriefInputs[];
+	/** The revision each call carried, aligned with `inputs`; undefined for a plain ask. */
+	readonly revisions: (BriefRevision | undefined)[];
 	/** Set to make the next call throw — the provider-outage path. */
 	failNext: Error | null;
 }
@@ -40,20 +42,26 @@ export const SAMPLE_BRIEF: Brief = {
 
 export function createFakeCoach(model = "fake-coach"): FakeCoach {
 	const inputs: CoachBriefInputs[] = [];
+	const revisions: (BriefRevision | undefined)[] = [];
 	const briefs: unknown[] = [];
 	const fake: FakeCoach = {
 		model,
 		nextBrief: SAMPLE_BRIEF,
 		briefs,
 		inputs,
+		revisions,
 		failNext: null,
-		async brief(request) {
+		async brief(request, revision) {
 			inputs.push(request);
+			revisions.push(revision);
 			if (fake.failNext) {
 				const error = fake.failNext;
 				fake.failNext = null;
 				throw error;
 			}
+			// Validated against the real schema and nothing more. A training day with an
+			// empty Do list parses, which is the whole reason services/coach/coach.ts has
+			// to check for one — a fake that refused it would hide that.
 			return CoachBriefSchema.parse(briefs.length > 0 ? briefs.shift() : fake.nextBrief);
 		},
 	};

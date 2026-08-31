@@ -2,6 +2,7 @@ import { Router } from "express";
 import { pipeline } from "node:stream/promises";
 import type pg from "pg";
 import type { AuthenticatedRequest } from "../middleware/auth.js";
+import { setServerTiming, timePhase } from "../middleware/timing.js";
 import type { ExerciseMediaStore } from "../ports/exerciseMedia.js";
 
 // The exercise sheet (app/exercise/[id].tsx).
@@ -37,23 +38,29 @@ interface CatalogRow {
 export function exercisesRouter(pool: pg.Pool, media: ExerciseMediaStore): Router {
 	const router = Router();
 
-	async function load(id: string): Promise<CatalogRow | null> {
+	async function load(req: AuthenticatedRequest, id: string): Promise<CatalogRow | null> {
 		if (!UUID.test(id)) return null;
-		const { rows } = await pool.query<CatalogRow>(
-			`SELECT id, name, aliases, category, primary_muscles, secondary_muscles, equipment,
-			        instructions, media_count, source_slug, level
-			   FROM exercise_catalog WHERE id = $1`,
-			[id]
+		const { rows } = await timePhase(req, "db", () =>
+			pool.query<CatalogRow>(
+				`SELECT id, name, aliases, category, primary_muscles, secondary_muscles, equipment,
+				        instructions, media_count, source_slug, level
+				   FROM exercise_catalog WHERE id = $1`,
+				[id]
+			)
 		);
 		return rows[0] ?? null;
 	}
 
 	router.get("/api/exercises/:id", async (req: AuthenticatedRequest, res) => {
-		const row = await load(req.params.id as string);
+		const row = await load(req, req.params.id as string);
 		if (!row) {
 			res.status(404).json({ error: "Not found." });
 			return;
 		}
+		// These two routes are what the phone waits on when a name is tapped, so they say
+		// where the time went: `auth` is the session lookup every /api request pays,
+		// `db` is the catalogue row, `open` is the file handle.
+		setServerTiming(req, res);
 		res.json({
 			id: row.id,
 			name: row.name,
@@ -77,7 +84,7 @@ export function exercisesRouter(pool: pg.Pool, media: ExerciseMediaStore): Route
 	});
 
 	router.get("/api/exercises/:id/media/:n", async (req: AuthenticatedRequest, res) => {
-		const row = await load(req.params.id as string);
+		const row = await load(req, req.params.id as string);
 		const index = Number(req.params.n);
 		// A frame the row does not claim is a 404 whether or not a file happens to exist:
 		// media_count is the contract the sheet was rendered from.
@@ -88,7 +95,7 @@ export function exercisesRouter(pool: pg.Pool, media: ExerciseMediaStore): Route
 
 		let stream;
 		try {
-			stream = await media.get(row.id, index);
+			stream = await timePhase(req, "open", () => media.get(row.id, index));
 		} catch (error) {
 			// The row outlived its bytes — a volume restored without the media directory.
 			console.error(`⚠️  Exercise ${row.id} frame ${index} is missing:`, error);
@@ -99,6 +106,9 @@ export function exercisesRouter(pool: pg.Pool, media: ExerciseMediaStore): Route
 		res.setHeader("Content-Type", "image/jpeg");
 		res.setHeader("Cache-Control", CACHE_CONTROL);
 		res.setHeader("ETag", `"${row.id}-${index}"`);
+		// Before the pipe: after it the headers are gone, and time-to-first-byte is the
+		// half of this the server is actually responsible for.
+		setServerTiming(req, res);
 		await pipeline(stream, res);
 	});
 

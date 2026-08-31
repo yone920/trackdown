@@ -14,7 +14,7 @@ import {
 	type CoachGoal,
 	type Prescription,
 } from "./rules.js";
-import { CoachBriefSchema } from "./schema.js";
+import { assertUsableBrief, CoachBriefSchema, UnusableBriefError } from "./schema.js";
 
 // The deterministic half of the coach. Every number in a brief comes from this file, so
 // every rule in docs/concept-v2.md §Progression rules has a test here that would fail if
@@ -227,6 +227,60 @@ describe("prescribeLoads — the numbers the model is not allowed to invent", ()
 	});
 });
 
+describe("prescribeLoads — a stated load, when the log has nothing", () => {
+	const stated = [
+		{ exercise: "Bench Press", load_lb: 165, reps: 5 },
+		{ exercise: "Back Squat", load_lb: 225, reps: null },
+	];
+
+	it("prescribes from what the user said they lift", () => {
+		const prescriptions = prescribeLoads(featuresFor([]), { referenceLoads: stated });
+		expect(prescriptions).toHaveLength(2);
+		expect(only(prescriptions)).toMatchObject({
+			rule: "reference",
+			load_lb: 165,
+			sets: 3,
+			reps: 5,
+			// Never logged here, so there is no "days since" to print. Null, not zero.
+			days_since: null,
+		});
+		expect(only(prescriptions).why).toContain("Stated, not logged");
+		// No reps given is a load with no scheme; the model fills that in.
+		expect(only(prescriptions, "Back Squat")).toMatchObject({ load_lb: 225, sets: 3, reps: null });
+	});
+
+	it("is ignored the moment the exercise has real sessions behind it", () => {
+		// Two logged sessions at 135 that hit the scheme: the progression steps to 140 and
+		// the user's claim of 165 does not get a say.
+		const prescriptions = prescribeLoads(featuresFor([lift(daysAgo(1)), lift(daysAgo(8)), lift(daysAgo(15), { load: 130 })]), {
+			referenceLoads: stated,
+		});
+		expect(only(prescriptions)).toMatchObject({ rule: "step_up", load_lb: 140 });
+		expect(prescriptions.filter((item) => item.exercise === "Bench Press")).toHaveLength(1);
+		// The one the log has never seen is still prescribed from what was stated.
+		expect(only(prescriptions, "Back Squat")).toMatchObject({ rule: "reference", load_lb: 225 });
+	});
+
+	it("takes a step off a stated load only after a gap it can actually measure", () => {
+		// A brand new account: gapRule calls this a restart, but "we have never seen you
+		// train" is not "you stopped training", so the stated load is taken as given.
+		expect(only(prescribeLoads(featuresFor([]), { referenceLoads: stated }))).toMatchObject({
+			load_lb: 165,
+			sets: 3,
+		});
+
+		// Eighteen days since a *logged* session is a real return, and the stated load
+		// eases back with everything else.
+		const returning = only(
+			prescribeLoads(featuresFor([lift(daysAgo(18), { exercise: "Lat Pulldown", muscles: ["back"] })]), {
+				referenceLoads: stated,
+			})
+		);
+		expect(returning).toMatchObject({ rule: "reference", load_lb: 160, sets: 2 });
+		expect(returning.why).toContain("18 days");
+	});
+});
+
 describe("selectNudge — the single most useful thing", () => {
 	const goal = (values: Partial<CoachGoal>): CoachGoal => ({
 		id: "g1",
@@ -278,6 +332,32 @@ describe("selectNudge — the single most useful thing", () => {
 		expect(selectNudge(noWeighIn, []).subject).toContain("No weigh-in on record");
 	});
 
+	it("asks a user it knows nothing about for their background, before any log-quality nudge", () => {
+		// Nothing logged: every data-quality flag is up (no weigh-in, seven unlogged days),
+		// and all of them are worse things to say than "tell me where you are starting".
+		const cold = computeFeatures({ facts: facts({}) });
+		const nudge = selectNudge(cold, [], { experience: null, background: null, reference_loads: [] });
+		expect(nudge.action).toEqual({ kind: "tell_background", goal_id: null, label: "Tell me your background" });
+		expect(nudge.subject).toContain("bench 165");
+		expect(nudge.subject).toContain("pitched at a beginner");
+
+		// One word about themselves is enough to stop asking.
+		expect(
+			selectNudge(cold, [], { experience: "intermediate", background: null, reference_loads: [] }).action
+		).toMatchObject({ kind: "weigh_in" });
+		expect(
+			selectNudge(cold, [], { experience: null, background: null, reference_loads: [{ exercise: "Bench Press", load_lb: 165, reps: 5 }] })
+				.action
+		).toMatchObject({ kind: "weigh_in" });
+	});
+
+	it("does not ask for a background from someone who has been logging", () => {
+		const logging = computeFeatures({ facts: facts({ activities: [lift(daysAgo(1))] }) });
+		expect(selectNudge(logging, [], { experience: null, background: null, reference_loads: [] }).action).toMatchObject({
+			kind: "weigh_in",
+		});
+	});
+
 	it("has no action when nothing needs one, and still names a subject", () => {
 		const complete = computeFeatures({
 			facts: facts({
@@ -301,6 +381,55 @@ describe("buildRules — what the prompt is handed", () => {
 		expect(rules.statements.join("\n")).toContain("not yours to change");
 		expect(rules.statements.join("\n")).toContain("plan of 4/week");
 		expect(rules.statements.at(-1)).toContain("Nudge:");
+	});
+
+	it("refuses to assume a beginner when it has never seen the user train", () => {
+		const rules = buildRules({ features: featuresFor([]), goals: [] });
+		const said = rules.statements.join("\n");
+		expect(said).toContain("Do NOT assume a beginner");
+		expect(said).toContain("do not know their background yet");
+		expect(rules.nudge.action).toMatchObject({ kind: "tell_background" });
+	});
+
+	it("pitches the first session at the background the user stated", () => {
+		const rules = buildRules({
+			features: featuresFor([]),
+			goals: [],
+			background: {
+				experience: "advanced",
+				background: "three years of 5/3/1",
+				reference_loads: [{ exercise: "Bench Press", load_lb: 165, reps: 5 }],
+			},
+		});
+		const said = rules.statements.join("\n");
+		expect(said).toContain("advanced");
+		expect(said).toContain("three years of 5/3/1");
+		expect(said).toContain("Bench Press 165 lb × 5");
+		expect(said).not.toContain("Do NOT assume a beginner");
+		// And the number reaches the model as a prescription, not as prose it has to parse.
+		expect(rules.prescriptions).toEqual([expect.objectContaining({ exercise: "Bench Press", load_lb: 165 })]);
+		// It is a claim, so it is not the nudge's business any more either.
+		expect(rules.nudge.action).not.toMatchObject({ kind: "tell_background" });
+	});
+
+	it("says nothing about a background once there is a log to read instead", () => {
+		const rules = buildRules({ features: featuresFor([lift(daysAgo(2))]), goals: [] });
+		expect(rules.statements.join("\n")).not.toContain("assume a beginner");
+	});
+});
+
+describe("assertUsableBrief — a training day with nothing to do is not an answer", () => {
+	const workout = (type: string, exercises: unknown[]) => ({ workout: { type, exercises } });
+
+	it("refuses a non-rest brief with an empty Do list", () => {
+		expect(() => assertUsableBrief(workout("strength", []))).toThrow(UnusableBriefError);
+		expect(() => assertUsableBrief(workout("cardio", []))).toThrow(/listed no exercises/);
+		expect(() => assertUsableBrief(workout("mixed", []))).toThrow(UnusableBriefError);
+	});
+
+	it("lets a rest day through, and any day that actually has exercises in it", () => {
+		expect(assertUsableBrief(workout("rest", []))).toBeTruthy();
+		expect(assertUsableBrief(workout("strength", [{ name: "Bench Press" }]))).toBeTruthy();
 	});
 });
 

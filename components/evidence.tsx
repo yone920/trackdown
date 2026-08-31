@@ -31,6 +31,11 @@ export function EvidenceThumbs({ photos, size = 56 }: { photos: EvidencePhoto[];
             style={{ width: '100%', height: '100%' }}
             contentFit="cover"
             transition={120}
+            // An evidence photo never changes once it is uploaded, and the same
+            // thumbnails are scrolled past every time the day is opened: on disk they
+            // cost one request ever, rather than one per visit.
+            cachePolicy="disk"
+            recyclingKey={photo.id}
             accessibilityLabel="Logged photo"
           />
         </View>
