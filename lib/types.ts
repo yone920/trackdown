@@ -103,6 +103,8 @@ export type DayActivity = {
   logged_at: string;
   description: string;
   exercise: string | null;
+  /** The catalogue row the name resolved to; null makes the sheet name-only. */
+  exercise_id: string | null;
   category: ActivityCategory | null;
   muscle_groups: string[];
   sets: number | null;
@@ -284,6 +286,7 @@ export type DayLogRecord =
       kind: 'activity';
       description: string;
       exercise: string | null;
+      exercise_id: string | null;
       category: ActivityCategory | null;
       muscle_groups: string[];
       sets: number | null;
@@ -345,6 +348,8 @@ export type CoachBrief = {
     targets?: string[];
     exercises?: {
       name: string;
+      /** Resolved server-side when the brief is returned, so the app never name-matches. */
+      exercise_id?: string | null;
       load_lb: number | null;
       sets: number | null;
       reps: number | null;
@@ -361,6 +366,23 @@ export type CoachBrief = {
   } | null;
   nudge?: string | null;
   nudge_action?: { kind: string; goal_id?: string | null; label?: string } | null;
+};
+
+/** GET /api/exercises/:id — everything the exercise sheet draws. */
+export type ExerciseSheet = {
+  id: string;
+  name: string;
+  aliases: string[];
+  category: ActivityCategory;
+  primary_muscles: string[];
+  secondary_muscles: string[];
+  equipment: string[];
+  /** The numbered steps. Empty when the catalogue row has no illustration source. */
+  instructions: string[];
+  level: string | null;
+  /** Paths under the API base; the bytes need the session's bearer token. */
+  media: { index: number; url: string }[];
+  source: { dataset: string; slug: string } | null;
 };
 
 export type CoachNext = {

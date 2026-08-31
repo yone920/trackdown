@@ -14,6 +14,7 @@ import { addDays, localDay } from "./services/localTime.js";
 import { startTestDatabase, type TestDatabase } from "./test/db.js";
 import { createFakeLlm } from "./test/fakes/llm.js";
 import { createFakeCoach, SAMPLE_BRIEF } from "./test/fakes/coach.js";
+import { createFakeExerciseMediaStore } from "./test/fakes/exerciseMedia.js";
 import { createFakeEvidenceStore } from "./test/fakes/storage.js";
 
 // End-to-end through Express + Better Auth + a real Postgres: the sign-up/sign-in flow the
@@ -31,6 +32,9 @@ const llm = createFakeLlm();
 const parser = createLogParser(llm);
 const fusion = createFusionAnalyzer(llm);
 const store = createFakeEvidenceStore();
+// The illustrations behind GET /api/exercises/:id/media/:n. Imported for real by
+// scripts/import-exercise-media.ts; here the test puts two bytes in and reads them back.
+const exerciseMedia = createFakeExerciseMediaStore();
 // The readings run on the coach model — a second port in production, so a second fake here:
 // sharing one would make a Today request eat the answer queued for the next parse.
 const coachLlm = createFakeLlm("fake-coach-model");
@@ -79,6 +83,7 @@ beforeAll(async () => {
 		parser,
 		fusion,
 		evidence: store,
+		exerciseMedia,
 		readings,
 		coach,
 		allowedOrigins: [],
@@ -2602,5 +2607,107 @@ describe("coach — a return after two weeks off", () => {
 	it("refuses an impossible timezone and an unauthenticated ask", async () => {
 		expect((await request(app).get(`/api/coach/next?tz=999`).set(headers)).status).toBe(400);
 		expect((await request(app).get(`/api/coach/next?tz=${tz}`)).status).toBe(401);
+	});
+});
+
+describe("the exercise sheet", () => {
+	let headers: Record<string, string>;
+	let bench: { id: string; name: string };
+
+	beforeAll(async () => {
+		const token = await signUp("nell@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+
+		const { rows } = await db.pool.query<{ id: string; name: string }>(
+			`SELECT id, name FROM exercise_catalog WHERE name = 'Bench Press'`
+		);
+		bench = rows[0]!;
+
+		// What scripts/import-exercise-media.ts leaves behind: two frames on disk and the
+		// steps on the row. The importer's own tests cover how it gets there.
+		await db.pool.query(
+			`UPDATE exercise_catalog
+			    SET instructions = $2, media_count = 2, source_slug = 'Barbell_Bench_Press_-_Medium_Grip',
+			        level = 'beginner'
+			  WHERE id = $1`,
+			[bench.id, ["Lie back on a flat bench.", "Press the bar back to the start."]]
+		);
+		await exerciseMedia.put(bench.id, 0, Buffer.from("frame-zero"));
+		await exerciseMedia.put(bench.id, 1, Buffer.from("frame-one"));
+	});
+
+	it("answers with the catalogue row, its steps and the urls of its frames", async () => {
+		const res = await request(app).get(`/api/exercises/${bench.id}`).set(headers);
+		expect(res.status).toBe(200);
+		expect(res.body).toMatchObject({
+			id: bench.id,
+			name: "Bench Press",
+			category: "strength",
+			primary_muscles: ["chest"],
+			level: "beginner",
+			source: { dataset: "free-exercise-db", slug: "Barbell_Bench_Press_-_Medium_Grip" },
+		});
+		expect(res.body.instructions).toHaveLength(2);
+		expect(res.body.equipment).toContain("barbell");
+		expect(res.body.media).toEqual([
+			{ index: 0, url: `/api/exercises/${bench.id}/media/0` },
+			{ index: 1, url: `/api/exercises/${bench.id}/media/1` },
+		]);
+	});
+
+	it("says an exercise with no import yet has no steps and no photos", async () => {
+		const { rows } = await db.pool.query<{ id: string }>(
+			`SELECT id FROM exercise_catalog WHERE name = 'Other Activity'`
+		);
+		const res = await request(app).get(`/api/exercises/${rows[0]!.id}`).set(headers);
+		expect(res.status).toBe(200);
+		// The sheet falls back to name-only rather than to an error.
+		expect(res.body).toMatchObject({ instructions: [], media: [], source: null, level: null });
+	});
+
+	it("streams a frame as a jpeg, cached for a year", async () => {
+		const res = await request(app).get(`/api/exercises/${bench.id}/media/1`).set(headers);
+		expect(res.status).toBe(200);
+		expect(res.headers["content-type"]).toBe("image/jpeg");
+		expect(res.headers["cache-control"]).toBe("private, max-age=31536000, immutable");
+		expect(res.body.toString()).toBe("frame-one");
+	});
+
+	it("404s an unknown id, a malformed id and a frame the row does not claim", async () => {
+		expect((await request(app).get(`/api/exercises/${randomUUID()}`).set(headers)).status).toBe(404);
+		expect((await request(app).get(`/api/exercises/not-a-uuid`).set(headers)).status).toBe(404);
+		expect((await request(app).get(`/api/exercises/${bench.id}/media/2`).set(headers)).status).toBe(404);
+		expect((await request(app).get(`/api/exercises/${bench.id}/media/-1`).set(headers)).status).toBe(404);
+	});
+
+	it("needs a session — the illustrations are ours to host, not the internet's", async () => {
+		expect((await request(app).get(`/api/exercises/${bench.id}`)).status).toBe(401);
+		expect((await request(app).get(`/api/exercises/${bench.id}/media/0`)).status).toBe(401);
+	});
+
+	it("puts the catalogue id on a logged activity and on the coach's Do list", async () => {
+		const tz = 0;
+		const today = localDay(new Date(), tz).date;
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({ description: "3 × 8 bench at 135 lb", exercise: "db bench", sets: 3, reps: 8, load_lb: 135, kcal: 110 });
+
+		const day = await request(app).get(`/api/day/${today}?tz=${tz}`).set(headers);
+		const logged = day.body.items.activities.find((a: { exercise: string }) => a.exercise === "Dumbbell Bench Press");
+		// The alias resolved, so the row carries an id and the name on Today is tappable.
+		expect(logged.exercise_id).toMatch(/^[0-9a-f-]{36}$/);
+
+		const log = await request(app).get(`/api/day/${today}/log?tz=${tz}`).set(headers);
+		expect(log.body.entries[0].record.exercise_id).toBe(logged.exercise_id);
+
+		coachLlm.nextOutput = READING;
+		const coachRes = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(coachRes.status).toBe(200);
+		// SAMPLE_BRIEF's Do list is "Lat Pulldown" and "Overhead Press" — both catalogued,
+		// so the app opens their sheets by id and never matches a name.
+		for (const exercise of coachRes.body.brief.workout.exercises) {
+			expect(exercise.exercise_id).toMatch(/^[0-9a-f-]{36}$/);
+		}
 	});
 });

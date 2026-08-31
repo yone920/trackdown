@@ -16,9 +16,10 @@ import { Card, Chip, GroupHeading, Row, Section } from '@/components/kit';
 import { ReadingCard } from '@/components/reading-card';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { addDays } from '@/lib/days-weeks';
+import { openExercise } from '@/lib/exercise';
 import { clock, dateLabel, grams, kcal, slotLabel } from '@/lib/format';
 import { localDateKey, useDay } from '@/lib/queries';
-import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
+import { C, FONT, SPACE, TABULAR } from '@/lib/theme';
 import type { DayActivity, DayView, MacroLine, MealSlot, Verdict } from '@/lib/types';
 
 // A closed day (docs/design-system.md §Day; concept-v2 §The two day views: "Day is a
@@ -308,6 +309,7 @@ function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) 
 }
 
 function ActivityRow({ activity, last }: { activity: DayActivity; last: boolean }) {
+  const router = useRouter();
   const load = activity.load_lb == null ? null : `${activity.load_lb} lb`;
   const shape =
     activity.sets != null && activity.reps != null ? `${activity.sets} × ${activity.reps}` : null;
@@ -315,6 +317,11 @@ function ActivityRow({ activity, last }: { activity: DayActivity; last: boolean 
     <Row
       time={clock(activity.logged_at)}
       title={activity.exercise ?? activity.description}
+      onTitlePress={
+        activity.exercise
+          ? () => openExercise(router, { id: activity.exercise_id, name: activity.exercise })
+          : undefined
+      }
       sub={[shape, load, activity.duration_min == null ? null : `${activity.duration_min} min`]
         .filter(Boolean)
         .join(' · ')}

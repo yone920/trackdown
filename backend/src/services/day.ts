@@ -174,6 +174,7 @@ interface ActivityRow {
 	logged_at: string;
 	description: string;
 	exercise: string | null;
+	exercise_id: string | null;
 	category: DayActivity["category"];
 	muscle_groups: string[] | null;
 	sets: number | null;
@@ -209,6 +210,7 @@ function toActivity(row: ActivityRow): DayActivity {
 		logged_at: row.logged_at,
 		description: row.description,
 		exercise: row.exercise,
+		exercise_id: row.exercise_id,
 		category: row.category,
 		muscle_groups: row.muscle_groups ?? [],
 		sets: row.sets,
@@ -413,8 +415,8 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 	).rows;
 	const activityRows = (
 		await db.query<ActivityRow>(
-			`SELECT id, logged_at, description, exercise, category, muscle_groups, sets, reps, load_lb,
-			        duration_min, distance_mi, kcal, source, confidence, external_id
+			`SELECT id, logged_at, description, exercise, exercise_id, category, muscle_groups, sets, reps,
+			        load_lb, duration_min, distance_mi, kcal, source, confidence, external_id
 			   FROM activities WHERE user_id = $1 AND logged_at >= $2 AND logged_at < $3 ORDER BY logged_at`,
 			[userId, ...window]
 		)
@@ -483,9 +485,9 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 			? []
 			: (
 					await db.query<ActivityRow>(
-						`SELECT DISTINCT ON (lower(exercise)) id, logged_at, description, exercise, category,
-						        muscle_groups, sets, reps, load_lb, duration_min, distance_mi, kcal, source,
-						        confidence, external_id
+						`SELECT DISTINCT ON (lower(exercise)) id, logged_at, description, exercise, exercise_id,
+						        category, muscle_groups, sets, reps, load_lb, duration_min, distance_mi, kcal,
+						        source, confidence, external_id
 						   FROM activities
 						  WHERE user_id = $1 AND logged_at < $2 AND lower(exercise) = ANY($3::text[])
 						  ORDER BY lower(exercise), logged_at DESC`,

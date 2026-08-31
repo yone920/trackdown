@@ -8,6 +8,7 @@ import type {
   DayLogView,
   DayView,
   DaysView,
+  ExerciseSheet,
   FusionResult,
   GoalMetric,
   GoalProgress,
@@ -90,6 +91,24 @@ export function useDayLog(date: IsoDate) {
     queryFn: () => api<DayLogView>(`/api/day/${date}/log`, { query: { tz: tzOffsetMin() } }),
   });
 }
+
+/**
+ * GET /api/exercises/:id — the catalogue row behind a tapped exercise name. Skipped when
+ * the id is not one (lib/exercise.ts §NO_EXERCISE_ID): the sheet is name-only then, and a
+ * request that can only 404 is not worth making. The catalogue does not change while an
+ * app is open, so this is cached for the session.
+ */
+export function useExercise(id: string | null) {
+  const known = !!id && UUID.test(id);
+  return useQuery({
+    queryKey: ['exercise', id],
+    enabled: known,
+    staleTime: Infinity,
+    queryFn: () => api<ExerciseSheet>(`/api/exercises/${id}`),
+  });
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** GET /api/goals — active goals in priority order, with progress, plus history. */
 export function useGoals() {

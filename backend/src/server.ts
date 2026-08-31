@@ -54,6 +54,7 @@ const app = createApp({
 	parser: createLogParser(container.llm),
 	fusion: createFusionAnalyzer(container.llm),
 	evidence: container.evidence,
+	exerciseMedia: container.exerciseMedia,
 	// The day readings run on the coach model: they are two sentences of judgement, not
 	// an extraction (config COACH_LLM_PROVIDER / LLM_MODEL_COACH).
 	readings: createDayReadings(container.coachLlm),

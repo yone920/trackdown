@@ -7,11 +7,13 @@ import type { Auth } from "./auth.js";
 import { checkDatabase } from "./db/client.js";
 import { createRequireUser } from "./middleware/auth.js";
 import type { CoachPort } from "./ports/coach.js";
+import type { ExerciseMediaStore } from "./ports/exerciseMedia.js";
 import type { EvidenceStore } from "./ports/storage.js";
 import { coachRouter } from "./routes/coach.js";
 import { dayRouter } from "./routes/day.js";
 import { entriesRouter } from "./routes/entries.js";
 import { evidenceRouter } from "./routes/evidence.js";
+import { exercisesRouter } from "./routes/exercises.js";
 import { fusionRouter } from "./routes/fusion.js";
 import { goalsRouter } from "./routes/goals.js";
 import { logRouter } from "./routes/log.js";
@@ -29,6 +31,8 @@ export interface AppDeps {
 	fusion: FusionAnalyzer;
 	/** Where uploaded photos live; served back by GET /api/evidence/:id. */
 	evidence: EvidenceStore;
+	/** The exercise illustrations, served back by GET /api/exercises/:id/media/:n. */
+	exerciseMedia: ExerciseMediaStore;
 	/** The two generated sentences on a day, and their cache (WP3). */
 	readings: DayReadings;
 	/** The on-demand brief behind GET /api/coach/next (WP5). */
@@ -48,6 +52,7 @@ export function createApp({
 	parser,
 	fusion,
 	evidence,
+	exerciseMedia,
 	readings,
 	coach,
 	allowedOrigins,
@@ -97,6 +102,7 @@ export function createApp({
 	app.use(logRouter(pool, parser));
 	app.use(fusionRouter(pool, fusion, evidence));
 	app.use(evidenceRouter(pool, evidence));
+	app.use(exercisesRouter(pool, exerciseMedia));
 	app.use(dayRouter(pool, readings));
 	app.use(goalsRouter(pool));
 	app.use(coachRouter(pool, coach, readings));

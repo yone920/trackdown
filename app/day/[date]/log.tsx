@@ -6,6 +6,7 @@ import { EvidenceThumbs } from '@/components/evidence';
 import { IconCamera, IconChevronLeft, IconHeart, IconKeyboard, IconMic } from '@/components/icons';
 import { Card } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
+import { openExercise } from '@/lib/exercise';
 import { clock, dateLabel } from '@/lib/format';
 import { localDateKey, useDayLog } from '@/lib/queries';
 import { C, FONT, SPACE, TABULAR } from '@/lib/theme';
@@ -84,7 +85,11 @@ export default function DayLog() {
 
 /** time · icon · the words in quotes (or "photo") · source · what it became · confidence. */
 function LogRow({ entry, onPress }: { entry: DayLogEntry; onPress: () => void }) {
+  const router = useRouter();
   const Icon = ICONS[entry.icon] ?? IconKeyboard;
+  // The row's own tap is a correction (the whole point of this screen), so the exercise
+  // gets its own line rather than stealing it.
+  const exercise = entry.record.kind === 'activity' ? entry.record.exercise : null;
   const photos = entry.evidence.filter((item) => item.kind === 'photo');
   const meta = [
     entry.source === 'health' ? 'Health' : entry.source === 'fused' ? 'read from evidence' : null,
@@ -122,6 +127,23 @@ function LogRow({ entry, onPress }: { entry: DayLogEntry; onPress: () => void })
             </Body>
           )}
           <Sub style={{ marginTop: 4, lineHeight: 17 }}>{meta}</Sub>
+          {exercise ? (
+            <Pressable
+              testID={`log-exercise-${entry.id}`}
+              accessibilityRole="button"
+              accessibilityLabel={`${exercise} — how it is done`}
+              onPress={() =>
+                openExercise(router, {
+                  id: entry.record.kind === 'activity' ? entry.record.exercise_id : null,
+                  name: exercise,
+                })
+              }
+              style={{ alignSelf: 'flex-start', paddingTop: 6 }}>
+              <Sub style={{ color: C.ink, textDecorationLine: 'underline' }}>
+                {`How to do ${exercise}`}
+              </Sub>
+            </Pressable>
+          ) : null}
           <EvidenceThumbs photos={photos.map((photo) => ({ ...photo, kind: photo.kind }))} size={48} />
           {entry.editable ? null : (
             <Eyebrow style={{ marginTop: 6, fontFamily: FONT.semi }}>Kept on your plan</Eyebrow>

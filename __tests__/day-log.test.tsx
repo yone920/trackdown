@@ -42,6 +42,7 @@ const ACTIVITY: DayLogEntry = {
     kind: 'activity',
     description: '3 × 8 bench at 135 lb',
     exercise: 'Bench Press',
+    exercise_id: 'ex-bench',
     category: 'strength',
     muscle_groups: ['chest'],
     sets: 3,

@@ -84,6 +84,14 @@ export function evidenceUrl(id: string): string {
   return `${API_URL}/api/evidence/${id}`;
 }
 
+/**
+ * One frame of an exercise illustration. Authenticated like evidence is — the frames are
+ * ours to host, not the internet's — so an <Image> showing one carries `authHeaders()`.
+ */
+export function exerciseMediaUrl(exerciseId: string, index: number): string {
+  return `${API_URL}/api/exercises/${exerciseId}/media/${index}`;
+}
+
 export type UploadPart =
   | { name: string; value: string }
   | { name: string; uri: string; filename: string; type: string };

@@ -64,6 +64,10 @@ half-lived today.
 10. **Coach** — the accent button on Today. The headline, the *why*, the Do list with
     load × sets × reps, Eat, and *One thing* with a button that actually does something.
     Type a line of context and *Ask again*.
+11. **Any exercise name** — the underlined ones on Today, Day, the coach's Do list, the
+    DayLog. Two photographs, the numbered steps, the muscles, the kit, and *Watch form
+    video*. Try one the catalogue has no pictures of (a walk, a yoga session): it still
+    opens, name only, and the video still works.
 
 ### What is deferred, on purpose
 
@@ -266,6 +270,111 @@ One sentence typed into the Log sheet broke three things at once:
   constraint/preference path can already write "outdoor" or "mixed"; the goal path's enum is
   narrow because those two are what people say while setting a goal. Widening it costs
   grammar, so it needs a reason.
+
+---
+
+## Exercise illustrations (`wp-exercise-media`)
+
+"Face pull" means nothing if you have never seen one. Every exercise name in the app is now
+tappable and opens a sheet: two position photographs, the numbered steps, the muscles worked,
+the equipment, and a **Watch form video** link. The pictures and the steps come from
+**free-exercise-db** (github.com/yuhonas/free-exercise-db) — Unlicense, i.e. public domain,
+with both the JSON and the photographs in the repo — imported once and then **self-hosted**,
+so a phone showing a sheet never talks to GitHub and the dataset disappearing costs us nothing.
+
+**Match rate: 98 of 126 catalogue exercises (78%)**, after 38 aliases were added to
+`data/exercises.json`. Every big compound lift is illustrated, as is every exercise the
+coach's prescriptions and `seed-demo` mention except *Walking*. The 28 misses are almost all
+things the dataset simply does not contain — sports (Basketball, Soccer, Tennis, Pickleball,
+Boxing), cardio modalities (Running, Walking, Swimming, Hiking, Rucking, Sprints, Spin Class,
+Ski Erg, Assault Bike), mobility work (Yoga, Pilates, Stretching, Foam Rolling, Dynamic
+Warm-Up, Hip Mobility Drill, Shoulder Dislocates) — plus Landmine Press, Bulgarian Split
+Squat, Bicycle Crunch, Hollow Hold, Burpee, Neck Curl and the catch-all Other Activity. All of
+those still open, in **name-only mode**, and their form video still works.
+
+**Added**
+
+- `migrations/0010_exercise_media.sql` — `instructions text[]`, `media_count int`,
+  `source_slug text`, `level text` on `exercise_catalog`.
+- `src/services/exerciseMedia.ts` — the matching, pure and separately tested. Three rules,
+  preferred in this order: the whole normalised name; the same with a trailing `" - qualifier"`
+  dropped (`Triceps Pushdown - Rope Attachment` → `triceps pushdown`); the same with a plural
+  last word singularised (`Concentration Curls` → `concentration curl`). Parenthesised asides
+  are removed throughout, which is what turns `Machine Shoulder (Military) Press` into our
+  `machine shoulder press`. An exact name always beats a derived one.
+- `src/scripts/import-exercise-media.ts` (`npm run import-exercise-media`) — downloads the
+  dataset from a **pinned commit** (`a859101`), matches, then downloads *only matched frames
+  that are not already on disk*. Reports the match rate and names every miss.
+- `src/ports/exerciseMedia.ts` + `src/adapters/storage/exerciseMedia.ts` — the frames live at
+  `<evidence dir>/exercise-media/<exercise id>/{0,1}.jpg`, i.e. inside the `trackdown_uploads`
+  volume, so one backup covers the user's photos and the illustrations both.
+- `src/routes/exercises.ts` — `GET /api/exercises/:id` (row + steps + media urls) and
+  `GET /api/exercises/:id/media/:n` (the jpeg, `private, max-age=31536000, immutable`).
+- `app/exercise/[id].tsx`, `lib/exercise.ts`, `useExercise`, `exerciseMediaUrl`.
+
+**Changed**
+
+- **`exercise_id` now travels with the row it belongs to**: on a day activity, on a day-log
+  record, and on every line of the coach's Do list. The brief's ids are resolved *on the way
+  out* rather than stored — the model writes a name, and a name that was not in the catalogue
+  last week may be in it today.
+- `Row` (components/kit.tsx) gained `onTitlePress`. The title is underlined when it is one:
+  a row that is a link in some places and not others has to say which it is.
+- The DayLog keeps its own tap for corrections — that is the whole point of the screen — so
+  the exercise gets its own "How to do X" line underneath instead.
+- `backend/Dockerfile`'s CMD is `migrate && { import || warn } && serve`. The import is the
+  only step that needs the internet and is never allowed to stop the boot: a sheet without
+  pictures is a working screen, a container that will not start is an outage. With the volume
+  already populated it short-circuits before it even fetches the dataset.
+
+**Decisions**
+
+- **The dataset's muscles and equipment are not stored.** `exercise_catalog` already carries
+  curated ones and `db/exercises.ts` owns those columns on every `db:seed-exercises` run — a
+  second copy would be silently overwritten by the next seed, or drift from what the coach and
+  the day model read. Only `instructions`, `level`, `media_count` and `source_slug` are new.
+- **Its own port, not a second use of `EvidenceStore`.** An evidence key is a minted,
+  unguessable `YYYY/MM/<uuid>.jpg` belonging to one user; these are the opposite — fixed,
+  shared and addressable. Sharing the key space would have meant loosening the pattern that
+  stops a database value being handed to the filesystem as `../../etc/passwd`.
+- **The frames are behind auth** even though the catalogue is shared. They are pictures we
+  host; hosting them for the open internet is a bandwidth decision nobody made.
+- **The video is a YouTube search, not a curated link.** A search stays right when a video is
+  taken down, and picking one video for everyone is a recommendation nobody here is qualified
+  to make. `<name> proper form`, with spaces as `+`.
+- **One explicit exclusion**: free-exercise-db's *"Air Bike"* is a floor crunch and collides
+  with our Assault Bike's alias. No rule separates those two — only knowing what they are — so
+  `AMBIGUOUS_SOURCE_NAMES` names it, rather than a heuristic that would drop good matches too.
+- **Entries with fewer than two frames are skipped**: the sheet shows a start and an end
+  position, and one picture of a movement is not a movement.
+- No new dependencies. The importer uses `fetch`.
+
+**Tests** — 360 passing, 2 skipped in `backend` (was 344/2); 73 passing in the app (was 67).
+
+- `src/scripts/import-exercise-media.test.ts` (+10): the normalisation rules, exact-beats-derived,
+  the two-frame floor, alias and singular matching against the *real* catalogue, the Air Bike
+  exclusion, unmatched rows left alone, a second run doing nothing at all, `--force` downloading
+  nothing already on disk, and a failed frame leaving `media_count` at what is actually there.
+  The dataset and the images are injected (`src/test/fixtures/exerciseDataset.ts`) — **no test
+  in this repo touches the network.**
+- `src/app.test.ts` (+6): the sheet's body, an un-imported exercise answering name-only rather
+  than erroring, a frame streaming as a jpeg with its cache header, 404s for an unknown id, a
+  malformed id and a frame the row does not claim, 401 without a session, and `exercise_id`
+  arriving on a day activity, a day-log record and the coach's Do list.
+- `__tests__/exercise.test.tsx` (+6): the photos, the numbered steps, the muscle pills and the
+  equipment line; the video URL; name-only mode fetching nothing and still linking; and a tap on
+  Day navigating by id.
+
+**Deferred / uncertain**
+
+- **28 exercises have no illustration** (list above) and no second source was added for them.
+  wger's images are CC-BY-SA with attribution requirements and much sparser; a hand-shot set is
+  a content project, not an engineering one.
+- **`--force` is needed to pick up new aliases.** A plain run short-circuits as soon as any row
+  has media, which is what makes it free at container start. Adding an alias means
+  `npm run import-exercise-media -- --force` on the host.
+- **The sheet does not say when the fetch failed.** A 404 or a dead network looks the same as
+  "not in the catalogue": name-only. Right for the common case, thin if the API is down.
 
 ---
 

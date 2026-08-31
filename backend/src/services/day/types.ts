@@ -13,6 +13,12 @@ export interface DayActivity {
 	logged_at: string;
 	description: string;
 	exercise: string | null;
+	/**
+	 * The catalogue row `exercise` resolved to, when it resolved to one. It is what makes
+	 * an exercise name on Today or Day tappable — the app opens the sheet by id and never
+	 * has to match a string (routes/exercises.ts).
+	 */
+	exercise_id: string | null;
 	category: ActivityCategory | null;
 	muscle_groups: string[];
 	sets: number | null;
