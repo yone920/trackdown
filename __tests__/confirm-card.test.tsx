@@ -153,6 +153,26 @@ describe('ConfirmCard', () => {
     expect(onSave).toHaveBeenCalled();
     expect(onAddMore).toHaveBeenCalled();
   });
+
+  // One card is one part of a log. In a stack the Log sheet draws the single Save below
+  // them, and each card carries its own ✕ instead.
+  it('hides its own buttons when the sheet is drawing one Save for a stack', () => {
+    render(<ConfirmCard result={weight} onChange={noop} onSave={noop} onAddMore={noop} showActions={false} />);
+    expect(screen.queryByTestId('confirm-save')).toBeNull();
+    expect(screen.queryByTestId('confirm-add-more')).toBeNull();
+  });
+
+  it('offers an ✕ only when there is something to drop it from', () => {
+    const onRemove = jest.fn();
+    const { rerender } = render(<ConfirmCard result={weight} onChange={noop} onSave={noop} onAddMore={noop} />);
+    expect(screen.queryByTestId('confirm-card-remove')).toBeNull();
+
+    rerender(
+      <ConfirmCard result={weight} onChange={noop} onSave={noop} onAddMore={noop} onRemove={onRemove} />,
+    );
+    fireEvent.press(screen.getByTestId('confirm-card-remove'));
+    expect(onRemove).toHaveBeenCalled();
+  });
 });
 
 describe('sourcesLine', () => {

@@ -1,6 +1,7 @@
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 
 import { Field, FieldGrid, LineField } from '@/components/fields';
+import { IconClose } from '@/components/icons';
 import { Card, Chip, Chips } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { C } from '@/lib/theme';
@@ -19,6 +20,11 @@ import type {
 //
 // It renders *every* kind the classifier can return, including `unclear` — which asks one
 // question instead of guessing (backend/src/services/fusion/schema.ts).
+//
+// One card is one PART of a log. "Ate two eggs, ran 5k, weighed in at 181" is three of
+// these stacked, each editable and each removable with the ✕, and the Log sheet draws the
+// single Save under the stack (`showActions={false}`). On its own — the DayLog correction,
+// and every test that renders this component directly — the card keeps its own buttons.
 
 const KIND_LABEL: Record<FusionResult['kind'], string> = {
   activities: 'exercise',
@@ -107,6 +113,7 @@ export type DateChoice = 'proposed' | 'confirm_date' | 'no_date';
 export function ConfirmCard({
   result,
   onChange,
+  onRemove,
   dateChoice = 'proposed',
   onDateChoice,
   onSave,
@@ -115,10 +122,14 @@ export function ConfirmCard({
   error,
   saveLabel = 'Save',
   showAddMore = true,
+  showActions = true,
   eyebrow,
+  testID = 'confirm-card',
 }: {
   result: FusionResult;
   onChange: (next: FusionResult) => void;
+  /** Drops this part from the batch. Absent when there is only one thing to save. */
+  onRemove?: () => void;
   dateChoice?: DateChoice;
   onDateChoice?: (choice: DateChoice) => void;
   onSave: () => void;
@@ -129,8 +140,11 @@ export function ConfirmCard({
   saveLabel?: string;
   /** A correction has nothing to add more of. */
   showAddMore?: boolean;
+  /** False when the Log sheet draws one Save under a stack of these. */
+  showActions?: boolean;
   /** Overrides "Recognized · <kind>" — a correction was recognized a while ago. */
   eyebrow?: string;
+  testID?: string;
 }) {
   const patchActivity = (index: number, patch: Partial<ActivityItem>) => {
     if (result.kind !== 'activities') return;
@@ -139,10 +153,22 @@ export function ConfirmCard({
   };
 
   return (
-    <Card testID="confirm-card" style={{ marginTop: 20 }}>
+    <Card testID={testID} style={{ marginTop: 20 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <Eyebrow>{eyebrow ?? `Recognized · ${KIND_LABEL[result.kind]}`}</Eyebrow>
-        {'confidence' in result ? <ConfidenceChip level={result.confidence} /> : null}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {'confidence' in result ? <ConfidenceChip level={result.confidence} /> : null}
+          {onRemove ? (
+            <Pressable
+              accessibilityLabel={`Remove this ${KIND_LABEL[result.kind]}`}
+              testID={`${testID}-remove`}
+              onPress={onRemove}
+              hitSlop={8}
+              style={{ padding: 2 }}>
+              <IconClose size={18} color={C.mute} />
+            </Pressable>
+          ) : null}
+        </View>
       </View>
 
       {result.kind === 'activities' ? (
@@ -362,7 +388,7 @@ export function ConfirmCard({
 
       {error ? <Sub style={{ marginTop: 12, color: C.accent }}>{error}</Sub> : null}
 
-      {result.kind === 'unclear' ? (
+      {!showActions ? null : result.kind === 'unclear' ? (
         <View style={{ marginTop: 18 }}>
           <Chips>
             <Chip label="Add more" onPress={onAddMore} />

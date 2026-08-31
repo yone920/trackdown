@@ -114,7 +114,7 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 			base64: s.image.data.toString("base64"),
 		}));
 
-		const result = await analyzer.analyze({
+		const { results, photoParts } = await analyzer.analyze({
 			...(fields.text ? { text: fields.text } : {}),
 			photos: llmPhotos,
 			context,
@@ -128,25 +128,33 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 		// point on the preview as well as on the save, so the date on the confirm card is
 		// the date the goal is created with. The weigh-in itself is written by the confirm
 		// — analyze still saves nothing.
-		const proposal =
-			result.kind === "goal"
-				? await proposalForSpec(pool, userId, result.spec, {
-						tzOffsetMin: context.tzOffsetMin,
-						statedWeightLb: result.facts?.current_weight_lb ?? null,
-					})
-				: null;
-		if (proposal && result.kind === "goal") result.proposed_timeline = toProposedTimeline(proposal);
+		let proposal = null;
+		for (const result of results) {
+			if (result.kind !== "goal") continue;
+			const projected = await proposalForSpec(pool, userId, result.spec, {
+				tzOffsetMin: context.tzOffsetMin,
+				statedWeightLb: result.facts?.current_weight_lb ?? null,
+			});
+			result.proposed_timeline = toProposedTimeline(projected);
+			proposal ??= projected;
+		}
 
 		res.json({
-			result,
+			results,
+			// One release of app compatibility: a client written before mixed input reads
+			// `result` and would otherwise see nothing. Only when there is one part —
+			// a sentence with three things in it has no single result to name.
+			...(results.length === 1 ? { result: results[0] } : {}),
 			...(proposal ? { proposal } : {}),
-			evidence: stored.map((s) => ({
+			evidence: stored.map((s, index) => ({
 				id: s.row.id,
 				kind: s.row.kind,
 				mime: s.row.mime,
 				width: s.row.width,
 				height: s.row.height,
 				url: `/api/evidence/${s.row.id}`,
+				/** Which of `results` this photo was read for — the confirm links it there. */
+				part: photoParts[index] ?? 0,
 			})),
 			context: { local_date: context.localDate, tz_offset_min: context.tzOffsetMin },
 		});

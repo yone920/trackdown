@@ -13,53 +13,102 @@ import { insertTextEvidence, linkEvidence, type EvidenceRow } from "../evidence.
 import { InvalidGoalError, createGoal } from "../goals/store.js";
 import { localDateOf } from "../localTime.js";
 import type { GoalProposal } from "../goals/proposal.js";
-import { FusionResultSchema, type FusionKind, type GoalFacts } from "./schema.js";
+import { FusionResultSchema, MAX_PARTS, type FusionKind, type FusionResult, type GoalFacts } from "./schema.js";
 
 // POST /api/log/confirm's half of the pipeline: take the preview the user just approved
 // (with whatever they edited) and write it, once, in one transaction.
 //
-// Idempotent by the client's uuid. The phone mints it before it has a connection, so a
-// confirm that times out and is retried on the train home must return the first attempt's
-// rows rather than log the workout twice — the ledger is `log_confirmations`, and the
-// first attempt's response is replayed verbatim.
+// One sentence can be several things — a meal, a run and a weigh-in — so the body carries
+// `results`, a list, and every part of it is written inside the SAME transaction. One Save
+// writes it all or none of it (concept-v2 §One input mechanism): a meal that saved while
+// the weigh-in beside it failed is a day the user has to go and repair by hand.
+//
+// Idempotent by the client's uuid, still one per Save however many parts it holds. The
+// phone mints it before it has a connection, so a confirm that times out and is retried on
+// the train home must return the first attempt's rows rather than log the workout twice —
+// the ledger is `log_confirmations`, and the first attempt's response is replayed verbatim.
 
 type Row = Record<string, unknown>;
 
 const isoDate = z.string().datetime({ offset: true });
 
-export const ConfirmBody = z.object({
-	/** Minted by the client, before the request; the idempotency key. */
-	client_id: z.uuid(),
-	/** The preview, exactly as /api/log/analyze returned it, minus the user's corrections. */
-	result: FusionResultSchema,
-	/** Evidence created by /api/log/analyze (the photos) — linked to what it became. */
-	evidence_ids: z.array(z.uuid()).max(8).default([]),
-	/** The transcript or note behind the log, kept as evidence in its own right. */
-	text: z.string().trim().max(2000).nullable().optional(),
-	text_kind: z.enum(["text", "transcript"]).default("text"),
-	/** When it happened, if not now — the phone's clock, with its offset. */
-	logged_at: isoDate.optional(),
-	/**
-	 * `fused` when a model read evidence into these fields, `manual` when the user typed
-	 * them. Defaults to fused whenever evidence is attached: that is what the confidence
-	 * discount in the coach keys off.
-	 */
-	source: z.enum(["fused", "manual"]).optional(),
-	/** Minutes to add to UTC for local time; a goal's dates are the user's calendar. */
-	tz_offset_min: z.number().int().min(-840).max(840).optional(),
-	/** kind: "goal" — keep the user's own date even if the safe rate says it is a stretch. */
-	confirm_date: z.boolean().optional(),
-	/** kind: "goal" — save it open-ended instead of taking the proposed date. */
-	no_date: z.boolean().optional(),
-});
+export const ConfirmBody = z
+	.object({
+		/** Minted by the client, before the request; the idempotency key. */
+		client_id: z.uuid(),
+		/**
+		 * The preview, exactly as /api/log/analyze returned it, minus the user's
+		 * corrections — one entry per part, in the order they were said.
+		 */
+		results: z.array(FusionResultSchema).min(1).max(MAX_PARTS).optional(),
+		/**
+		 * The single-part body every client written before the mixed-input fix sends.
+		 * Accepted for one release; `results` is the shape to send.
+		 */
+		result: FusionResultSchema.optional(),
+		/** Evidence created by /api/log/analyze (the photos) — linked to what it became. */
+		evidence_ids: z.array(z.uuid()).max(8).default([]),
+		/**
+		 * Which part each evidence id belongs to, aligned with `evidence_ids`: the plate to
+		 * the meal, the machine to the exercise. Missing or short means part 0, which is the
+		 * only answer there is for a single-part log.
+		 */
+		evidence_parts: z.array(z.number().int().min(0)).max(8).default([]),
+		/** The transcript or note behind the log, kept as evidence in its own right. */
+		text: z.string().trim().max(2000).nullable().optional(),
+		text_kind: z.enum(["text", "transcript"]).default("text"),
+		/** When it happened, if not now — the phone's clock, with its offset. */
+		logged_at: isoDate.optional(),
+		/**
+		 * `fused` when a model read evidence into these fields, `manual` when the user typed
+		 * them. Defaults to fused whenever evidence is attached: that is what the confidence
+		 * discount in the coach keys off.
+		 */
+		source: z.enum(["fused", "manual"]).optional(),
+		/** Minutes to add to UTC for local time; a goal's dates are the user's calendar. */
+		tz_offset_min: z.number().int().min(-840).max(840).optional(),
+		/** kind: "goal" — keep the user's own date even if the safe rate says it is a stretch. */
+		confirm_date: z.boolean().optional(),
+		/** kind: "goal" — save it open-ended instead of taking the proposed date. */
+		no_date: z.boolean().optional(),
+	})
+	// One of the two has to be there. A 400 saying so beats a 201 that saved nothing.
+	.refine((body) => (body.results?.length ?? 0) > 0 || body.result !== undefined, {
+		message: "Send the parts to save as `results`.",
+		path: ["results"],
+	});
 export type ConfirmBody = z.infer<typeof ConfirmBody>;
 
-export interface SavedLog {
+/** The parts of a confirm body, `results` first and the legacy single `result` after it. */
+export function confirmParts(body: ConfirmBody): FusionResult[] {
+	if (body.results && body.results.length > 0) return body.results;
+	return body.result ? [body.result] : [];
+}
+
+/** The ids one part turned into, so the client can point at what it just saved. */
+export interface SavedPart {
 	kind: FusionKind;
+	activity_ids: string[];
+	meal_id: string | null;
+	weight_id: string | null;
+	goal_id: string | null;
+	evidence_ids: string[];
+}
+
+export interface SavedLog {
+	/** The first part's kind. `kinds` is the whole answer; this stays for old clients. */
+	kind: FusionKind;
+	kinds: FusionKind[];
+	/** What each part became, in the order the parts were sent. */
+	parts: SavedPart[];
 	activities: Row[];
+	/** The first meal saved; `meals` holds them all. */
 	meal: Row | null;
+	meals: Row[];
 	meal_items: Row[];
+	/** The first weigh-in saved; `weights` holds them all. */
 	weight: Row | null;
+	weights: Row[];
 	goal: Row | null;
 	/** The safe-rate timeline the goal was saved with (services/goals/proposal.ts). */
 	goal_proposal: GoalProposal | null;
@@ -80,16 +129,24 @@ export class NothingToSaveError extends Error {
 function emptySaved(kind: FusionKind): SavedLog {
 	return {
 		kind,
+		kinds: [],
+		parts: [],
 		activities: [],
 		meal: null,
+		meals: [],
 		meal_items: [],
 		weight: null,
+		weights: [],
 		goal: null,
 		goal_proposal: null,
 		profile: null,
 		coach_context: null,
 		evidence: [],
 	};
+}
+
+function emptyPart(kind: FusionKind): SavedPart {
+	return { kind, activity_ids: [], meal_id: null, weight_id: null, goal_id: null, evidence_ids: [] };
 }
 
 async function insertMealItems(client: pg.PoolClient, mealId: string, items: MealItemInput[]): Promise<Row[]> {
@@ -193,25 +250,72 @@ function goalFactsToProfile(facts: GoalFacts | null, loggedAt: string | undefine
 }
 
 /**
- * Write one confirmed preview. Runs inside a caller's transaction — every branch here is
- * all-or-nothing with the evidence links and the idempotency ledger.
+ * The photos, split by the part they were read for. An id whose part is missing or out of
+ * range goes to the first part rather than being dropped: evidence linked to nothing is
+ * evidence the sweep deletes tomorrow.
+ */
+export function evidenceByPart(
+	ids: readonly string[],
+	parts: readonly number[],
+	partCount: number
+): string[][] {
+	const buckets: string[][] = Array.from({ length: partCount }, () => []);
+	ids.forEach((id, index) => {
+		const stated = parts[index];
+		const part = Number.isInteger(stated) && stated! >= 0 && stated! < partCount ? stated! : 0;
+		buckets[part]!.push(id);
+	});
+	return buckets;
+}
+
+/**
+ * Write one confirmed preview — every part of it. Runs inside a caller's transaction, so
+ * the meal, the run and the weigh-in in one sentence are all-or-nothing together with the
+ * evidence links and the idempotency ledger.
  */
 export async function saveConfirmed(
 	client: pg.PoolClient,
 	userId: string,
 	body: ConfirmBody
 ): Promise<SavedLog> {
-	const { result } = body;
-	const saved = emptySaved(result.kind);
+	const results = confirmParts(body);
+	const saved = emptySaved(results[0]!.kind);
+	const buckets = evidenceByPart(body.evidence_ids, body.evidence_parts, results.length);
+
+	for (const [index, result] of results.entries()) {
+		await savePart(client, userId, body, result, buckets[index]!, saved);
+	}
+	return saved;
+}
+
+/** One part of the confirm, written into the running {@link SavedLog}. */
+async function savePart(
+	client: pg.PoolClient,
+	userId: string,
+	body: ConfirmBody,
+	result: FusionResult,
+	photoIds: readonly string[],
+	saved: SavedLog
+): Promise<void> {
+	const part = emptyPart(result.kind);
+	saved.kinds.push(result.kind);
+	saved.parts.push(part);
 	const loggedAt = body.logged_at;
-	const source = body.source ?? (body.evidence_ids.length > 0 ? "fused" : "manual");
-	const evidenceIds = [...body.evidence_ids];
+	const source = body.source ?? (photoIds.length > 0 ? "fused" : "manual");
+	const evidenceIds = [...photoIds];
 
 	// The words behind the log are evidence too, and the only provenance a typed log has.
+	// One row per part, so a mixed sentence shows what was said under each record it
+	// became rather than only under the first (docs/design-system.md §DayLog).
 	if (body.text) {
 		const row = await insertTextEvidence(client, userId, body.text_kind, body.text);
 		evidenceIds.push(row.id);
 	}
+	part.evidence_ids = evidenceIds;
+
+	const keep = (rows: EvidenceRow[]): void => {
+		saved.evidence.push(...rows);
+	};
 
 	switch (result.kind) {
 		case "activities": {
@@ -230,12 +334,16 @@ export async function saveConfirmed(
 				confidence: item.confidence,
 				...(loggedAt ? { logged_at: loggedAt } : {}),
 			}));
-			saved.activities = await insertEntries(client, userId, "movement", entries);
+			const rows = await insertEntries(client, userId, "movement", entries);
+			saved.activities.push(...rows);
+			part.activity_ids = rows.map((row) => row.id as string);
 			// Evidence hangs off the first activity: one photo of a machine belongs to the
 			// exercise it shows, and a log with several exercises was one moment anyway.
-			saved.evidence = await linkEvidence(client, userId, evidenceIds, {
-				activity_id: saved.activities[0]?.id as string | undefined,
-			});
+			keep(
+				await linkEvidence(client, userId, evidenceIds, {
+					activity_id: rows[0]?.id as string | undefined,
+				})
+			);
 			break;
 		}
 
@@ -252,16 +360,18 @@ export async function saveConfirmed(
 				},
 			]);
 			const meal = rows[0] as Row;
-			saved.meal = meal;
+			saved.meals.push(meal);
+			saved.meal ??= meal;
 			const mealId = meal.id as string;
-			saved.meal_items = await insertMealItems(client, mealId, result.items);
+			part.meal_id = mealId;
+			saved.meal_items.push(...(await insertMealItems(client, mealId, result.items)));
 			if (result.meal_type) {
 				// meal_type is a meals-only column, so it is not part of insertEntries'
 				// shared shape; one small update beats a special case in that helper.
 				await client.query(`UPDATE meals SET meal_type = $2 WHERE id = $1`, [mealId, result.meal_type]);
 				meal.meal_type = result.meal_type;
 			}
-			saved.evidence = await linkEvidence(client, userId, evidenceIds, { meal_id: mealId });
+			keep(await linkEvidence(client, userId, evidenceIds, { meal_id: mealId }));
 			break;
 		}
 
@@ -269,12 +379,19 @@ export async function saveConfirmed(
 			const rows = await insertWeights(client, userId, [
 				{ weight_lb: result.weight_lb, ...(loggedAt ? { logged_at: loggedAt } : {}) },
 			]);
-			saved.weight = rows[0] ?? null;
+			const weight = (rows[0] as Row | undefined) ?? null;
+			if (weight) {
+				saved.weights.push(weight);
+				saved.weight ??= weight;
+				part.weight_id = weight.id as string;
+			}
 			// Since 0009 the scale photo points at the weigh-in it was read off, which is
 			// what lets "the log, as recorded" show the picture beside the number.
-			saved.evidence = await linkEvidence(client, userId, evidenceIds, {
-				weight_id: saved.weight?.id as string | undefined,
-			});
+			keep(
+				await linkEvidence(client, userId, evidenceIds, {
+					weight_id: weight?.id as string | undefined,
+				})
+			);
 			break;
 		}
 
@@ -288,7 +405,12 @@ export async function saveConfirmed(
 				const rows = await insertWeights(client, userId, [
 					{ weight_lb: facts.current_weight_lb, ...(loggedAt ? { logged_at: loggedAt } : {}) },
 				]);
-				saved.weight = rows[0] ?? null;
+				const weight = (rows[0] as Row | undefined) ?? null;
+				if (weight) {
+					saved.weights.push(weight);
+					saved.weight ??= weight;
+					part.weight_id = weight.id as string;
+				}
 			}
 			const profilePatch = goalFactsToProfile(facts, loggedAt);
 			if (profilePatch) saved.profile = (await updateProfile(client, userId, profilePatch)) as Row;
@@ -296,6 +418,7 @@ export async function saveConfirmed(
 			// Through the same service the Goals screen uses, so a goal set by talking and
 			// a goal typed into the app get the same priority, the same validated metrics
 			// and the same computed timeline (services/goals/store.ts).
+			let goalRow: Row;
 			try {
 				const created = await createGoal(client, userId, {
 					spec: result.spec,
@@ -304,17 +427,17 @@ export async function saveConfirmed(
 					...(body.no_date === undefined ? {} : { noDate: body.no_date }),
 					...(body.tz_offset_min === undefined ? {} : { tzOffsetMin: body.tz_offset_min }),
 				});
-				saved.goal = created.goal as unknown as Row;
-				saved.goal_proposal = created.proposal;
+				goalRow = created.goal as unknown as Row;
+				saved.goal ??= goalRow;
+				saved.goal_proposal ??= created.proposal;
+				part.goal_id = goalRow.id as string;
 			} catch (error) {
 				// A spec naming a measure the app cannot compute is not something to save
 				// and explain later; it is the one question that makes the goal loggable.
 				if (error instanceof InvalidGoalError) throw new NothingToSaveError(error.message);
 				throw error;
 			}
-			saved.evidence = await linkEvidence(client, userId, evidenceIds, {
-				plan_id: saved.goal.id as string,
-			});
+			keep(await linkEvidence(client, userId, evidenceIds, { plan_id: goalRow.id as string }));
 			break;
 		}
 
@@ -327,7 +450,7 @@ export async function saveConfirmed(
 				result.text,
 				result.fields
 			);
-			saved.evidence = await linkEvidence(client, userId, evidenceIds);
+			keep(await linkEvidence(client, userId, evidenceIds));
 			break;
 		}
 
@@ -336,16 +459,14 @@ export async function saveConfirmed(
 			// back when the coach is asked that day and never after it. A context that
 			// outlives the day is a preference, which is a different table on purpose.
 			const date = localDateOf(loggedAt ?? new Date(), body.tz_offset_min ?? 0);
-			saved.coach_context = await saveCoachContext(client, userId, date, result.text);
-			saved.evidence = await linkEvidence(client, userId, evidenceIds);
+			saved.coach_context ??= await saveCoachContext(client, userId, date, result.text);
+			keep(await linkEvidence(client, userId, evidenceIds));
 			break;
 		}
 
 		case "unclear":
 			throw new NothingToSaveError(result.question);
 	}
-
-	return saved;
 }
 
 export interface ConfirmOutcome {

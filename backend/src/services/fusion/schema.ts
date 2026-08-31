@@ -4,18 +4,20 @@ import { MEASURE_IDS } from "../goals/measures.js";
 
 // The fusion schemas. Two of them, for one reason worth knowing before reading further.
 //
-// PUBLIC — `FusionResultSchema`: what /api/log/analyze returns, what the confirm card
-// renders, and what /api/log/confirm accepts back after the user's edits. A discriminated
-// union, because the input classifier's job is to *route* (docs/concept-v2.md §Goals:
-// "log · goal · constraint · preference · coach context"). One log is one of those things.
+// PUBLIC — `FusionResultSchema`: one *part* of what /api/log/analyze returns, what one
+// confirm card renders, and what /api/log/confirm accepts back after the user's edits. A
+// discriminated union, because the input classifier's job is to *route*
+// (docs/concept-v2.md §Goals: "log · goal · constraint · preference · coach context").
+// One part is one of those things — but one sentence is not necessarily one part:
+// "ate two eggs, ran 5k, weighed in at 181" is three, and the analyzer returns all three
+// (see `more_kinds` on `FusionRouteOutputSchema` below).
 //
-// MODEL-FACING — `FusionRouteOutputSchema` and `GoalDetailOutputSchema`: what is actually
-// sent to the provider. They exist because Anthropic compiles a structured-output schema
-// into a decoding grammar and refuses one that gets too big ("The compiled grammar is too
-// large"): the eight-branch public union does not compile, on Haiku or Sonnet. Measured
-// with the contract test — the ceiling sits between roughly 4 and 5 KB of JSON schema, and
-// the full union is 8.9 KB. So the model is asked for a leaner shape and the service
-// widens it back (see {@link toFusionResult}):
+// MODEL-FACING — `FusionRouteOutputSchema`, the per-kind detail schemas, and
+// `GoalDetailOutputSchema`: what is actually sent to the provider. They exist because
+// Anthropic compiles a structured-output schema into a decoding grammar and refuses one
+// that gets too big ("The compiled grammar is too large"): the eight-branch public union
+// does not compile, on Haiku or Sonnet, and it is 8.9 KB. So the model is asked for a
+// leaner shape and the service widens it back (see {@link toFusionResult}):
 //   * six branches, not eight — constraint / preference / coach_context share one
 //     `statement` branch with a `scope`, since they have the same shape anyway;
 //   * a goal is routed as a title only, and a constraint/preference as its text; the spec
@@ -27,8 +29,13 @@ import { MEASURE_IDS } from "../goals/measures.js";
 //   * `photo_fields: string[]` instead of a per-field source object — the same fact ("this
 //     came off the photo") in one array node instead of seven anyOf nodes.
 // Fields the catalogue derives on save (category, muscle_groups) are not asked for at all.
-// The routing schema is ~4.0 KB against a ceiling near 4.5; anything added to it has to be
-// measured, and the contract test is where that shows up.
+//
+// **The ceiling is about 3.66 KB of JSON schema for this shape, and the routing schema is
+// 3580.** It is not the 4–5 KB an earlier note here guessed, and it is not even monotonic
+// in size: a 3.7 KB routing schema was refused while a 4.2 KB probe of a different shape
+// compiled. Anything added to a model-facing schema has to be measured against the live
+// API — `anthropic.fusion.contract.test.ts` is where that shows up, and the byte pin in
+// `fusion.test.ts` is only an early warning. See the table on FusionRouteOutputSchema.
 //
 // Two rules both shapes follow:
 //   * Optional facts are `.nullable()`, never `.optional()`. Both providers' structured
@@ -259,8 +266,16 @@ export type FusionKind = FusionResult["kind"];
 // Model-facing schemas. Lean by necessity — see the note at the top of the file.
 // ---------------------------------------------------------------------------
 
-/** Names of the fields this record read off a photo; everything else came from words. */
-const photoFields = z.array(z.string().max(40)).max(14);
+/**
+ * Names of the fields this record read off a photo; everything else came from words.
+ * Unbounded strings on purpose: {@link expandSources} only matches them against a fixed
+ * list of field names, so a length bound buys nothing and costs grammar this schema does
+ * not have to spare.
+ */
+const photoFields = z.array(z.string()).max(14);
+
+/** Which of the photos sent with the message a part was read from. */
+const photoIndexes = z.array(z.number().int()).max(4);
 
 const ModelActivityItem = z.object({
 	exercise: z.string().nullable(),
@@ -321,12 +336,84 @@ export const FusionRouteSchema = z.discriminatedUnion("kind", [
 ]);
 export type FusionRoute = z.infer<typeof FusionRouteSchema>;
 
+/** Six parts is more than any real sentence: three kinds, twice over, is already absurd. */
+export const MAX_PARTS = 6;
+
+/**
+ * The kinds a segment can name — deliberately the same five the routing union uses, not the
+ * seven the public union has. Naming constraint / preference / coach_context here instead of
+ * `statement` was tried and the model ignored it: the routing rules right above it in the
+ * same prompt call all three "statement", so that is the word it answers with. The scope
+ * comes back from the statement's own follow-up call instead, where there is room for it.
+ */
+export const SEGMENT_KINDS = ["activities", "meal", "weight", "goal", "statement"] as const;
+export type SegmentKind = (typeof SEGMENT_KINDS)[number];
+
 /**
  * Wrapped in an object because structured outputs want an object at the root — a bare
  * union is not a JSON-schema root either provider accepts.
+ *
+ * One input is not one kind: "ate two eggs, ran 5k, weighed in at 181" is a meal, an
+ * activity and a weigh-in, and the single-`result` shape used to drop two of them. So the
+ * router answers with the FIRST thing they said, in full, plus `more_kinds` — the bare list
+ * of what else is in there, in the order they said it. Each of those is then filled in by a
+ * focused call carrying only its own kind's schema.
+ *
+ * **`more_kinds` is a list of enum values and nothing else, and that is not a style
+ * choice.** Anthropic compiles this into a decoding grammar and the real ceiling sits at
+ * about 3.66 KB of JSON schema for this shape — not the 4.5 KB the old pin claimed. Every
+ * richer segment was measured against the live API and refused:
+ *
+ *   OK    3486  the routing union alone, as it was before
+ *   OK    3655  + more_kinds: SegmentKind[]          ← this shape (3580 as shipped)
+ *   FAIL  3687  + more_kinds and one free-text field
+ *   FAIL  3764  + more: [{ kind, text }]
+ *   FAIL  3908  + more: [{ kind, text, photo_indexes }]
+ *   FAIL  3679  results: FusionRoute[] — an array multiplies a union's grammar
+ *
+ * A follow-up call is given the whole original message anyway, so a quoted segment text
+ * would have told it nothing it could not read for itself; which photos a part was read
+ * from is asked of the follow-up instead, where there is room (`photo_indexes` below).
  */
-export const FusionRouteOutputSchema = z.object({ result: FusionRouteSchema });
+export const FusionRouteOutputSchema = z.object({
+	result: FusionRouteSchema,
+	more_kinds: z.array(z.enum(SEGMENT_KINDS)).max(MAX_PARTS - 1),
+});
 export const FUSION_ROUTE_SCHEMA_NAME = "fusion_result";
+
+// --- The focused per-kind calls that fill in the rest of a mixed input. One branch each,
+// --- so each of these is a fraction of the routing schema's grammar and has room for the
+// --- photo claim the routing schema cannot afford.
+
+export const ActivitiesDetailOutputSchema = z.object({
+	items: z.array(ModelActivityItem).min(1).max(20),
+	photo_indexes: photoIndexes,
+});
+export const ACTIVITIES_DETAIL_SCHEMA_NAME = "activities";
+
+export const MealDetailOutputSchema = ModelMeal.omit({ kind: true }).extend({ photo_indexes: photoIndexes });
+export const MEAL_DETAIL_SCHEMA_NAME = "meal";
+
+export const WeightDetailOutputSchema = z.object({
+	weight_lb: z.number(),
+	confidence: FieldConfidence,
+	photo_fields: photoFields,
+	photo_indexes: photoIndexes,
+});
+export const WEIGHT_DETAIL_SCHEMA_NAME = "weigh_in";
+
+/**
+ * A constraint, preference or coach context said alongside something else. It carries its
+ * own `scope` and `text` because the router named only the kind — unlike the routing path,
+ * where the statement branch already quoted both and only the plan fields were missing.
+ * `fields` is ignored for a coach context, which changes no plan.
+ */
+export const StatementDetailOutputSchema = z.object({
+	scope: z.enum(STATEMENT_SCOPES),
+	text: z.string(),
+	fields: ProfileFieldsSchema,
+});
+export const STATEMENT_DETAIL_SCHEMA_NAME = "statement";
 
 export const GoalDetailOutputSchema = z.object({
 	spec: z.object({

@@ -499,11 +499,24 @@ export type EvidenceRef = {
   width: number | null;
   height: number | null;
   url: string;
+  /**
+   * Which of `results` this photo was read for — the plate to the meal, the machine to the
+   * exercise. Sent back on confirm as `evidence_parts` so the link is kept.
+   */
+  part?: number;
 };
 
-/** POST /api/log/analyze */
+/**
+ * POST /api/log/analyze
+ *
+ * `results` is the answer: one entry per thing the user said, in the order they said it,
+ * because one sentence can be a meal and a run and a weigh-in at once. `result` is the same
+ * thing for a single-part log and is absent when there are several — it is there for one
+ * release, for a client written before mixed input existed.
+ */
 export type AnalyzeResponse = {
-  result: FusionResult;
+  results: FusionResult[];
+  result?: FusionResult;
   proposal?: {
     projected_date: IsoDate | null;
     weeks: number | null;
@@ -517,13 +530,29 @@ export type AnalyzeResponse = {
   context: { local_date: IsoDate; tz_offset_min: number };
 };
 
+/** What one part of a confirm became — the ids, in the order the parts were sent. */
+export type SavedPart = {
+  kind: FusionKind;
+  activity_ids: string[];
+  meal_id: string | null;
+  weight_id: string | null;
+  goal_id: string | null;
+  evidence_ids: string[];
+};
+
 /** POST /api/log/confirm */
 export type ConfirmResponse = {
+  /** The first part's kind; `kinds` is the whole answer. */
   kind: FusionKind;
+  kinds: FusionKind[];
+  parts: SavedPart[];
   activities: Record<string, unknown>[];
+  /** The first meal saved; `meals` holds them all. Same for `weight` / `weights`. */
   meal: Record<string, unknown> | null;
+  meals: Record<string, unknown>[];
   meal_items: Record<string, unknown>[];
   weight: Record<string, unknown> | null;
+  weights: Record<string, unknown>[];
   goal: Record<string, unknown> | null;
   goal_proposal: unknown | null;
   profile: Record<string, unknown> | null;

@@ -9,7 +9,7 @@ import { setUserPassword } from "./services/password.js";
 import { createLogParser, type ParsedItem } from "./services/parseLog.js";
 import { createFusionAnalyzer } from "./services/fusion/analyze.js";
 import { createDayReadings } from "./services/readings/readings.js";
-import type { FusionResult, FusionRoute } from "./services/fusion/schema.js";
+import type { FusionResult, FusionRoute, SegmentKind } from "./services/fusion/schema.js";
 import { addDays, localDay } from "./services/localTime.js";
 import { startTestDatabase, type TestDatabase } from "./test/db.js";
 import { createFakeLlm } from "./test/fakes/llm.js";
@@ -49,11 +49,20 @@ function nextParse(items: ParsedItem[]): void {
  */
 function nextFusion(result: FusionRoute, goalDetail?: unknown): void {
 	if (goalDetail === undefined) {
-		llm.nextOutput = { result };
+		llm.nextOutput = { result, more_kinds: [] };
 		return;
 	}
 	// The goal path asks twice: route, then spec.
-	llm.outputs.push({ result }, goalDetail);
+	llm.outputs.push({ result, more_kinds: [] }, goalDetail);
+}
+
+/**
+ * One input that is several things — a meal and a run and a weigh-in. `result` is the first
+ * of them in full, `moreKinds` names the rest, and `details` are their focused answers in
+ * the same order.
+ */
+function nextMixedFusion(result: FusionRoute, moreKinds: SegmentKind[], ...details: unknown[]): void {
+	llm.outputs.push({ result, more_kinds: moreKinds }, ...details);
 }
 
 beforeAll(async () => {
@@ -798,6 +807,200 @@ describe("fusion — confirm", () => {
 		const res = await confirm(result, { evidence_ids: [theirs.body.evidence[0].id] });
 		expect(res.status).toBe(201);
 		expect(res.body.evidence).toEqual([]);
+	});
+});
+
+// The mixed-input rework (docs/CHANGELOG-v2.md §Field fixes). One sentence, several things,
+// one Save. The unit tests prove the analyzer splits; these prove the whole pipeline —
+// analyze, the stacked preview, one transaction — writes every part of it.
+describe("fusion — one input, several things", () => {
+	let auth: { Authorization: string };
+	let userId: string;
+
+	const eggs: FusionRoute = {
+		kind: "meal",
+		description: "two eggs and toast",
+		meal_type: "breakfast",
+		kcal: 320,
+		protein_g: 18,
+		carbs_g: 30,
+		fat_g: 14,
+		fiber_g: 3,
+		items: [],
+		confidence: "medium",
+		photo_fields: [],
+	};
+	const run = {
+		items: [
+			{
+				exercise: "Treadmill Run",
+				description: "5 km run in 28 minutes",
+				sets: null,
+				reps: null,
+				load_lb: null,
+				duration_min: 28,
+				distance_mi: 3.11,
+				kcal: 300,
+				confidence: "medium",
+				photo_fields: [],
+			},
+		],
+		photo_indexes: [] as number[],
+	};
+	const weighIn = { weight_lb: 181, confidence: "high", photo_fields: [], photo_indexes: [] };
+
+	beforeAll(async () => {
+		const token = await signUp("mila@example.com");
+		auth = { Authorization: `Bearer ${token}` };
+		const session = await request(app).get("/api/auth/get-session").set(auth);
+		userId = session.body.user.id;
+	});
+
+	it("reads a meal, a run and a weigh-in out of one sentence and saves them in one go", async () => {
+		nextMixedFusion(eggs, ["activities", "weight"], run, weighIn);
+
+		const analyzed = await request(app)
+			.post("/api/log/analyze")
+			.set(auth)
+			.field("text", "ate two eggs and toast, then ran 5k, weighed in at 181");
+
+		expect(analyzed.status).toBe(200);
+		expect(analyzed.body.results.map((result: FusionResult) => result.kind)).toEqual([
+			"meal",
+			"activities",
+			"weight",
+		]);
+		// Several parts, so there is no single `result` to name for an old client.
+		expect(analyzed.body.result).toBeUndefined();
+
+		const before = coach.inputs.length;
+		const saved = await request(app)
+			.post("/api/log/confirm")
+			.set(auth)
+			.send({
+				client_id: randomUUID(),
+				results: analyzed.body.results,
+				text: "ate two eggs and toast, then ran 5k, weighed in at 181",
+				text_kind: "transcript",
+			});
+
+		expect(saved.status).toBe(201);
+		// The ids come back in the order the parts were said.
+		expect(saved.body.kinds).toEqual(["meal", "activities", "weight"]);
+		expect(saved.body.parts.map((part: { kind: string }) => part.kind)).toEqual([
+			"meal",
+			"activities",
+			"weight",
+		]);
+		expect(saved.body.parts[0].meal_id).toEqual(saved.body.meal.id);
+		expect(saved.body.parts[1].activity_ids).toEqual([saved.body.activities[0].id]);
+		expect(saved.body.parts[2].weight_id).toEqual(saved.body.weight.id);
+		// And the rows are really there, each in its own table.
+		expect(saved.body.meal).toMatchObject({ kcal: 320, protein_g: 18 });
+		expect(saved.body.activities[0]).toMatchObject({
+			exercise: "Treadmill Run",
+			category: "cardio",
+			distance_mi: 3.11,
+		});
+		expect(saved.body.weight).toMatchObject({ weight_lb: 181 });
+		// A log is not a question for the coach: saving one asks the model nothing.
+		expect(coach.inputs).toHaveLength(before);
+
+		// The transcript is kept against each record it became, so the DayLog can show the
+		// words under all three rather than only under the meal.
+		const evidence = await db.pool.query<{ n: number }>(
+			`SELECT count(*)::int AS n FROM evidence WHERE user_id = $1 AND kind = 'transcript'`,
+			[userId]
+		);
+		expect(evidence.rows[0]!.n).toBe(3);
+	});
+
+	it("files each photo against the part it was read for", async () => {
+		nextMixedFusion(eggs, ["activities"], { ...run, photo_indexes: [1] });
+
+		const analyzed = await request(app)
+			.post("/api/log/analyze")
+			.set(auth)
+			.field("text", "had this, then this machine")
+			.attach("photos", await png(120, 60), { filename: "plate.png", contentType: "image/png" })
+			.attach("photos", await png(120, 60), { filename: "machine.png", contentType: "image/png" });
+
+		expect(analyzed.status).toBe(200);
+		// The plate stayed with the meal, the machine went to the run.
+		expect(analyzed.body.evidence.map((item: { part: number }) => item.part)).toEqual([0, 1]);
+
+		const ids = analyzed.body.evidence.map((item: { id: string }) => item.id);
+		const saved = await request(app)
+			.post("/api/log/confirm")
+			.set(auth)
+			.send({
+				client_id: randomUUID(),
+				results: analyzed.body.results,
+				evidence_ids: ids,
+				evidence_parts: analyzed.body.evidence.map((item: { part: number }) => item.part),
+			});
+
+		expect(saved.status).toBe(201);
+		const rows = await db.pool.query<{ id: string; meal_id: string | null; activity_id: string | null }>(
+			`SELECT id, meal_id, activity_id FROM evidence WHERE id = ANY($1::uuid[]) ORDER BY created_at`,
+			[ids]
+		);
+		expect(rows.rows[0]).toMatchObject({ meal_id: saved.body.meal.id, activity_id: null });
+		expect(rows.rows[1]).toMatchObject({ meal_id: null, activity_id: saved.body.activities[0].id });
+	});
+
+	it("writes every part or none of them", async () => {
+		const goodMeal: FusionResult = {
+			kind: "meal",
+			description: "a sandwich",
+			meal_type: "lunch",
+			kcal: 400,
+			protein_g: null,
+			carbs_g: null,
+			fat_g: null,
+			fiber_g: null,
+			items: [],
+			confidence: "medium",
+			sources: null,
+		};
+		const res = await request(app)
+			.post("/api/log/confirm")
+			.set(auth)
+			.send({
+				client_id: randomUUID(),
+				// The second part is a question, not a record: nothing in this Save is written.
+				results: [goodMeal, { kind: "unclear", question: "How far did you run?" }],
+			});
+
+		expect(res.status).toBe(422);
+		expect(res.body.error).toBe("How far did you run?");
+		const meals = await db.pool.query<{ n: number }>(
+			`SELECT count(*)::int AS n FROM meals WHERE user_id = $1 AND description = 'a sandwich'`,
+			[userId]
+		);
+		expect(meals.rows[0]!.n).toBe(0);
+	});
+
+	it("still answers a single-kind log the way it always did", async () => {
+		nextFusion({ kind: "weight", weight_lb: 179.6, confidence: "high", photo_fields: [] });
+		const analyzed = await request(app).post("/api/log/analyze").set(auth).field("text", "179.6 this morning");
+
+		expect(analyzed.status).toBe(200);
+		// `result` is still there for a client written before this existed, and `results`
+		// holds the same one thing.
+		expect(analyzed.body.result).toMatchObject({ kind: "weight", weight_lb: 179.6 });
+		expect(analyzed.body.results).toHaveLength(1);
+		// One kind, one call — the segmenting did not add a round trip to the hot path.
+		expect(llm.requests.at(-1)?.schemaName).toBe("fusion_result");
+
+		// And the old single-`result` confirm body still saves.
+		const saved = await request(app)
+			.post("/api/log/confirm")
+			.set(auth)
+			.send({ client_id: randomUUID(), result: analyzed.body.result });
+		expect(saved.status).toBe(201);
+		expect(saved.body).toMatchObject({ kind: "weight", kinds: ["weight"] });
+		expect(saved.body.weight).toMatchObject({ weight_lb: 179.6 });
 	});
 });
 
@@ -1995,6 +2198,10 @@ describe("goals — the facts stated alongside them", () => {
 			.field("tz_offset_min", String(tz));
 		expect(analyzed.status).toBe(200);
 		expect(analyzed.body.result.kind).toBe("goal");
+		// 0. Everything in this sentence is about the goal, so it is ONE part: the 212 is a
+		// fact the goal carries, not a weigh-in card of its own (see the analyzer's
+		// dropWeightStatedWithGoal, and the routing prompt that says so first).
+		expect(analyzed.body.results).toHaveLength(1);
 
 		// 1. The unscoped weekly_sets metric survives the preview.
 		expect(analyzed.body.result.spec.metrics.map((m: { measure: string }) => m.measure)).toEqual([

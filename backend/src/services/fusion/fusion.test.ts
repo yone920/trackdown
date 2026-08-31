@@ -1,14 +1,17 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
-import { buildFusionMessageContent, createFusionAnalyzer } from "./analyze.js";
+import { buildFusionMessageContent, createFusionAnalyzer, photoPartsFrom, usableSegments } from "./analyze.js";
 import { localDay, type FusionContext } from "./context.js";
-import { buildFusionSystemPrompt } from "./prompt.js";
+import { buildFusionSystemPrompt, buildPartDetailSystemPrompt } from "./prompt.js";
 import {
+	ActivitiesDetailOutputSchema,
 	FusionResultSchema,
 	FusionRouteOutputSchema,
 	FusionRouteSchema,
 	GoalDetailOutputSchema,
+	MealDetailOutputSchema,
 	PlanFieldsOutputSchema,
+	WeightDetailOutputSchema,
 	expandSources,
 	toFusionResult,
 } from "./schema.js";
@@ -78,6 +81,39 @@ describe("the fusion prompt", () => {
 		expect(prompt).toContain("All food and drink in a single log is ONE meal");
 		expect(prompt).toContain("Each distinct exercise is its own item");
 		expect(prompt).toContain("Sets and reps NEVER come from a photo");
+	});
+
+	it("asks for the rest of a mixed input as a list of kinds, still biased toward one part", () => {
+		const prompt = buildFusionSystemPrompt(context);
+		expect(prompt).toContain('Strongly bias toward an EMPTY "more_kinds"');
+		expect(prompt).toContain("At most one part per kind");
+		expect(prompt).toContain("Keep the user's order");
+		// A weight said on the way to a goal is the goal's stated fact, not a second part.
+		expect(prompt).toContain('NOT a second\n"weight" part');
+	});
+
+	it("tells a segment's own call which kind to pull out, and to leave the rest alone", () => {
+		const prompt = buildPartDetailSystemPrompt(context, "meal");
+		expect(prompt).toContain("Read ONLY that part");
+		expect(prompt).toContain("saved twice");
+		expect(prompt).toContain("All of it is ONE meal");
+		// It still gets the catalogue and the units, or it would invent its own spellings.
+		expect(prompt).toContain("Dumbbell Bench Press (db bench, dumbbell press)");
+		expect(prompt).toContain("Units are POUNDS and MILES");
+		// And which photos it read from, since the routing schema has no room to say.
+		expect(prompt).toContain('"photo_indexes" are the positions of the photos');
+	});
+
+	it("sends a statement segment the plan fields and the three scopes, not the catalogue", () => {
+		const prompt = buildPartDetailSystemPrompt(context, "statement");
+		expect(prompt).toContain('say in "scope" which of three it is');
+		expect(prompt).toContain("a passing state changes no plan");
+		expect(prompt).toContain("diet_style");
+		expect(prompt).not.toContain("photo_indexes");
+	});
+
+	it("lets a goal segment name its own title, since the router had none to hand over", () => {
+		expect(buildPartDetailSystemPrompt(context, "goal")).toContain("give it a short title of its own");
 	});
 
 	it("says an empty day is empty rather than saying nothing", () => {
@@ -234,10 +270,34 @@ describe("the model-facing schema", () => {
 			["fusion_result", FusionRouteOutputSchema],
 			["goal_spec", GoalDetailOutputSchema],
 			["plan_fields", PlanFieldsOutputSchema],
+			["activities", ActivitiesDetailOutputSchema],
+			["meal", MealDetailOutputSchema],
+			["weigh_in", WeightDetailOutputSchema],
 		] as const) {
 			const bytes = schemaBytes(schema);
 			expect({ name, overBudget: bytes >= GRAMMAR_CEILING_BYTES }).toEqual({ name, overBudget: false });
 		}
+	});
+
+	/**
+	 * The mixed-input rework tried `results: FusionRoute[]` first. Its JSON schema was
+	 * 3.7 KB — comfortably under the pin — and Anthropic still refused it with "the
+	 * compiled grammar is too large". An array multiplies a union's grammar by far more
+	 * than its bytes, so the routing schema holds ONE branch plus cheap segments, and the
+	 * pin above is only an early warning: the contract test is the real gate.
+	 */
+	it("keeps the routing schema to one branch of the union plus a list of bare kinds", () => {
+		const answer = FusionRouteOutputSchema.parse({
+			result: { kind: "weight", weight_lb: 181, confidence: "high", photo_fields: [] },
+			more_kinds: ["meal", "activities"],
+		});
+		// A segment is a kind and nothing else — its own call fills the fields in.
+		expect(answer.more_kinds).toEqual(["meal", "activities"]);
+		// The measured ceiling for this shape is ~3.66 KB, not the 4.5 KB the old pin
+		// claimed: a routing schema of 3655 bytes compiled and one of 3687 did not. This
+		// one is 3580. The number below is what is left of that budget; it is a budget and
+		// not a proof — anthropic.fusion.contract.test.ts is the real gate.
+		expect(schemaBytes(FusionRouteOutputSchema)).toBeLessThan(3660);
 	});
 
 	// Anthropic compiles a structured-output schema into a decoding grammar and refuses
@@ -298,12 +358,18 @@ describe("the model-facing schema", () => {
 	});
 });
 
+/** The routing answer, in the shape the provider is actually given. */
+function routed(result: unknown, moreKinds: string[] = []): unknown {
+	return { result, more_kinds: moreKinds };
+}
+
 describe("createFusionAnalyzer", () => {
 	it("routes in one call and widens the answer to the public shape", async () => {
 		const llm = createFakeLlm();
-		llm.nextOutput = { result: { kind: "statement", scope: "coach_context", text: "only 30 minutes" } };
-		const result = await createFusionAnalyzer(llm).analyze({ text: "only 30 min today", context });
-		expect(result).toEqual({ kind: "coach_context", text: "only 30 minutes" });
+		llm.nextOutput = routed({ kind: "statement", scope: "coach_context", text: "only 30 minutes" });
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "only 30 min today", context });
+		expect(results).toEqual([{ kind: "coach_context", text: "only 30 minutes" }]);
+		// One kind is still one call: the segmenting is the routing, not a call in front of it.
 		expect(llm.requests).toHaveLength(1);
 		expect(llm.requests[0]?.schemaName).toBe("fusion_result");
 	});
@@ -311,7 +377,7 @@ describe("createFusionAnalyzer", () => {
 	it("asks a second time for the goal spec, and only for a goal", async () => {
 		const llm = createFakeLlm();
 		llm.outputs.push(
-			{ result: { kind: "goal", title: "Down to 170 lb" } },
+			routed({ kind: "goal", title: "Down to 170 lb" }),
 			{
 				spec: {
 					kind: "lose_fat",
@@ -332,7 +398,8 @@ describe("createFusionAnalyzer", () => {
 				facts: { current_weight_lb: 191, training_days: null, environment: null, age_years: null },
 			}
 		);
-		const result = await createFusionAnalyzer(llm).analyze({ text: "I'm 191, I want to get to 170", context });
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "I'm 191, I want to get to 170", context });
+		const result = results[0]!;
 		expect(result.kind).toBe("goal");
 		if (result.kind !== "goal") return;
 		expect(result.spec.metrics[0]).toMatchObject({ measure: "body_weight", target: 170 });
@@ -351,7 +418,7 @@ describe("createFusionAnalyzer", () => {
 	it("keeps nothing rather than four blanks when the user stated no facts", async () => {
 		const llm = createFakeLlm();
 		llm.outputs.push(
-			{ result: { kind: "goal", title: "Down to 170 lb" } },
+			routed({ kind: "goal", title: "Down to 170 lb" }),
 			{
 				spec: {
 					kind: "lose_fat",
@@ -364,14 +431,15 @@ describe("createFusionAnalyzer", () => {
 				facts: { current_weight_lb: null, training_days: null, environment: null, age_years: null },
 			}
 		);
-		const result = await createFusionAnalyzer(llm).analyze({ text: "I want to get to 170", context });
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "I want to get to 170", context });
+		const result = results[0]!;
 		expect(result.kind === "goal" && result.facts).toBeNull();
 	});
 
 	it("asks a second time for the plan fields behind a constraint, but not for coach context", async () => {
 		const llm = createFakeLlm();
 		llm.outputs.push(
-			{ result: { kind: "statement", scope: "preference", text: "switching to keto" } },
+			routed({ kind: "statement", scope: "preference", text: "switching to keto" }),
 			{
 				fields: {
 					diet_style: "keto",
@@ -384,13 +452,13 @@ describe("createFusionAnalyzer", () => {
 				},
 			}
 		);
-		const preference = await createFusionAnalyzer(llm).analyze({ text: "switching to keto", context });
-		expect(preference).toMatchObject({ kind: "preference", fields: { diet_style: "keto", carbs_max_g: 50 } });
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "switching to keto", context });
+		expect(results[0]).toMatchObject({ kind: "preference", fields: { diet_style: "keto", carbs_max_g: 50 } });
 		expect(llm.requests).toHaveLength(2);
 
 		// A passing state changes no plan, so there is nothing to extract and no second call.
 		const second = createFakeLlm();
-		second.nextOutput = { result: { kind: "statement", scope: "coach_context", text: "knee hurts today" } };
+		second.nextOutput = routed({ kind: "statement", scope: "coach_context", text: "knee hurts today" });
 		await createFusionAnalyzer(second).analyze({ text: "knee hurts today", context });
 		expect(second.requests).toHaveLength(1);
 	});
@@ -398,21 +466,197 @@ describe("createFusionAnalyzer", () => {
 	it("asks the user rather than saving a goal the second call could not specify", async () => {
 		const llm = createFakeLlm();
 		llm.outputs.push(
-			{ result: { kind: "goal", title: "Get fitter" } },
+			routed({ kind: "goal", title: "Get fitter" }),
 			{
 				spec: { kind: "custom", title: "Get fitter", metrics: [], active_to: null },
 				facts: { current_weight_lb: null, training_days: null, environment: null, age_years: null },
 			}
 		);
-		const result = await createFusionAnalyzer(llm).analyze({ text: "get fitter", context });
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "get fitter", context });
 		// A spec with no measures is still a goal shape; it is the *missing* second call
 		// that falls back, so this one saves.
-		expect(result.kind).toBe("goal");
+		expect(results[0]?.kind).toBe("goal");
 	});
 
 	it("refuses an answer the schema does not allow, rather than saving nonsense", async () => {
 		const llm = createFakeLlm();
-		llm.nextOutput = { result: { kind: "meal" } };
+		llm.nextOutput = routed({ kind: "meal" });
 		await expect(createFusionAnalyzer(llm).analyze({ text: "lunch", context })).rejects.toThrow();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Mixed input: one sentence, several things (Field fixes 2026-08-30).
+// ---------------------------------------------------------------------------
+
+describe("splitting one input into parts", () => {
+	const eggs = {
+		kind: "meal",
+		description: "two eggs and toast",
+		meal_type: "breakfast",
+		kcal: 320,
+		protein_g: 18,
+		carbs_g: 30,
+		fat_g: 14,
+		fiber_g: 3,
+		items: [],
+		confidence: "medium",
+		photo_fields: [],
+	};
+	const run = {
+		kind: "activities",
+		items: [
+			{
+				exercise: "Run",
+				description: "5 km run",
+				sets: null,
+				reps: null,
+				load_lb: null,
+				duration_min: 28,
+				distance_mi: 3.11,
+				kcal: 300,
+				confidence: "medium",
+				photo_fields: [],
+			},
+		],
+	};
+	const weighIn = { weight_lb: 181, confidence: "high", photo_fields: [] };
+
+	it("returns one result per kind, in the order they were said", async () => {
+		const llm = createFakeLlm();
+		llm.outputs.push(
+			routed(eggs, ["activities", "weight"]),
+			{ items: run.items, photo_indexes: [] },
+			{ ...weighIn, photo_indexes: [] }
+		);
+		const { results } = await createFusionAnalyzer(llm).analyze({
+			text: "ate two eggs and toast, then ran 5k, weighed in at 181",
+			context,
+		});
+		expect(results.map((result) => result.kind)).toEqual(["meal", "activities", "weight"]);
+		expect(results[2]).toMatchObject({ kind: "weight", weight_lb: 181 });
+		// One routing call, then one focused call per extra part — two round trips, not four.
+		expect(llm.requests.map((request) => request.schemaName)).toEqual(["fusion_result", "activities", "weigh_in"]);
+		// Each focused call is told which kind to pull out and to leave the others alone.
+		expect(llm.requests[1]?.system).toContain("PHYSICAL ACTIVITY");
+		expect(llm.requests[1]?.system).toContain("saved twice");
+		// Every part is a valid public result, so every part can be confirmed.
+		for (const result of results) expect(FusionResultSchema.safeParse(result).success).toBe(true);
+	});
+
+	it("ignores a kind the router named twice", async () => {
+		const llm = createFakeLlm();
+		llm.outputs.push(routed(eggs, ["weight", "weight"]), { ...weighIn, photo_indexes: [] });
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "eggs; 181; 181", context });
+		expect(results.map((result) => result.kind)).toEqual(["meal", "weight"]);
+		expect(llm.requests).toHaveLength(2);
+	});
+
+	it("runs a goal and a statement segment through their own focused calls", async () => {
+		const llm = createFakeLlm();
+		llm.outputs.push(
+			routed(run, ["goal", "statement"]),
+			{
+				spec: {
+					kind: "lose_fat",
+					title: "Down to 200 lb",
+					metrics: [
+						{ measure: "body_weight", scope: null, target: 200, unit: "lb", direction: "decrease", rate: null, by: null },
+					],
+					active_to: null,
+				},
+				facts: { current_weight_lb: 212, training_days: 4, environment: "gym", age_years: 45 },
+			},
+			{
+				scope: "preference",
+				text: "mornings only",
+				fields: {
+					diet_style: null,
+					protein_g: null,
+					carbs_max_g: null,
+					training_days: null,
+					environment: null,
+					equipment: null,
+					eatback: null,
+				},
+			}
+		);
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "ran 5k; want 200 lb; mornings only", context });
+		expect(results.map((result) => result.kind)).toEqual(["activities", "goal", "preference"]);
+		expect(results[1]).toMatchObject({ kind: "goal", facts: { current_weight_lb: 212, training_days: 4 } });
+		// The goal's title comes off its own spec: the router named a kind, not a phrase.
+		expect(results[1]).toMatchObject({ spec: { title: "Down to 200 lb" } });
+		expect(results[2]).toEqual({ kind: "preference", text: "mornings only", fields: expect.anything() });
+		// The activities part came back complete from the routing call and asks nothing more.
+		expect(llm.requests.map((request) => request.schemaName)).toEqual([
+			"fusion_result",
+			"goal_spec",
+			"statement",
+		]);
+	});
+
+	it("asks a statement segment which of the three scopes it is", async () => {
+		const llm = createFakeLlm();
+		llm.outputs.push(routed(run, ["statement"]), {
+			scope: "coach_context",
+			text: "knee is sore today",
+			fields: null,
+		});
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "ran 5k, knee is sore", context });
+		expect(results.map((result) => result.kind)).toEqual(["activities", "coach_context"]);
+		expect(results[1]).toEqual({ kind: "coach_context", text: "knee is sore today" });
+	});
+
+	it("keeps one weigh-in when the goal already states the weight", async () => {
+		const llm = createFakeLlm();
+		llm.outputs.push(
+			routed({ kind: "goal", title: "Down to 200 lb" }, ["weight"]),
+			{
+				spec: {
+					kind: "lose_fat",
+					title: "Down to 200 lb",
+					metrics: [
+						{ measure: "body_weight", scope: null, target: 200, unit: "lb", direction: "decrease", rate: null, by: null },
+					],
+					active_to: null,
+				},
+				facts: { current_weight_lb: 212, training_days: null, environment: null, age_years: null },
+			},
+			{ weight_lb: 212, confidence: "high", photo_fields: [], photo_indexes: [] }
+		);
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "I am 212, goal is 200", context });
+		// The goal's confirm writes the 212 as a weigh-in; a second part would write it twice.
+		expect(results.map((result) => result.kind)).toEqual(["goal"]);
+	});
+
+	it("files each photo against the part that says it read it", async () => {
+		const llm = createFakeLlm();
+		// The machine photo (index 1) went to the run; the plate stayed with the meal.
+		llm.outputs.push(routed(eggs, ["activities"]), { items: run.items, photo_indexes: [1] });
+		const { photoParts } = await createFusionAnalyzer(llm).analyze({
+			text: "ate this, then did this",
+			photos: [
+				{ mediaType: "image/jpeg", base64: "AAAA" },
+				{ mediaType: "image/jpeg", base64: "BBBB" },
+			],
+			context,
+		});
+		expect(photoParts).toEqual([0, 1]);
+	});
+
+	it("leaves a photo nothing claimed with the first part", () => {
+		expect(photoPartsFrom([[1]], 3)).toEqual([0, 1, 0]);
+		// Out of range and non-integer claims are ignored rather than thrown on.
+		expect(photoPartsFrom([[9, -1, 1.5]], 2)).toEqual([0, 0]);
+		// Two parts claiming the same photo: the first one to claim it keeps it.
+		expect(photoPartsFrom([[0], [0, 1]], 2)).toEqual([1, 2]);
+		expect(photoPartsFrom([], 2)).toEqual([0, 0]);
+	});
+
+	it("has nothing more to ask when the whole log was unclear", () => {
+		const question = { kind: "unclear" as const, question: "What did you have?" };
+		expect(usableSegments(question, ["meal"])).toEqual([]);
+		const meal = { kind: "meal" as const, description: "x", meal_type: null, kcal: null, protein_g: null, carbs_g: null, fat_g: null, fiber_g: null, items: [], confidence: "low" as const, photo_fields: [] };
+		expect(usableSegments(meal, ["weight", "weight", "goal"])).toEqual(["weight", "goal"]);
 	});
 });
