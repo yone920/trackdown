@@ -100,6 +100,9 @@ export default function Today() {
   })).filter((group) => group.meals.length > 0);
   const expectedMeal = view.expected.find((item) => item.kind === 'meal') ?? null;
   const standalone = view.items.activities.filter((activity) => activity.block_id === null);
+  // Lifts print no calories, so their block's figure is a MET estimate (concept-v2
+  // §Calories). Say so, quietly, wherever that number is shown.
+  const earnedEstimated = view.blocks.some((block) => block.kcal_estimated);
 
   return (
     <ScrollView
@@ -216,7 +219,8 @@ export default function Today() {
           view.blocks.length === 0 && standalone.length === 0
             ? 'Nothing yet'
             : `${kcal(view.earned)} kcal earned`
-        }>
+        }
+        note={earnedEstimated ? 'est.' : null}>
         {view.blocks.length === 0 && standalone.length === 0 ? (
           <Card>
             <Sub>No exercise logged today.</Sub>
@@ -230,6 +234,7 @@ export default function Today() {
                   <GroupHeading
                     label={block.title}
                     right={`${clock(block.start)}–${clock(block.end)} · ${kcal(block.kcal)} kcal`}
+                    note={block.kcal_estimated ? 'est.' : null}
                   />
                   {members.map((activity, index) => (
                     <Row

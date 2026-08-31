@@ -124,6 +124,9 @@ export function buildBlocks(activities: DayActivity[]): Block[] {
 			minutes: Math.max(Math.round((end - start) / MS_PER_MIN), sumDuration(cluster)),
 			kcal: sumKcal(cluster),
 			kcal_from_health: false,
+			// Estimates are applied after the Health merge (services/day/estimate.ts): a
+			// block a watch measured must not be guessed at as well.
+			kcal_estimated: false,
 			exercise_count: cluster.length,
 			activity_ids: cluster.map((a) => a.id).filter((id): id is string => id !== null),
 			muscle_groups: [...muscles.values()],

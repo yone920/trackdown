@@ -152,6 +152,8 @@ export type Block = {
   minutes: number;
   kcal: number;
   kcal_from_health: boolean;
+  /** Part of `kcal` is a MET estimate: the lifts in the block reported none. Marked "est.". */
+  kcal_estimated: boolean;
   exercise_count: number;
   activity_ids: string[];
   muscle_groups: string[];

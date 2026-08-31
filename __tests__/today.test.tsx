@@ -96,6 +96,54 @@ describe('Today', () => {
     await waitFor(() => expect(again.getByText('What should I do tomorrow?')).toBeTruthy());
   });
 
+  it('marks an estimated block "est." on the training line and on the block itself', async () => {
+    const block = {
+      id: 'b1',
+      title: 'Chest & Triceps',
+      start: '2026-08-30T08:00:00.000Z',
+      end: '2026-08-30T08:39:00.000Z',
+      minutes: 39,
+      kcal: 264,
+      kcal_from_health: false,
+      kcal_estimated: true,
+      exercise_count: 4,
+      activity_ids: ['a1'],
+      muscle_groups: ['chest'],
+      category: 'strength' as const,
+      health: null,
+    };
+    serve({ day: makeDay({ blocks: [block], earned: 264 }) });
+    renderToday();
+
+    await waitFor(() => expect(screen.getByText('Chest & Triceps')).toBeTruthy());
+    expect(screen.getByText(/264 kcal earned/)).toBeTruthy();
+    // Once on the section's earned line, once on the block's own header.
+    expect(screen.getAllByText('est.')).toHaveLength(2);
+  });
+
+  it('leaves a block that reported its own calories unmarked', async () => {
+    const block = {
+      id: 'b1',
+      title: 'Walk',
+      start: '2026-08-30T08:00:00.000Z',
+      end: '2026-08-30T08:40:00.000Z',
+      minutes: 40,
+      kcal: 180,
+      kcal_from_health: false,
+      kcal_estimated: false,
+      exercise_count: 1,
+      activity_ids: ['a1'],
+      muscle_groups: [],
+      category: 'cardio' as const,
+      health: null,
+    };
+    serve({ day: makeDay({ blocks: [block], earned: 180 }) });
+    renderToday();
+
+    await waitFor(() => expect(screen.getByText('Walk')).toBeTruthy());
+    expect(screen.queryByText('est.')).toBeNull();
+  });
+
   it('shows the Right now reading and its action chips', async () => {
     serve({
       day: makeDay({

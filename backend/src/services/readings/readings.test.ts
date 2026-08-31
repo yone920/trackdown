@@ -119,6 +119,7 @@ function view(overrides: Partial<DayView> = {}): DayView {
 				minutes: 45,
 				kcal: 120,
 				kcal_from_health: false,
+				kcal_estimated: false,
 				exercise_count: 1,
 				activity_ids: ["a1"],
 				muscle_groups: ["chest"],

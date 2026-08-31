@@ -91,6 +91,11 @@ export interface Block {
 	kcal: number;
 	/** True when `kcal` came off the watch rather than the logs. */
 	kcal_from_health: boolean;
+	/**
+	 * True when part of `kcal` is a MET estimate rather than a number anybody reported —
+	 * the lifts in the block gave none (services/day/estimate.ts). The UI marks it "est.".
+	 */
+	kcal_estimated: boolean;
 	exercise_count: number;
 	activity_ids: string[];
 	muscle_groups: string[];

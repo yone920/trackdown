@@ -98,10 +98,13 @@ export function Card({ style, children, ...rest }: ViewProps) {
 export function Section({
   title,
   summary,
+  note,
   children,
 }: {
   title: string;
   summary?: string | null;
+  /** A qualifier on the summary — "est." — one step dimmer, because it is an aside. */
+  note?: string | null;
   children?: React.ReactNode;
 }) {
   return (
@@ -110,7 +113,12 @@ export function Section({
         <Disp size={20} weight="semi">
           {title}
         </Disp>
-        {summary ? <Sub>{summary}</Sub> : null}
+        {summary ? (
+          <Sub>
+            {summary}
+            {note ? <Sub style={{ color: C.dim }}> {note}</Sub> : null}
+          </Sub>
+        ) : null}
       </View>
       <View style={{ marginTop: 12 }}>{children}</View>
     </View>
@@ -237,7 +245,16 @@ export function Row({
 }
 
 /** The eyebrow above a group of rows inside a section (a muscle group, a meal slot). */
-export function GroupHeading({ label, right }: { label: string; right?: string | null }) {
+export function GroupHeading({
+  label,
+  right,
+  note,
+}: {
+  label: string;
+  right?: string | null;
+  /** A qualifier on `right` — "est." — dimmer and unemphasised. */
+  note?: string | null;
+}) {
   return (
     <View
       style={{
@@ -248,7 +265,14 @@ export function GroupHeading({ label, right }: { label: string; right?: string |
         marginBottom: 2,
       }}>
       <Eyebrow>{label}</Eyebrow>
-      {right ? <Eyebrow>{right}</Eyebrow> : null}
+      {right || note ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          {right ? <Eyebrow>{right}</Eyebrow> : null}
+          {note ? (
+            <Eyebrow style={{ color: C.dim, letterSpacing: 0.6, textTransform: 'none' }}>{note}</Eyebrow>
+          ) : null}
+        </View>
+      ) : null}
     </View>
   );
 }

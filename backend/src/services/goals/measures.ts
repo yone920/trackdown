@@ -36,7 +36,14 @@ export interface FactActivity {
 	load_lb: number | null;
 	duration_min: number | null;
 	distance_mi: number | null;
+	/**
+	 * The calories this activity is worth. A lift that reported none carries the MET
+	 * estimate its block was given (services/day/estimate.ts) rather than the zero the
+	 * column holds, so every reader of this window agrees with the day view's `earned`.
+	 */
 	kcal: number | null;
+	/** True when `kcal` above is that estimate and not a number anybody reported. */
+	kcal_estimated?: boolean;
 	/**
 	 * How the row was produced and how sure the reading was. No measure calculator reads
 	 * either — they are here for WP5's coach, which discounts low-confidence data and
@@ -224,6 +231,10 @@ export const MEASURES: Record<MeasureId, Measure> = {
 
 	// Positive = a deficit, matching concept-v2 §Calories ("Σ(TDEE + earned − eaten)").
 	// Needs a TDEE, so it is null until the profile has sex/height/age/activity.
+	//
+	// `earned` here is the same number the day view shows: the facts window already carries
+	// each lift's MET estimate on its `kcal` (services/day.ts buildFacts), so this is not a
+	// second, rawer sum of the same rows.
 	calorie_balance: define({
 		id: "calorie_balance",
 		label: "Calorie balance",

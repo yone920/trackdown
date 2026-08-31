@@ -172,6 +172,10 @@ negative) is dropped: the number means nothing at 8 am and frames eating as debt
   judgment.
 - **The week is the unit.** Seven day-dots, green/red, plus the weekly deficit total — "−2,900 of
   −3,500 this week ≈ 0.4 kg". Daily wiggle is noise; the week is what moves weight.
+- **Strength calories are estimates** (MET-based from block duration and body weight); cardio
+  machine displays are read as-is. The UI labels which is which — a block whose lifts gave no
+  number carries a quiet "est." beside its figure. A barbell prints nothing, and a real session
+  that reads "0 kcal earned" is a worse lie than an estimate that admits to being one.
 
 Definitions: `target = TDEE − deficit(goal pace)`; `eaten = Σ meals`; `earned = Σ activities
 (manual or Health, never both for the same block)`; `allowance = target + eatback × earned`;
