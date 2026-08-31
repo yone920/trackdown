@@ -250,6 +250,12 @@ export const ProfileFieldsSchema = z
 		protein_g: z.number().int().min(0).max(1000).nullable(),
 		carbs_max_g: z.number().int().min(0).max(2000).nullable(),
 		training_days: z.number().int().min(0).max(7).nullable(),
+		/**
+		 * How long a normal session is (migration 0014). "I've only got 45 minutes in the
+		 * gym" is a standing fact about how they train; "only 30 today" is coach context for
+		 * one day and is NOT this — the prompt says so in as many words.
+		 */
+		session_minutes: z.number().int().min(10).max(240).nullable().default(null),
 		environment: z.string().trim().max(80).nullable(),
 		equipment: z.array(z.string().trim().min(1).max(60)).max(30).nullable(),
 		eatback: z.enum(["none", "half", "all"]).nullable(),

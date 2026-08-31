@@ -112,6 +112,8 @@ export const ProfilePatch = z
 		protein_g: z.number().int().min(0).max(1000).nullable(),
 		carbs_max_g: z.number().int().min(0).max(2000).nullable(),
 		training_days: z.number().int().min(0).max(7).nullable(),
+		/** How long a normal session is (migration 0014); null = never stated, not "sixty". */
+		session_minutes: z.number().int().min(10).max(240).nullable(),
 		environment: z.string().trim().max(80).nullable(),
 		equipment: z.array(z.string().trim().min(1).max(60)).max(30),
 		// A list edited on the Profile screen replaces the list; the spoken path appends

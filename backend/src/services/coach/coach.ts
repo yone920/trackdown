@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
 import type pg from "pg";
-import type { Brief, BriefRevision, CoachBriefInputs, CoachPlan, CoachPort, CoachToday } from "../../ports/coach.js";
+import type {
+	Brief,
+	BriefRevision,
+	CoachBriefInputs,
+	CoachPlan,
+	CoachPort,
+	CoachToday,
+	RevisedBrief,
+} from "../../ports/coach.js";
 import { computeDay, type DayView } from "../day.js";
 import { lookupExercises } from "../entries.js";
 import type { ReferenceLoad } from "../fusion/schema.js";
@@ -8,9 +16,10 @@ import { listGoals } from "../goals/store.js";
 import { formatClock, localDay, localMinutesOf, type IsoDate } from "../localTime.js";
 import { currentPlace, placeEquipment } from "../places.js";
 import { loadTargets } from "../profile.js";
-import { catalogFactsFor } from "./catalog.js";
+import { catalogFactsFor, introductionCandidates } from "./catalog.js";
+import { completionOf, planIsComplete, type ExerciseCompletion } from "./completion.js";
 import { computeFeatures } from "./features.js";
-import { assertUsableBrief, UnusableBriefError } from "./schema.js";
+import { assertUsableBrief, assertUsableRevision, UnusableBriefError } from "./schema.js";
 import { buildRules, type CoachGoal, type NudgeAction, type TrainingBackground } from "./rules.js";
 
 // The brief: gathering its inputs, caching it for the day, and storing it
@@ -45,9 +54,24 @@ const MAX_OBSERVED_EQUIPMENT = 20;
  * and a name that was not in the catalogue last week may be in it today. The app never
  * matches exercise strings — it opens the sheet by this id, or by nothing.
  */
-export type BriefExercise = Brief["workout"]["exercises"][number] & { exercise_id: string | null };
+export type BriefExercise = Brief["workout"]["exercises"][number] & {
+	exercise_id: string | null;
+	/**
+	 * The local clock an appended item was added at ("2:05p"), null for the plan's original
+	 * lines. It is what the app's "added 2:05p" divider is drawn from — stored on the brief
+	 * because it is a fact about the ANSWER (when the coach said it), unlike `completion`,
+	 * which is a fact about the log and is computed on every read.
+	 */
+	added_at: string | null;
+	/** Whether this line has been done today. Computed at read time; never stored. */
+	completion?: ExerciseCompletion;
+};
 
-export type BriefWorkout = Omit<Brief["workout"], "exercises"> & { exercises: BriefExercise[] };
+export type BriefWorkout = Omit<Brief["workout"], "exercises"> & {
+	exercises: BriefExercise[];
+	/** True when every line of a non-empty Do list is done — the "Plan complete" state. */
+	complete?: boolean;
+};
 
 /** The brief as the API returns it and `coach_briefs` stores it. */
 export interface CoachBriefRecord {
@@ -61,6 +85,13 @@ export interface CoachBriefRecord {
 	workout: BriefWorkout;
 	nutrition: Brief["nutrition"];
 	nudge: string;
+	/**
+	 * The Eat card's live numbers — allowance − eaten, protein target − eaten (user decision
+	 * 2026-08-31: "Eat goes live"). Computed on every read from the day, exactly like
+	 * `completion`, and never stored: the model's `nutrition.kcal` is the day's TARGET and
+	 * stays what it was, while this is what is left of it right now.
+	 */
+	nutrition_now?: NutritionNow;
 	/** What the app can do about the nudge; null when there is nothing to act on. */
 	nudge_action: NudgeAction | null;
 	model: string | null;
@@ -68,6 +99,21 @@ export interface CoachBriefRecord {
 	created_at: string;
 	/** True when this answer came from the cache rather than the model. */
 	cached: boolean;
+}
+
+export interface NutritionNow {
+	/** allowance − eaten. Negative once the day is past its allowance. Null with no target. */
+	remaining_kcal: number | null;
+	eaten_kcal: number;
+	allowance_kcal: number | null;
+	/** target − eaten, floored at 0: "you still owe 40 g" stops at zero, it does not go under. */
+	remaining_protein_g: number | null;
+	eaten_protein_g: number | null;
+	protein_target_g: number | null;
+	/** True once the allowance is spent. The card's quiet factual line, never a scolding. */
+	past_target: boolean;
+	/** One line, already worded: "412 kcal and 38 g of protein left today." */
+	line: string;
 }
 
 interface BriefRow {
@@ -89,10 +135,30 @@ interface BriefRow {
 const BRIEF_COLUMNS = `id, date, asked_at, context, headline, rationale, workout, nutrition,
 	nudge, nudge_action, model, inputs_hash, created_at`;
 
-/** Stored jsonb has no ids in it; `withExerciseIds` fills them in on the way out. */
-function toWorkout(workout: Brief["workout"] | null): BriefWorkout {
-	if (!workout) return { type: "rest", targets: [], exercises: [] };
-	return { ...workout, exercises: workout.exercises.map((exercise) => ({ ...exercise, exercise_id: null })) };
+/**
+ * Stored jsonb has no ids in it; `withExerciseIds` fills them in on the way out.
+ *
+ * `finisher`, `is_new` and `added_at` are all defaulted here rather than required, because a
+ * brief written before they existed is still in `coach_briefs` and is still the standing
+ * answer for the day it was written.
+ */
+type StoredWorkout = Omit<Brief["workout"], "exercises" | "finisher"> & {
+	exercises: (Brief["workout"]["exercises"][number] & { added_at?: string | null })[];
+	finisher?: Brief["workout"]["finisher"];
+};
+
+function toWorkout(workout: StoredWorkout | null): BriefWorkout {
+	if (!workout) return { type: "rest", targets: [], exercises: [], finisher: [] };
+	return {
+		...workout,
+		finisher: workout.finisher ?? [],
+		exercises: workout.exercises.map((exercise) => ({
+			...exercise,
+			is_new: exercise.is_new ?? false,
+			added_at: exercise.added_at ?? null,
+			exercise_id: null,
+		})),
+	};
 }
 
 /**
@@ -128,7 +194,7 @@ function toRecord(row: BriefRow, cached: boolean): CoachBriefRecord {
 		headline: row.headline ?? "",
 		// `rationale` is 0004's name for the brief's `why`; 0008's note explains the pairing.
 		why: row.rationale ?? "",
-		workout: toWorkout(row.workout),
+		workout: toWorkout(row.workout as StoredWorkout | null),
 		nutrition: row.nutrition ?? { kcal: 0, protein_g: 0, carbs_max_g: null, ideas: [], why: "" },
 		nudge: row.nudge ?? "",
 		nudge_action: row.nudge_action,
@@ -188,6 +254,8 @@ interface PlanRow {
 	experience: string | null;
 	background: string | null;
 	reference_loads: ReferenceLoad[] | null;
+	/** Migration 0014. NULL means nobody has said, not "sixty" — see the migration's note. */
+	session_minutes: number | null;
 }
 
 /** The weekly cardio minutes a goal asks for, when one does. */
@@ -208,8 +276,15 @@ function todayFrom(view: DayView): CoachToday {
 		allowance: view.allowance,
 		remaining: view.remaining,
 		protein_g: view.macros.protein_g.eaten,
+		protein_target_g: view.macros.protein_g.target,
 		status: view.status,
 		trained: view.blocks.map((block) => block.title),
+		logged: view.items.activities.map((activity) => ({
+			exercise: activity.exercise,
+			exercise_id: activity.exercise_id,
+			sets: activity.sets,
+			category: activity.category,
+		})),
 	};
 }
 
@@ -237,7 +312,7 @@ export async function loadCoachInputs(
 	const plan = (
 		await db.query<PlanRow>(
 			`SELECT diet_style, training_days, environment, equipment, constraints, preferences,
-			        eatback, goal_pace, experience, background, reference_loads
+			        eatback, goal_pace, experience, background, reference_loads, session_minutes
 			   FROM profiles WHERE id = $1`,
 			[userId]
 		)
@@ -282,12 +357,21 @@ export async function loadCoachInputs(
 		...features.exercises.map((exercise) => exercise.exercise),
 		...background.reference_loads.map((load) => load.exercise),
 	]);
+	// The pool an introduction may be drawn from: catalogue entries this user has never
+	// logged, biased towards the muscles the ledger says are owed and towards entries that
+	// have photographs — an introduction the user cannot look up is a name, not a movement.
+	const candidates = await introductionCandidates(db, userId, {
+		muscles: features.coverage.filter((entry) => entry.overdue).map((entry) => entry.key),
+	});
+
 	const rules = buildRules({
 		features,
 		goals,
 		equipment: catalogFacts.equipment,
 		loadDirection: catalogFacts.loadDirection,
 		background,
+		sessionMinutes: plan?.session_minutes ?? null,
+		introductionCandidates: candidates,
 	});
 
 	// Where they train, and what has been seen there (migration 0012). Two small reads and
@@ -309,6 +393,8 @@ export async function loadCoachInputs(
 		eatback: plan?.eatback ?? "half",
 		experience: background.experience,
 		background: background.background,
+		session_minutes: rules.sizing.minutes,
+		session_minutes_stated: rules.sizing.stated,
 		place:
 			place && observed.length > 0
 				? { name: place.name, kind: place.kind, equipment: observed.map((row) => row.label) }
@@ -400,7 +486,7 @@ async function storeBrief(
 	userId: string,
 	inputs: CoachBriefInputs,
 	inputsHash: string,
-	brief: Brief,
+	brief: StorableBrief,
 	model: string
 ): Promise<CoachBriefRecord> {
 	const { rows } = await db.query<BriefRow>(
@@ -474,8 +560,62 @@ export async function nextBrief(
 ): Promise<NextBriefResult> {
 	const result = await chooseBrief(db, coach, userId, options);
 	// Whichever way the brief was arrived at — cache, model, or the previous one after an
-	// outage — the Do list leaves here with its catalogue ids on it.
-	return { ...result, brief: await withExerciseIds(db, result.brief) };
+	// outage — the Do list leaves here with its catalogue ids on it, each line's completion
+	// against today's log beside it, and the Eat card's numbers computed fresh.
+	const withIds = await withExerciseIds(db, result.brief);
+	return { ...result, brief: withLiveState(withIds, result.inputs) };
+}
+
+/**
+ * Everything on a brief that is a fact about TODAY rather than about the answer: the tick
+ * beside each line, and what is left to eat.
+ *
+ * It is applied on the way out and stored nowhere, which is the whole point. A brief is a
+ * record of what the coach said at 7 am; whether the lat pulldown has since been done is a
+ * question only the log can answer, and the log keeps changing all day. Writing the tick
+ * onto the brief would create a second copy of a fact that already exists, and the two would
+ * disagree the moment a row was corrected or deleted.
+ */
+export function withLiveState(brief: CoachBriefRecord, inputs: CoachBriefInputs): CoachBriefRecord {
+	const exercises = completionOf(brief.workout.exercises, inputs.today.logged);
+	return {
+		...brief,
+		workout: { ...brief.workout, exercises, complete: planIsComplete(exercises) },
+		nutrition_now: nutritionNow(inputs, brief.nutrition),
+	};
+}
+
+/** "412 kcal and 38 g of protein left today", or the flat line when the day is spent. */
+export function nutritionNow(inputs: CoachBriefInputs, nutrition: Brief["nutrition"]): NutritionNow {
+	const { today } = inputs;
+	// The allowance is the day's own arithmetic (target + eat-back of what was earned); the
+	// brief's `nutrition.kcal` is the target the coach was given. The card shows what is
+	// LEFT, so it reads the day, and falls back to the brief only when the day has no target
+	// at all — which is the account that has not said enough to have one.
+	const allowance = today.allowance ?? (nutrition.kcal > 0 ? nutrition.kcal : null);
+	const remaining = allowance == null ? null : Math.round(allowance - today.eaten);
+	const proteinTarget = today.protein_target_g ?? (nutrition.protein_g > 0 ? nutrition.protein_g : null);
+	const proteinEaten = today.protein_g;
+	const proteinLeft =
+		proteinTarget == null || proteinEaten == null ? null : Math.max(0, Math.round(proteinTarget - proteinEaten));
+
+	const pastTarget = remaining != null && remaining <= 0;
+	const parts: string[] = [];
+	if (remaining != null) parts.push(pastTarget ? `${Math.abs(remaining)} kcal over today's allowance` : `${remaining} kcal left`);
+	if (proteinLeft != null && proteinLeft > 0) parts.push(`${proteinLeft} g of protein to go`);
+	else if (proteinLeft === 0 && proteinTarget != null) parts.push("protein is there");
+
+	return {
+		remaining_kcal: remaining,
+		eaten_kcal: today.eaten,
+		allowance_kcal: allowance,
+		remaining_protein_g: proteinLeft,
+		eaten_protein_g: proteinEaten,
+		protein_target_g: proteinTarget,
+		past_target: pastTarget,
+		// Stated, never judged (concept-v2 §Principles 8 — nothing is owed).
+		line: parts.length > 0 ? `${parts.join(" · ")}.` : "No calorie target yet, so nothing to count against.",
+	};
 }
 
 async function chooseBrief(
@@ -507,7 +647,9 @@ async function chooseBrief(
 	const revision = instruction && current ? { instruction, current: toBrief(current) } : undefined;
 
 	try {
-		const answer = await askUsable(coach, inputs, revision);
+		const answer = capBrief(await askUsable(coach, inputs, revision, current), inputs, {
+			revised: revision !== undefined,
+		});
 		const stored = await storeBrief(db, userId, inputs, hash, answer, coach.model);
 		return { brief: stored, inputs, stale: false, note: null };
 	} catch (error) {
@@ -536,16 +678,114 @@ async function chooseBrief(
 async function askUsable(
 	coach: CoachPort,
 	inputs: CoachBriefInputs,
-	revision: BriefRevision | undefined
-): Promise<Brief> {
-	const answer = await coach.brief(inputs, revision);
+	revision: BriefRevision | undefined,
+	current: CoachBriefRecord | null
+): Promise<StorableBrief> {
+	const ask = async (): Promise<StorableBrief> => {
+		if (!revision) return assertUsableBrief(await coach.brief(inputs));
+		const answer = assertUsableRevision(await coach.revise(inputs, revision));
+		return answer.revision_mode === "append" && current
+			? appendToBrief(current, answer, inputs.local_time)
+			: assertUsableBrief(stripMode(answer));
+	};
+
 	try {
-		return assertUsableBrief(answer);
+		return await ask();
 	} catch (error) {
 		if (!(error instanceof UnusableBriefError)) throw error;
 		console.warn(`⚠️  Brief for ${inputs.date} had nothing to do in it, asking once more:`, error.message);
-		return assertUsableBrief(await coach.brief(inputs, revision));
+		return await ask();
 	}
+}
+
+/**
+ * The two limits that are asked for in the prompt and enforced here as well (user decision
+ * 2026-08-31 §B6, §B8: "as prompt rules plus a deterministic cap"; "AT MOST one exercise the
+ * user has never logged").
+ *
+ * A cap that lives only in a prompt is a suggestion, and the user with twenty-five minutes
+ * is the one who pays when it is ignored. Both are applied on the way to storage, so the
+ * stored brief is the one the user gets to keep.
+ *
+ *   * **One introduction.** The first `is_new` in the list keeps the flag; the rest lose it
+ *     and stay in the plan. The flag is a chip on a row, not a movement — dropping the
+ *     exercise would be a bigger correction than the mistake.
+ *   * **The exercise ceiling.** Trimmed from the END, because the model writes the session
+ *     in the order it means it to be done and the last movements are the accessories.
+ *
+ * The ceiling is applied to a brief the coach wrote on its own and NOT to a revision:
+ * "make it 8 exercises" is the user overruling the size, and an app that silently trimmed
+ * their answer back to six would be arguing with them. `revised` says which this is.
+ */
+export function capBrief<T extends StorableBrief>(
+	brief: T,
+	inputs: CoachBriefInputs,
+	{ revised = false }: { revised?: boolean } = {}
+): T {
+	let seenNew = false;
+	const exercises = brief.workout.exercises.map((exercise) => {
+		if (!exercise.is_new) return exercise;
+		if (seenNew) return { ...exercise, is_new: false };
+		seenNew = true;
+		return exercise;
+	});
+	const cap = Math.max(1, inputs.rules.sizing.max_exercises);
+	const trimmed = !revised && exercises.length > cap ? exercises.slice(0, cap) : exercises;
+	return { ...brief, workout: { ...brief.workout, exercises: trimmed } };
+}
+
+/** What gets stored: a brief, with the `added_at` stamps an append leaves behind. */
+type StorableBrief = Omit<Brief, "workout"> & {
+	workout: Omit<Brief["workout"], "exercises"> & {
+		exercises: (Brief["workout"]["exercises"][number] & { added_at?: string | null })[];
+	};
+};
+
+function stripMode({ revision_mode: _mode, ...brief }: RevisedBrief): Brief {
+	return brief;
+}
+
+/**
+ * "Give me another half hour", "add core" — the plan stays and the new items go under it
+ * (user decision 2026-08-31 §A3).
+ *
+ * What is kept and what is taken, and why each way round:
+ *
+ *   * **The exercises are concatenated**, the existing ones first with whatever `added_at`
+ *     they already carried, the new ones stamped with the clock this ask happened at. That
+ *     stamp is what the app's "added 2:05p" divider is drawn from, and it is why a second
+ *     append later in the afternoon reads as its own group rather than merging into the first.
+ *   * **The headline is the plan's**, because the plan has not changed — a new headline is
+ *     what makes an append look like a regeneration on screen, which is the bug.
+ *   * **`why` is the plan's, then the model's sentence about the addition.** Both are true
+ *     and the second explains the divider; clampBrief trims the pair to 600 characters.
+ *   * **The nutrition card and the nudge are the plan's.** "Add core" is not a statement
+ *     about eating, and the Eat card's numbers are computed live on every read anyway.
+ *   * **The type is the plan's**, unless the plan was a rest day and something has now been
+ *     added to it — at which point it is whatever the model called the addition.
+ */
+export function appendToBrief(current: CoachBriefRecord, answer: RevisedBrief, clock: string): StorableBrief {
+	const added = answer.workout.exercises.map((exercise) => ({ ...exercise, added_at: clock }));
+	const targets = [...new Set([...current.workout.targets, ...answer.workout.targets])].slice(0, 4);
+	const why = [current.why, answer.why].filter((part) => part.trim() !== "").join(" ");
+
+	return {
+		headline: current.headline,
+		why,
+		workout: {
+			type: current.workout.type === "rest" && added.length > 0 ? answer.workout.type : current.workout.type,
+			targets,
+			exercises: [
+				...current.workout.exercises.map(({ exercise_id: _id, completion: _done, ...exercise }) => exercise),
+				...added,
+			],
+			// The finisher belongs to the whole session, so a longer session gets the newer
+			// one — but never an empty one in place of a finisher that was already there.
+			finisher: answer.workout.finisher.length > 0 ? answer.workout.finisher : current.workout.finisher,
+		},
+		nutrition: current.nutrition,
+		nudge: current.nudge,
+	};
 }
 
 /** The stored record, back in the shape the model wrote — what a revision is handed. */
@@ -557,8 +797,13 @@ function toBrief(record: CoachBriefRecord): Brief {
 			type: record.workout.type,
 			targets: record.workout.targets,
 			// The catalogue ids are ours, not the model's; they mean nothing to it and cost
-			// a line of JSON each.
-			exercises: record.workout.exercises.map(({ exercise_id: _id, ...exercise }) => exercise),
+			// a line of JSON each. `added_at` and `completion` go the same way: when an item
+			// arrived and whether it has been done are facts about this app, not about the
+			// session the model is being asked to change.
+			exercises: record.workout.exercises.map(
+				({ exercise_id: _id, added_at: _added, completion: _done, ...exercise }) => exercise
+			),
+			finisher: record.workout.finisher,
 		},
 		nutrition: record.nutrition,
 		nudge: record.nudge,

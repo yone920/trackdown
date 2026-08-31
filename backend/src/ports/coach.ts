@@ -1,6 +1,6 @@
 import type { CoachFeatures } from "../services/coach/features.js";
 import type { CoachGoal, CoachRules } from "../services/coach/rules.js";
-import type { CoachBriefOutput } from "../services/coach/schema.js";
+import type { CoachBriefOutput, CoachRevisionOutput } from "../services/coach/schema.js";
 
 // The coach (docs/build-plan.md §Architecture: "CoachPort: brief(inputs) → Brief (default
 // impl composes LlmPort)").
@@ -44,6 +44,14 @@ export interface CoachPlan {
 	experience: string | null;
 	background: string | null;
 	/**
+	 * How long a normal session is for this user, in minutes (migration 0014). Never null:
+	 * `DEFAULT_SESSION_MINUTES` stands in when nobody has said, and `session_minutes_stated`
+	 * says which of the two this is — so the prompt can size the session without ever
+	 * claiming the user asked for sixty.
+	 */
+	session_minutes: number;
+	session_minutes_stated: boolean;
+	/**
 	 * Where they train and what has actually been seen there (migration 0012). Not a claim
 	 * about what the room contains — it is what this user has used, accrued one workout at a
 	 * time — which is why the prompt says "prefer these", never "only these". Null until
@@ -72,6 +80,14 @@ export interface CoachToday {
 	status: string;
 	/** Block titles logged today — "already trained" is the first thing the answer turns on. */
 	trained: string[];
+	/**
+	 * Every movement logged today, as the completion match reads it (user decision
+	 * 2026-08-31: the brief is a plan with a tick beside each line, and a brief first asked
+	 * for *after* the session must acknowledge the session rather than call the day rest).
+	 */
+	logged: { exercise: string | null; exercise_id: string | null; sets: number | null; category: string | null }[];
+	/** Protein target for the day, so the model can talk about what is LEFT rather than the total. */
+	protein_target_g: number | null;
 }
 
 export interface CoachBriefInputs {
@@ -97,6 +113,13 @@ export interface CoachBriefInputs {
 export type Brief = CoachBriefOutput;
 
 /**
+ * A revision's answer: a brief plus the model's own reading of what kind of change it was
+ * (services/coach/schema.ts §CoachRevisionSchema). On `append` the exercises are only the
+ * new ones; the merge is the service's job, not the port's.
+ */
+export type RevisedBrief = CoachRevisionOutput;
+
+/**
  * "Make it 8 exercises", "switch to legs", "I feel like chest". A revision is not a new
  * question with extra context: the user is looking at an answer and wants *that answer*
  * changed, so the model is handed today's brief and told what to do to it, and returns the
@@ -118,5 +141,12 @@ export interface CoachPort {
 	 * render half an answer — including a training day with an empty Do list, which parses
 	 * but is not an answer (services/coach/schema.ts §assertUsableBrief).
 	 */
-	brief(inputs: CoachBriefInputs, revision?: BriefRevision): Promise<Brief>;
+	brief(inputs: CoachBriefInputs): Promise<Brief>;
+	/**
+	 * A revision of the brief the user is looking at. Its own method rather than an optional
+	 * second argument because it answers a different schema — the model says whether it is
+	 * adding to the plan or replacing it, and the caller has to know which before it can
+	 * merge (schema.ts §CoachRevisionSchema).
+	 */
+	revise(inputs: CoachBriefInputs, revision: BriefRevision): Promise<RevisedBrief>;
 }

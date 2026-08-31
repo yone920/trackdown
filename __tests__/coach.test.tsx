@@ -229,3 +229,187 @@ it('routes the cold-start nudge to the Log sheet, where a statement is said', as
   fireEvent.press(await screen.findByTestId('nudge-action'));
   expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { hint: 'statement' } });
 });
+
+// ── The plan, ticked off ─────────────────────────────────────────────────────────────
+// The brief is a plan for the day and stays on screen all day (user decision 2026-08-31
+// §A). Nothing here is a verdict: a done item is dimmed and kept, a half-done one says how
+// far in it is, and a finished plan says so above a list that is still complete.
+
+function planned(overrides: Record<string, unknown> = {}) {
+  return {
+    name: 'Lat Pulldown',
+    exercise_id: 'ex-1',
+    load_lb: 110,
+    sets: 3,
+    reps: 10,
+    minutes: null,
+    note: null,
+    is_new: false,
+    added_at: null,
+    completion: { done: false, sets_done: 0, sets_prescribed: 3, partial: false },
+    ...overrides,
+  };
+}
+
+it('ticks a done line, counts a partial one, and keeps every item on screen', async () => {
+  const answer = next();
+  answer.brief.workout = {
+    type: 'strength',
+    targets: ['back'],
+    exercises: [
+      planned({ completion: { done: true, sets_done: 3, sets_prescribed: 3, partial: false } }),
+      planned({
+        name: 'Overhead Press',
+        completion: { done: false, sets_done: 2, sets_prescribed: 3, partial: true },
+      }),
+      planned({ name: 'Face Pull' }),
+    ],
+    finisher: [],
+    complete: false,
+  };
+  mockApi.mockResolvedValue(answer);
+  renderCoach();
+
+  await screen.findByText('Lat Pulldown');
+  // All three, whatever their state — a plan does not shrink as it is worked through.
+  expect(screen.getByText('Overhead Press')).toBeTruthy();
+  expect(screen.getByText('Face Pull')).toBeTruthy();
+
+  expect(screen.getByText('✓')).toBeTruthy();
+  expect(screen.getByText('2/3')).toBeTruthy();
+  expect(screen.getByText('1 of 3 done')).toBeTruthy();
+  // The untouched line carries no mark at all: nothing is owed.
+  expect(screen.queryByText('0/3')).toBeNull();
+  expect(screen.queryByTestId('coach-plan-complete')).toBeNull();
+});
+
+it('says the plan is complete without taking the plan away', async () => {
+  const answer = next();
+  answer.brief.workout = {
+    type: 'strength',
+    targets: ['back'],
+    exercises: [planned({ completion: { done: true, sets_done: 3, sets_prescribed: 3, partial: false } })],
+    finisher: [],
+    complete: true,
+  };
+  mockApi.mockResolvedValue(answer);
+  renderCoach();
+
+  expect(await screen.findByTestId('coach-plan-complete')).toHaveTextContent(/Plan complete/);
+  expect(screen.getByText('Lat Pulldown')).toBeTruthy();
+  expect(screen.queryByTestId('coach-do-empty')).toBeNull();
+});
+
+it('draws appended items under their own "added" divider', async () => {
+  const answer = next();
+  answer.brief.workout = {
+    type: 'strength',
+    targets: ['back', 'core'],
+    exercises: [
+      planned(),
+      planned({ name: 'Plank', added_at: '2:05p' }),
+      planned({ name: 'Hanging Leg Raise', added_at: '2:05p' }),
+    ],
+    finisher: [],
+    complete: false,
+  };
+  mockApi.mockResolvedValue(answer);
+  renderCoach();
+
+  await screen.findByText('Lat Pulldown');
+  // One divider for the group, not one per item.
+  expect(screen.getAllByTestId('coach-added-2:05p')).toHaveLength(1);
+  expect(screen.getByText('Added 2:05p')).toBeTruthy();
+  expect(screen.getByText('Plank')).toBeTruthy();
+});
+
+it('marks the one new movement and opens its sheet from the chip', async () => {
+  const answer = next();
+  answer.brief.workout = {
+    type: 'strength',
+    targets: ['back'],
+    exercises: [planned(), planned({ name: 'Face Pull', exercise_id: 'ex-9', is_new: true })],
+    finisher: [],
+    complete: false,
+  };
+  mockApi.mockResolvedValue(answer);
+  renderCoach();
+
+  await screen.findByText('Face Pull');
+  expect(screen.queryByTestId('coach-new-0')).toBeNull();
+  fireEvent.press(screen.getByTestId('coach-new-1'));
+  expect(mockPush).toHaveBeenCalled();
+  expect(JSON.stringify(mockPush.mock.calls[0])).toContain('ex-9');
+});
+
+it('draws the stretch finisher under the session', async () => {
+  const answer = next();
+  answer.brief.workout = {
+    type: 'strength',
+    targets: ['back'],
+    exercises: [planned()],
+    finisher: [
+      { name: 'Lat Stretch', minutes: 2, note: 'Both sides.' },
+      { name: 'Thread the Needle', minutes: 1, note: null },
+    ],
+    complete: false,
+  };
+  mockApi.mockResolvedValue(answer);
+  renderCoach();
+
+  expect(await screen.findByTestId('coach-finisher')).toBeTruthy();
+  expect(screen.getByText('Lat Stretch')).toBeTruthy();
+  expect(screen.getByText('2 min · Both sides.')).toBeTruthy();
+});
+
+it('draws the Eat card from what is LEFT of the day, not from the brief target', async () => {
+  const answer = next();
+  answer.brief.nutrition_now = {
+    remaining_kcal: 412,
+    eaten_kcal: 1842,
+    allowance_kcal: 2254,
+    remaining_protein_g: 38,
+    eaten_protein_g: 122,
+    protein_target_g: 160,
+    past_target: false,
+    line: '412 kcal left · 38 g of protein to go.',
+  };
+  mockApi.mockResolvedValue(answer);
+  renderCoach();
+
+  expect(await screen.findByTestId('eat-remaining')).toHaveTextContent('412');
+  expect(screen.getByText('kcal left')).toBeTruthy();
+  expect(screen.getByTestId('eat-line')).toHaveTextContent(/38 g of protein to go/);
+  expect(screen.getByText('1842 eaten of 2254 · ≤ 250 g carbs')).toBeTruthy();
+  // The day's target is not what the card counts down.
+  expect(screen.queryByText('2254')).toBeNull();
+});
+
+it('states a day past its allowance flatly, with nothing to do about it', async () => {
+  const answer = next();
+  answer.brief.nutrition_now = {
+    remaining_kcal: -320,
+    eaten_kcal: 2574,
+    allowance_kcal: 2254,
+    remaining_protein_g: 0,
+    eaten_protein_g: 170,
+    protein_target_g: 160,
+    past_target: true,
+    line: "320 kcal over today's allowance · protein is there.",
+  };
+  mockApi.mockResolvedValue(answer);
+  renderCoach();
+
+  expect(await screen.findByTestId('eat-remaining')).toHaveTextContent('320');
+  expect(screen.getByText('kcal over')).toBeTruthy();
+  expect(screen.getByTestId('eat-line')).toHaveTextContent(/over today's allowance/);
+});
+
+it('still draws an Eat card from an older server that sends no live numbers', async () => {
+  mockApi.mockResolvedValue(next());
+  renderCoach();
+
+  expect(await screen.findByTestId('eat-remaining')).toHaveTextContent('2254');
+  expect(screen.getByText('kcal')).toBeTruthy();
+  expect(screen.getByTestId('eat-line')).toHaveTextContent(/160 g protein/);
+});

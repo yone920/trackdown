@@ -5,16 +5,20 @@ import { computeFeatures, type CoachFeatures } from "./features.js";
 import {
 	buildRules,
 	cardioRule,
+	coverageRule,
+	DEFAULT_SESSION_MINUTES,
 	gapRule,
 	prescribeLoads,
 	recoveryRule,
 	selectNudge,
+	sessionSizing,
 	stepFor,
 	targetScheme,
+	varietyRule,
 	type CoachGoal,
 	type Prescription,
 } from "./rules.js";
-import { assertUsableBrief, CoachBriefSchema, UnusableBriefError } from "./schema.js";
+import { assertUsableBrief, assertUsableRevision, CoachBriefSchema, CoachRevisionSchema, UnusableBriefError } from "./schema.js";
 
 // The deterministic half of the coach. Every number in a brief comes from this file, so
 // every rule in docs/concept-v2.md §Progression rules has a test here that would fail if
@@ -542,7 +546,10 @@ describe("the brief schema", () => {
 			workout: {
 				type: "strength",
 				targets: ["back"],
-				exercises: [{ name: "Lat Pulldown", load_lb: 110, sets: 3, reps: 10, minutes: null, note: null }],
+				exercises: [
+					{ name: "Lat Pulldown", load_lb: 110, sets: 3, reps: 10, minutes: null, note: null, is_new: false },
+				],
+				finisher: [{ name: "Lat Stretch", minutes: 2, note: null }],
 			},
 			nutrition: { kcal: 2250, protein_g: 160, carbs_max_g: 250, ideas: ["Greek yoghurt"], why: "Carbs ran high yesterday." },
 			nudge: "Weigh in tomorrow.",
@@ -556,5 +563,176 @@ describe("the brief schema", () => {
 				workout: { ...brief.workout, exercises: [{ name: "Lat Pulldown", load_lb: 110, sets: 3, reps: 10 }] },
 			}).success
 		).toBe(false);
+	});
+});
+
+// ── Sizing the session, and the ledger's debts ───────────────────────────────────────
+// Both are user decisions of 2026-08-31: a brief scales with the minutes the user actually
+// has, and the rotation is held to a ledger rather than to the model's taste.
+
+describe("sizing the session to the minutes", () => {
+	it("is an hour when nobody has said, and says which of the two it is", () => {
+		const hour = sessionSizing(null, false);
+		expect(hour.minutes).toBe(DEFAULT_SESSION_MINUTES);
+		expect(hour.stated).toBe(false);
+		expect(hour.text).toContain("nobody has said");
+		// Five or six movements is what the prompt has always asked for, so the default
+		// changes nobody's brief.
+		expect(hour.target_exercises).toBeGreaterThanOrEqual(5);
+		expect(hour.target_exercises).toBeLessThanOrEqual(6);
+	});
+
+	it("shrinks the list as the minutes shrink, and never below two movements", () => {
+		expect(sessionSizing(90, true).target_exercises).toBeGreaterThan(sessionSizing(60, true).target_exercises);
+		expect(sessionSizing(60, true).target_exercises).toBeGreaterThan(sessionSizing(30, true).target_exercises);
+		expect(sessionSizing(45, true).target_exercises).toBeGreaterThan(sessionSizing(25, true).target_exercises);
+		// The floor: below about half an hour there are two movements and no arguing.
+		expect(sessionSizing(25, true).target_exercises).toBe(2);
+		expect(sessionSizing(10, true).target_exercises).toBe(2);
+	});
+
+	it("caps one over the ask, so a sixth movement with a reason is not refused", () => {
+		for (const minutes of [15, 25, 40, 60, 90, 120]) {
+			const sizing = sessionSizing(minutes, true);
+			expect(sizing.max_exercises).toBe(sizing.target_exercises + 1);
+			expect(sizing.max_exercises).toBeLessThanOrEqual(10);
+		}
+	});
+
+	it("scales the finisher too, and always leaves at least two items", () => {
+		expect(sessionSizing(20, true).finisher_items).toBe(2);
+		expect(sessionSizing(35, true).finisher_items).toBe(3);
+		expect(sessionSizing(60, true).finisher_items).toBe(4);
+	});
+
+	it("holds an absurd number to something a body can do", () => {
+		expect(sessionSizing(5, true).minutes).toBe(10);
+		expect(sessionSizing(600, true).minutes).toBe(240);
+		expect(sessionSizing(600, true).target_exercises).toBeLessThanOrEqual(8);
+	});
+
+	it("reaches the prompt through buildRules, and says the user said so when they did", () => {
+		const features = computeFeatures({ facts: facts({ activities: [lift(daysAgo(2))] }) });
+		const said = buildRules({ features, goals: [], sessionMinutes: 30 });
+		expect(said.sizing).toMatchObject({ minutes: 30, stated: true });
+		expect(said.statements.join("\n")).toContain("SESSION LENGTH: 30 minutes (the user said so)");
+
+		const unsaid = buildRules({ features, goals: [] });
+		expect(unsaid.sizing.minutes).toBe(DEFAULT_SESSION_MINUTES);
+		expect(unsaid.sizing.stated).toBe(false);
+	});
+});
+
+describe("the coverage rule", () => {
+	const ledger = (entries: Partial<Parameters<typeof coverageRule>[0][number]>[]) =>
+		entries.map((entry) => ({
+			key: entry.key ?? "core",
+			label: entry.label ?? "core",
+			days_since: entry.days_since ?? null,
+			last_date: entry.last_date ?? null,
+			sets_14d: entry.sets_14d ?? 0,
+			sets_28d: entry.sets_28d ?? 0,
+			unit: entry.unit ?? ("sets" as const),
+			overdue: entry.overdue ?? true,
+			debt_days: entry.debt_days ?? 29,
+		}));
+
+	it("names each debt with its number and demands the largest be retired", () => {
+		const text = coverageRule(
+			ledger([
+				{ key: "core", label: "core", days_since: 21, overdue: true },
+				{ key: "calves", label: "calves", days_since: null, overdue: true },
+			]),
+			[]
+		);
+		expect(text).toContain("core: 21 days unserved");
+		expect(text).toContain("calves: never served in four weeks");
+		expect(text).toContain("RETIRE THE LARGEST DEBTS");
+	});
+
+	it("says so plainly when nothing is owed, rather than inventing an obligation", () => {
+		const text = coverageRule(
+			ledger([{ key: "core", label: "core", days_since: 2, overdue: false, debt_days: 2 }]),
+			[]
+		);
+		expect(text).toContain("nothing is overdue");
+		expect(text).not.toContain("RETIRE");
+	});
+
+	it("keeps a debt from overruling the 48-hour rule", () => {
+		const text = coverageRule(ledger([{ key: "quads", label: "quads", days_since: 20 }]), ["chest", "triceps"]);
+		expect(text).toContain("chest, triceps");
+		expect(text).toContain("still recovering");
+	});
+
+	it("says nothing at all with no ledger to read", () => {
+		expect(coverageRule([], [])).toBeNull();
+	});
+});
+
+describe("variety and the one introduction", () => {
+	it("offers the candidates it was given, and only those", () => {
+		const text = varietyRule(["Hanging Leg Raise", "Face Pull"]);
+		expect(text).toContain("AT MOST ONE");
+		expect(text).toContain("Hanging Leg Raise, Face Pull");
+		expect(text).toContain("and from nowhere else");
+	});
+
+	it("asks for no introduction at all when there is nothing left to introduce", () => {
+		const text = varietyRule([]);
+		expect(text).toContain("introduce nothing");
+		expect(text).not.toContain("AT MOST ONE");
+	});
+
+	it("always asks for bodyweight work in the rotation and a finisher on a training day", () => {
+		const text = varietyRule(["Push-Up"]);
+		expect(text.toLowerCase()).toContain("bodyweight");
+		expect(text.toLowerCase()).toContain("rest day has no finisher");
+	});
+});
+
+// ── Never a retroactive rest verdict ─────────────────────────────────────────────────
+
+describe("a brief asked for after the session has already happened", () => {
+	it("tells the model to build around what was done, and never to call it rest", () => {
+		const rule = gapRule(0);
+		expect(rule.level).toBe("fresh");
+		expect(rule.text).toContain("COMPLEMENT");
+		expect(rule.text).toContain("never be called one");
+		expect(rule.text.toLowerCase()).not.toMatch(/consider mobility, cardio or rest/);
+	});
+});
+
+// ── The revision's mode ──────────────────────────────────────────────────────────────
+
+describe("the revision schema", () => {
+	const brief = {
+		headline: "Pull day",
+		why: "Back is five days out.",
+		workout: {
+			type: "strength",
+			targets: ["back"],
+			exercises: [{ name: "Lat Pulldown", load_lb: 110, sets: 3, reps: 10, minutes: null, note: null, is_new: false }],
+			finisher: [],
+		},
+		nutrition: { kcal: 2250, protein_g: 160, carbs_max_g: 250, ideas: [], why: "Steady." },
+		nudge: "Weigh in tomorrow.",
+	};
+
+	it("will not parse a revision that forgot to say which kind it is", () => {
+		expect(CoachRevisionSchema.safeParse(brief).success).toBe(false);
+		expect(CoachRevisionSchema.safeParse({ ...brief, revision_mode: "merge" }).success).toBe(false);
+		expect(CoachRevisionSchema.parse({ ...brief, revision_mode: "append" }).revision_mode).toBe("append");
+	});
+
+	it("refuses an append that adds nothing, and a rewrite with an empty training day", () => {
+		const empty = { ...brief, workout: { ...brief.workout, exercises: [] } };
+		expect(() => assertUsableRevision({ ...empty, revision_mode: "append" } as never)).toThrow(UnusableBriefError);
+		expect(() => assertUsableRevision({ ...empty, revision_mode: "rewrite" } as never)).toThrow(UnusableBriefError);
+		// A rest day is still the one answer allowed to be empty.
+		const rest = { ...empty, workout: { ...empty.workout, type: "rest" }, revision_mode: "rewrite" as const };
+		expect(assertUsableRevision(rest as never)).toBeTruthy();
+		// An append that adds something is fine even onto a rest day.
+		expect(assertUsableRevision({ ...brief, revision_mode: "append" } as never)).toBeTruthy();
 	});
 });

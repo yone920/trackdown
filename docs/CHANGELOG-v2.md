@@ -87,6 +87,217 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-08-31 — the brief is a plan, not a verdict (`wp-coach-living-plan`)
+
+Photographed mid-workout: the user asked the coach at eleven, having lifted at eight, and
+the morning's plan was replaced by **"Rest today · 0 MOVES"**. Everything below follows from
+the one sentence the user wrote about it — *the day's brief is a PLAN, never a verdict* —
+plus the programming the plan needs to be worth keeping open all day.
+
+#### A — the plan, ticked off
+
+- **Completion is computed at read time and stored nowhere.** `services/coach/completion.ts`
+  matches each prescribed line against the day's logged activities — `exercise_id` when both
+  sides have one, otherwise a **qualifier-safe name match** — and returns
+  `{ done, sets_done, sets_prescribed, partial }`. `withLiveState` in `services/coach/coach.ts`
+  attaches it on the way out of `nextBrief`, so both the GET and the POST carry it. Nothing
+  is written to `coach_briefs`, and a test asserts the stored jsonb has no `completion` in
+  it: the brief is what the coach *said*, and whether the pulldown has since been done is a
+  question only the log can answer — one that changes again when a row is corrected or
+  deleted.
+- **The matcher is the log's own rule, pointed the other way.** `sameMovement` compares
+  normalised, singularised, *sorted* token sets (so "bench press with dumbbells" and
+  "dumbbell bench press" are one movement) and then refuses any pair whose qualifiers
+  differ. A plain **Chin-Up** in the log does not tick an **Assisted Chin-Up** off the plan.
+  Word order stops mattering; `assisted` never does.
+- **The screen keeps every item all day.** A done row is dimmed to 0.45 and carries a ✓; a
+  half-done one reads `2/3`; an untouched one carries **nothing** — a column of `0/3` is a
+  to-do list the user did not write (§Principles 8). The group heading counts *"1 of 3
+  done"*. When the last item lands, a **Plan complete** card appears **above a list that is
+  still all there**.
+- **The button says "What should I do today?", always.** It used to flip to *tomorrow* the
+  moment anything was logged, which told someone standing in the gym that today was over.
+  `workout_done` is no longer read on Today.
+
+#### B — never a retroactive rest verdict
+
+`workout.type: "rest"` is a *plan* for a day of recovery. It is not a reaction to work
+already done, and two places used to let it become one.
+
+- **`gapRule(0)`** said "Already trained today. Anything prescribed is in addition to that —
+  consider mobility, cardio or rest." It now says the session must be **named** and the
+  answer built **around** it, that anything added is a COMPLEMENT, and that today "is not a
+  rest day and must never be called one".
+- **The prompt** gained a `NEVER A RETROACTIVE REST VERDICT` block saying the same thing in
+  the model's own terms, including the two ways the old answer was written and why neither
+  is allowed: *"Nothing more today" is a fine answer — as a sentence in "why". It is NOT
+  written by setting workout.type to "rest", and it is NOT written by returning an empty Do
+  list, which replaces the user's plan with a blank page.*
+- **`today.logged`** is new on `CoachToday`: every movement of the day with its set count,
+  not just the block titles, printed as *"Logged today, movement by movement: … This work is
+  DONE and counts."* The completion match reads the same list, so the sentence the model is
+  given and the ticks on screen come from one place.
+- A contract case reproduces the field report against the live model — lats, rows and an
+  assisted chin-up logged at 07:40, first ask at 11:20 — and asserts the answer is not rest,
+  is not empty, and names what was done.
+
+#### C — add-ons append
+
+`POST /api/coach/next/regenerate` with a `revision` now goes through `CoachPort.revise`,
+whose schema is the brief plus **`revision_mode: "append" | "rewrite"`**. The model decides.
+
+- On **append** the model returns ONLY the new items and `appendToBrief` merges: the
+  exercises are concatenated with the new ones stamped `added_at` (the local clock), and the
+  plan keeps its **headline**, its **nutrition card** and its **nudge**. `why` becomes the
+  plan's reasoning followed by the model's sentence about the addition. The app draws an
+  **"Added 2:05p"** divider above each group.
+- On **rewrite** ("switch to legs", "make it 8 exercises") nothing changes from before: the
+  whole brief comes back and replaces the old one.
+- `assertUsableRevision` refuses an append that adds nothing, retries once, and falls back to
+  the standing plan with a note — the same shape of guard as the empty Do list.
+
+**The decision this cost a contract run to find: `revision_mode` is the FIRST field in the
+schema, and that is load-bearing.** Structured output is decoded in schema order, so a flag
+at the end is chosen *after* the answer is written — and a model that has just written a
+complete replacement session answers "rewrite", correctly. On identical prompts, "add core"
+came back as a rewrite with the flag last and as an append with it first. Deciding before
+answering is the whole point of the field.
+
+#### D — Eat goes live
+
+The Eat card counted down the day's **target**, which stopped being the interesting number
+the moment anything was eaten. `nutritionNow()` computes `allowance − eaten` and
+`protein target − eaten protein` from the same day view the ring is drawn from, on every
+read, stored nowhere. The card's big figure is what is **left**; past the allowance it is the
+amount **over** and one flat line — *"320 kcal over today's allowance · protein is there."* —
+with no advice attached, tested for the absence of "try", "should" and "tomorrow". The
+model's `nutrition.kcal` is untouched: it is the target, and it does not move.
+
+#### E — the programming brain
+
+- **`session_minutes` (migration `0014`).** Nullable, checked to 10–240, `NULL` = nobody has
+  said — *not* `DEFAULT 60`, which is the `daily_calorie_target` lesson: a column default
+  reported back as a stated value. `DEFAULT_SESSION_MINUTES` lives in TypeScript beside the
+  rules that read it. Set by talking, like every plan field: it is on `ProfileFieldsSchema`
+  (the **second** call, never the routing union — pinned by a test) with a prompt line
+  separating "my sessions are about 45 minutes" (a standing fact) from "only 30 today"
+  (coach context, which still overrides for the day).
+- **`sessionSizing()`** turns minutes into a shape: ~8 working minutes per exercise, 5 of
+  warm-up, the finisher off the top. An hour is 5–6 movements, which is what the prompt
+  always asked for, so the default changes nobody's brief; 25 minutes is 2. It reaches the
+  model as a `SESSION LENGTH` rule **and** is enforced in code — `capBrief` trims the tail —
+  because a cap that lives only in a prompt is a suggestion, and the user with 25 minutes is
+  the one who pays. The cap is **not** applied to a revision: "make it 8 exercises" is the
+  user overruling the size, and trimming their answer back would be arguing with them.
+- **The coverage ledger.** `coverageLedger()` is a second, coarser reading of the same
+  window: twelve entries in a lifter's vocabulary (`core` = abs + obliques, `upper back` =
+  back + traps) plus **stretching**, which is counted in *sessions* because a stretch has no
+  sets. Each carries days-since-served, 14- and 28-day counts, and `overdue` (never served,
+  or unserved for two weeks). It reaches the prompt as `COVERAGE LEDGER` and as
+  `COVERAGE DEBTS` — *"core: 21 days unserved"* — with the rule that today retires the
+  largest debts it can **within the recovery constraints**, which are still absolute.
+- **Variety and one introduction.** `introductionCandidates()` reads the catalogue for
+  entries this user has **never** logged (all time, by id or name), preferring ones whose
+  primary muscles are on the debt list and then ones with photographs, and offers ten. The
+  prompt may mark **at most one** exercise `is_new`, with the reason in its `note`;
+  `capBrief` drops the flag off any extras and **keeps the exercises** — the chip was wrong,
+  not the movement. The app draws a "New to you" chip that opens the exercise sheet.
+- **A finisher, in its own array.** `workout.finisher` is 2–4 stretch/mobility items scaled
+  with the minutes and aimed at what the day trained. It fitted: `CoachBriefSchema` is
+  1,934 JSON-schema bytes against a 3,000-byte budget and a 4,500 ceiling, and the contract
+  test compiles it on the live model. The fold-into-`exercises` fallback was not needed.
+- **The board carries the ledger.** `GET /api/training/board` returns `frequency.coverage` —
+  `features.coverage` straight through, not a second reading of the same rows, for the same
+  reason the board's next step is `prescribeLoads` and not a copy of it. Progress draws one
+  line, **"Overdue a turn · Calves · never · Core · 21 days"**, replacing the older "not
+  trained in four weeks" line rather than sitting beside it.
+
+**Decisions**
+
+- **Completion is derived, never stored.** Two copies of "has this been done" is two answers
+  the moment a row is corrected, and the log is the one that is right.
+- **A tick is not a nag.** An untouched line carries no marker at all. `0/3` on five rows is
+  a to-do list, which concept-v2 §Principles 8 exists to keep out of this app.
+- **An append keeps the plan's headline.** A new headline is what makes an addition look
+  like a regeneration on screen, which is the bug. The nutrition card and the nudge are kept
+  for the same reason — "add core" is not a statement about eating.
+- **`revise` is its own port method**, not an optional argument to `brief`. It answers a
+  different schema, and the caller has to know the mode before it can merge.
+- **The ledger is coarser than the catalogue on purpose.** `TRACKED_MUSCLES` still drives the
+  recovery rule and the muscle bars, untouched. Merging `abs` and `obliques` into "core" is
+  about what the sentence should say, and doing it inside the recovery rule would have
+  changed a progression to improve a paragraph.
+- **`session_minutes` is nullable.** See the migration's note, and `fix-safearea-target-label`.
+- **The brief's inputs hash now includes the coverage ledger**, because it is part of
+  `features`. Every brief written before today reads as `stale: true` on the first ask after
+  deploy — correctly: the advice really was built without it. Nothing is regenerated
+  unasked.
+- No new dependencies. One migration.
+
+**Tests** — 558 passing, 2 skipped in `backend` (was 505/2, with the key set so the contract
+tests run); 185 passing in the app (was 176).
+
+- `src/services/coach/completion.test.ts` (new, 14): the match across case, punctuation,
+  plurals and word order; the assisted family refused **both ways round**; the id winning
+  over the name and disagreeing with it; none / partial / done / past-done; sets summed
+  across the rows one visit produced; a row with no set count read as done rather than as
+  "0 of 3"; and an empty plan never "complete".
+- `src/services/coach/features.test.ts` (+7): a row per tracked muscle plus stretching
+  whether or not it was trained; the 14/28-day counts and days-since; abs + obliques folding
+  into "core" and back + traps into "upper back"; stretching counted in **sessions**;
+  overdue at fourteen days with "never" as the largest debt there is; the future ignored;
+  and the ledger on `computeFeatures` being the same object the board gets.
+- `src/services/coach/rules.test.ts` (+16): the default hour and what it sizes to; the list
+  shrinking with the minutes and flooring at two; the cap one over the ask; the finisher
+  scaling; absurd minutes held to 10–240; `buildRules` carrying it and saying who said it;
+  the debts named with their numbers and the recovery constraint kept above them; the "nothing
+  is overdue" wording; the candidate list and its silence when there is nothing to introduce;
+  `gapRule(0)` demanding a complement and forbidding "rest"; and the revision schema refusing
+  a missing or unknown mode, an append that adds nothing, and a rewrite with an empty
+  training day.
+- `src/services/training/board.test.ts` (+1): the ledger on the board being `features.coverage`
+  itself, with chest served, quads never, stretching in sessions, and the debts first.
+- `src/services/fusion/fusion.test.ts` (+1): `session_minutes` on the plan-fields call, its
+  bounds both ways, its default when absent, and **not one byte of it on the routing union**.
+- `src/app.test.ts` (+11): the plan ticked from none → partial → complete over real rows with
+  every item still on screen and **no `completion` in the stored jsonb**; the Eat card equal
+  to `GET /api/day`'s own numbers, and the over-allowance line with nothing to do about it;
+  an append landing under the plan with the headline, nutrition and nudge kept, the reasoning
+  extended and only the new rows stamped; a rewrite replacing the list; an empty append
+  refused and not stored; three `is_new` flags cut to one with all three exercises kept; the
+  mid-workout ask carrying every movement with its sets and the two prompt rules; the ledger
+  and its debts in the prompt; the sizing block, the candidate list (never a logged
+  exercise); and 25 stated minutes cutting five movements to three.
+- `anthropic.coach.contract.test.ts` (+2, all five run here against the real model, **five for
+  five**): "add core" coming back as an **append** of two to four core movements that are not
+  the ones already in the plan; and the field report — lats logged this morning, asked at
+  11:20 — coming back as a session that names what was done, with `type` not rest and the Do
+  list not empty. The two existing revision cases now assert `revision_mode: "rewrite"`.
+- `__tests__/coach.test.tsx` (+8): the ✓, the `2/3`, the "1 of 3 done" heading and the absent
+  `0/3`; Plan complete drawn above a list that is still there; one divider per added *group*;
+  the "New to you" chip on exactly one row and the sheet it opens; the finisher; the Eat card
+  reading the live numbers and not the target; the over-allowance state; and an older server
+  with no `nutrition_now` still drawing a card.
+- `__tests__/progress.test.tsx` (+1) and `__tests__/today.test.tsx` (1 rewritten): the overdue
+  line, longest first, replacing the untrained one; and the coach button asking about **today**
+  with a workout logged.
+
+**Deferred**
+
+- **An append is still not a conversation.** Two appends in an afternoon are two groups under
+  two dividers, which reads correctly — but the second one is written with no memory of the
+  first instruction, only of the plan it produced.
+- **The finisher has no completion.** Stretching is rarely logged, and ticking off an item
+  nobody logs would draw a permanently unfinished list under a finished plan.
+- **`is_new` is not remembered.** A movement introduced today and never done is offered again
+  tomorrow, because the candidate query asks the *log*, not the briefs. Right, probably —
+  an introduction the user ignored is not evidence they know it — but it is a choice.
+- **The ledger's vocabulary is a list.** Twelve entries and stretching, hand-mapped to the
+  catalogue's tags. A tag nobody mapped (`hip_flexors`, `adductors`, `neck`) pays into no
+  ledger entry and is invisible to the debts; the muscle bars still show it.
+- **Nothing re-sizes a plan already on screen** when `session_minutes` changes. The next
+  brief is sized to the new number; today's stands, which is what sticky means.
+
 ### 2026-08-31 — one tab for where you stand, and a board for what you lift (`wp-progress-scoreboard`)
 
 Two tabs answered one question badly. **Goals** said what was being chased and **Progress**

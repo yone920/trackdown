@@ -99,9 +99,13 @@ function cannedLlm(): LlmPort {
 								type: "strength",
 								targets: ["back", "shoulders"],
 								exercises: [
-									{ name: "Lat Pulldown", load_lb: 110, sets: 3, reps: 10, minutes: null, note: "Hold the load until ten is clean." },
-									{ name: "Dumbbell Row", load_lb: 50, sets: 3, reps: 12, minutes: null, note: null },
-									{ name: "Overhead Press", load_lb: 65, sets: 4, reps: 8, minutes: null, note: null },
+									{ name: "Lat Pulldown", load_lb: 110, sets: 3, reps: 10, minutes: null, note: "Hold the load until ten is clean.", is_new: false },
+									{ name: "Dumbbell Row", load_lb: 50, sets: 3, reps: 12, minutes: null, note: null, is_new: false },
+									{ name: "Overhead Press", load_lb: 65, sets: 4, reps: 8, minutes: null, note: null, is_new: false },
+								],
+								finisher: [
+									{ name: "Lat Stretch", minutes: 2, note: "Both sides, off a rack." },
+									{ name: "Doorway Chest Stretch", minutes: 2, note: null },
 								],
 							},
 							nutrition: {

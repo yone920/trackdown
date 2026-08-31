@@ -306,6 +306,29 @@ describe('Progress — frequency, cardio and body', () => {
     expect(screen.getByTestId('muscles-untrained').props.children.join('')).toContain('Lats');
   });
 
+  // The coverage ledger, when the server sends one (user decision 2026-08-31 §B7). It
+  // replaces the older "not trained in four weeks" line rather than sitting beside it:
+  // two lists of absences on one card is one list too many.
+  it('marks the muscles the rotation is overdue, longest first', async () => {
+    serve({
+      board: makeBoard({
+        frequency: {
+          ...makeBoard().frequency,
+          coverage: [
+            { key: 'calves', label: 'calves', days_since: null, sets_14d: 0, sets_28d: 0, unit: 'sets', overdue: true },
+            { key: 'core', label: 'core', days_since: 21, sets_14d: 0, sets_28d: 3, unit: 'sets', overdue: true },
+            { key: 'chest', label: 'chest', days_since: 2, sets_14d: 6, sets_28d: 18, unit: 'sets', overdue: false },
+          ],
+        },
+      }),
+    });
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('muscles-overdue')).toBeTruthy());
+    expect(screen.getByText('Calves · never · Core · 21 days')).toBeTruthy();
+    // One list, not two.
+    expect(screen.queryByTestId('muscles-untrained')).toBeNull();
+  });
+
   it('draws cardio against the plan, with the last pace', async () => {
     serve();
     renderProgress();

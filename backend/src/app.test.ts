@@ -717,6 +717,7 @@ describe("fusion — confirm", () => {
 				protein_g: null,
 				carbs_max_g: 50,
 				training_days: 4,
+				session_minutes: null,
 				environment: "gym",
 				equipment: null,
 				eatback: null,
@@ -2848,6 +2849,7 @@ describe("coach — revising the brief, and never storing an empty one", () => {
 	afterEach(() => {
 		coach.nextBrief = SAMPLE_BRIEF;
 		coach.briefs.length = 0;
+		coach.revisedBriefs.length = 0;
 	});
 
 	it("hands the model the current brief and the instruction, and stores what comes back", async () => {
@@ -2867,7 +2869,9 @@ describe("coach — revising the brief, and never storing an empty one", () => {
 					reps: 8,
 					minutes: null,
 					note: null,
+					is_new: false,
 				})),
+				finisher: [],
 			},
 		};
 		coach.nextBrief = eight;
@@ -2904,7 +2908,7 @@ describe("coach — revising the brief, and never storing an empty one", () => {
 		// What the field report produced: a strength day with nothing in it. It parses —
 		// the fake validates against the real schema and lets it through, exactly as the
 		// provider would.
-		const empty = { ...SAMPLE_BRIEF, headline: "Push day", workout: { type: "strength", targets: ["chest"], exercises: [] } };
+		const empty = { ...SAMPLE_BRIEF, headline: "Push day", workout: { type: "strength", targets: ["chest"], exercises: [], finisher: [] } };
 		coach.briefs.push(empty, empty);
 
 		const res = await request(app)
@@ -2930,7 +2934,7 @@ describe("coach — revising the brief, and never storing an empty one", () => {
 		coach.nextBrief = {
 			...SAMPLE_BRIEF,
 			headline: "Rest — three days running",
-			workout: { type: "rest", targets: ["recovery"], exercises: [] },
+			workout: { type: "rest", targets: ["recovery"], exercises: [], finisher: [] },
 		};
 		const res = await request(app)
 			.post("/api/coach/next/regenerate")
@@ -2960,6 +2964,351 @@ describe("coach — revising the brief, and never storing an empty one", () => {
 			.set(headers)
 			.send({ tz_offset_min: tz, revision: "x".repeat(501) });
 		expect(res.status).toBe(400);
+	});
+});
+
+// ── Field fix: the day's brief is a PLAN, never a verdict ────────────────────────────
+// Reported from the phone: asked mid-workout, after lats were already logged, and the
+// screen replaced the morning's plan with "Rest today · 0 MOVES". Three separate things
+// had to change (user decision 2026-08-31 §A): the plan is ticked off rather than
+// re-issued, an ask after training is never a rest verdict, and an add-on appends.
+
+describe("the living plan — completion, add-ons and the live Eat card", () => {
+	const tz = tzForLocalHour(14);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+
+	const logLift = (values: Record<string, unknown>) =>
+		request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({ logged_at: localInstant(today, "08:20", tz), ...values });
+
+	beforeAll(async () => {
+		const token = await signUp("plan@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+	}, 60_000);
+
+	afterEach(() => {
+		coach.nextBrief = SAMPLE_BRIEF;
+		coach.briefs.length = 0;
+		coach.revisedBriefs.length = 0;
+	});
+
+	it("ticks each line of the plan off against the day, and says when the plan is complete", async () => {
+		// SAMPLE_BRIEF prescribes Lat Pulldown 3 × 10 and Overhead Press 3 × 8.
+		const first = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(first.status).toBe(200);
+		expect(first.body.brief.workout.exercises.map((e: { completion: unknown }) => e.completion)).toEqual([
+			{ done: false, sets_done: 0, sets_prescribed: 3, partial: false },
+			{ done: false, sets_done: 0, sets_prescribed: 3, partial: false },
+		]);
+		expect(first.body.brief.workout.complete).toBe(false);
+
+		// Two of the three sets: partial, and the line stays on screen.
+		await logLift({ description: "2 × 10 lat pulldown at 110", exercise: "Lat Pulldown", sets: 2, reps: 10, load_lb: 110 });
+		const partial = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(partial.body.brief.id).toBe(first.body.brief.id);
+		expect(partial.body.brief.workout.exercises[0].completion).toEqual({
+			done: false,
+			sets_done: 2,
+			sets_prescribed: 3,
+			partial: true,
+		});
+		expect(partial.body.brief.workout.exercises[1].completion.done).toBe(false);
+		expect(partial.body.brief.workout.complete).toBe(false);
+
+		// The third set finishes it, and the second movement finishes the plan.
+		await logLift({ description: "1 × 10 lat pulldown at 110", exercise: "Lat Pulldown", sets: 1, reps: 10, load_lb: 110 });
+		await logLift({ description: "3 × 8 overhead press at 65", exercise: "Overhead Press", sets: 3, reps: 8, load_lb: 65 });
+		const done = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(done.body.brief.workout.exercises.map((e: { completion: { done: boolean } }) => e.completion.done)).toEqual([
+			true,
+			true,
+		]);
+		expect(done.body.brief.workout.complete).toBe(true);
+		// Every item is still there. A finished plan stays on screen; it is not emptied.
+		expect(done.body.brief.workout.exercises).toHaveLength(2);
+		// And nothing about the tick was written down: the brief is what the coach said.
+		const stored = await db.pool.query<{ workout: { exercises: unknown[] } }>(
+			`SELECT workout FROM coach_briefs WHERE id = $1`,
+			[done.body.brief.id]
+		);
+		expect(JSON.stringify(stored.rows[0]!.workout)).not.toContain("completion");
+	});
+
+	it("draws the Eat card from the day, not from the brief's own targets", async () => {
+		await request(app)
+			.post("/api/entries/meals")
+			.set(headers)
+			.send({ description: "chicken and rice", kcal: 700, protein_g: 55, logged_at: localInstant(today, "12:30", tz) })
+			.expect(201);
+
+		const res = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		const now = res.body.brief.nutrition_now;
+		const day = await request(app).get(`/api/day/${today}?tz=${tz}`).set(headers);
+
+		expect(now.eaten_kcal).toBe(day.body.eaten);
+		expect(now.allowance_kcal).toBe(day.body.allowance);
+		expect(now.remaining_kcal).toBe(day.body.remaining);
+		expect(now.eaten_protein_g).toBe(day.body.macros.protein_g.eaten);
+		expect(now.past_target).toBe(false);
+		expect(now.line).toContain("kcal left");
+		// The model's own numbers are untouched — they are the day's TARGET, not what is left.
+		expect(res.body.brief.nutrition.kcal).toBe(SAMPLE_BRIEF.nutrition.kcal);
+	});
+
+	it("states a day past its allowance as a fact, with no advice attached", async () => {
+		await request(app)
+			.post("/api/entries/meals")
+			.set(headers)
+			.send({ description: "a very large dinner", kcal: 4200, logged_at: localInstant(today, "13:30", tz) })
+			.expect(201);
+
+		const res = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		const now = res.body.brief.nutrition_now;
+		expect(now.past_target).toBe(true);
+		expect(now.remaining_kcal).toBeLessThanOrEqual(0);
+		expect(now.line).toContain("over today's allowance");
+		expect(now.line).not.toMatch(/try|should|tomorrow|careful/i);
+	});
+
+	it("appends an add-on under the plan instead of regenerating it", async () => {
+		const before = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		const originals = before.body.brief.workout.exercises.map((e: { name: string }) => e.name);
+
+		coach.revisedBriefs.push({
+			...SAMPLE_BRIEF,
+			headline: "Ignore me — an append keeps the plan's headline",
+			why: "Twenty minutes of core on the end.",
+			workout: {
+				type: "strength",
+				targets: ["core"],
+				exercises: [
+					{ name: "Plank", load_lb: null, sets: 3, reps: null, minutes: 1, note: null, is_new: false },
+					{ name: "Hanging Leg Raise", load_lb: null, sets: 3, reps: 10, minutes: null, note: null, is_new: false },
+				],
+				finisher: [],
+			},
+			nutrition: { ...SAMPLE_BRIEF.nutrition, kcal: 9999 },
+			nudge: "Ignore me too.",
+			revision_mode: "append",
+		});
+
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "add core" });
+
+		expect(res.status).toBe(200);
+		const names = res.body.brief.workout.exercises.map((e: { name: string }) => e.name);
+		// The plan stands and the two new items are under it, in order.
+		expect(names).toEqual([...originals, "Plank", "Hanging Leg Raise"]);
+		// The plan keeps its own headline, its own eating card and its own nudge.
+		expect(res.body.brief.headline).toBe(before.body.brief.headline);
+		expect(res.body.brief.nutrition.kcal).toBe(before.body.brief.nutrition.kcal);
+		expect(res.body.brief.nudge).toBe(before.body.brief.nudge);
+		// The reasoning gains the sentence about the addition rather than losing the old one.
+		expect(res.body.brief.why).toContain(before.body.brief.why);
+		expect(res.body.brief.why).toContain("Twenty minutes of core");
+		// Only the added items carry a stamp, and it is the local clock.
+		const stamps = res.body.brief.workout.exercises.map((e: { added_at: string | null }) => e.added_at);
+		expect(stamps.slice(0, originals.length)).toEqual(originals.map(() => null));
+		expect(new Set(stamps.slice(originals.length)).size).toBe(1);
+		expect(stamps.at(-1)).toMatch(/\d/);
+	});
+
+	it("rebuilds the plan when the instruction is a rewrite", async () => {
+		coach.revisedBriefs.push({
+			...SAMPLE_BRIEF,
+			headline: "Leg day",
+			why: "Switched to legs as asked.",
+			workout: {
+				type: "strength",
+				targets: ["quads"],
+				exercises: [{ name: "Back Squat", load_lb: 185, sets: 3, reps: 5, minutes: null, note: null, is_new: false }],
+				finisher: [],
+			},
+			revision_mode: "rewrite",
+		});
+
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "switch to legs" });
+
+		expect(res.status).toBe(200);
+		expect(res.body.brief.headline).toBe("Leg day");
+		expect(res.body.brief.workout.exercises.map((e: { name: string }) => e.name)).toEqual(["Back Squat"]);
+		expect(res.body.brief.why).toBe("Switched to legs as asked.");
+		expect(res.body.brief.workout.exercises[0].added_at).toBeNull();
+	});
+
+	it("refuses an append that adds nothing, and keeps the plan on screen", async () => {
+		const before = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		const briefsBefore = await countBriefs(today, "plan@example.com");
+		const nothing = {
+			...SAMPLE_BRIEF,
+			workout: { type: "strength", targets: ["core"], exercises: [], finisher: [] },
+			revision_mode: "append",
+		};
+		coach.revisedBriefs.push(nothing, nothing);
+
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "add core" });
+
+		expect(res.status).toBe(200);
+		expect(res.body.stale).toBe(true);
+		expect(res.body.brief.id).toBe(before.body.brief.id);
+		expect(await countBriefs(today, "plan@example.com")).toBe(briefsBefore);
+	});
+
+	it("keeps at most one 'new to you' movement, whatever the model marked", async () => {
+		coach.nextBrief = {
+			...SAMPLE_BRIEF,
+			workout: {
+				type: "strength",
+				targets: ["back"],
+				exercises: [
+					{ name: "Lat Pulldown", load_lb: 110, sets: 3, reps: 10, minutes: null, note: null, is_new: true },
+					{ name: "Face Pull", load_lb: 40, sets: 3, reps: 15, minutes: null, note: null, is_new: true },
+					{ name: "Overhead Press", load_lb: 65, sets: 3, reps: 8, minutes: null, note: null, is_new: true },
+				],
+				finisher: [],
+			},
+		};
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz });
+
+		const flags = res.body.brief.workout.exercises.map((e: { is_new: boolean }) => e.is_new);
+		expect(flags).toEqual([true, false, false]);
+		// The over-marked movements stay in the plan: the chip was wrong, not the exercise.
+		expect(res.body.brief.workout.exercises).toHaveLength(3);
+	});
+});
+
+// ── Never a retroactive rest verdict, and the ledger the rotation is held to ──────────
+
+describe("asking after the session has already happened", () => {
+	const tz = tzForLocalHour(11);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("mid@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+		// The field case: lats, logged this morning, before the first ask of the day.
+		for (const lift of [
+			{ description: "4 × 12 lat pulldown at 100", exercise: "Lat Pulldown", sets: 4, reps: 12, load_lb: 100 },
+			{ description: "3 × 10 seated cable row at 90", exercise: "Seated Cable Row", sets: 3, reps: 10, load_lb: 90 },
+		]) {
+			await request(app)
+				.post("/api/entries/movement")
+				.set(headers)
+				.send({ ...lift, logged_at: localInstant(today, "07:40", tz) });
+		}
+	}, 60_000);
+
+	it("tells the model what was done and forbids it from calling the day rest", async () => {
+		const res = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+
+		const inputs = coach.inputs.at(-1)!;
+		// Movement by movement, not just the block's title.
+		expect(inputs.today.logged.map((item) => item.exercise).sort()).toEqual(["Lat Pulldown", "Seated Cable Row"]);
+		expect(inputs.today.logged.find((item) => item.exercise === "Lat Pulldown")).toMatchObject({ sets: 4 });
+
+		const prompt = buildCoachPrompt(inputs);
+		expect(prompt).toContain("NEVER A RETROACTIVE REST VERDICT");
+		expect(prompt).toContain("Lat Pulldown (4 sets)");
+		expect(prompt).toContain("This work is DONE and counts");
+		expect(prompt).toContain("do not call today a rest day because of it");
+		// The gap rule agrees rather than pulling the other way.
+		expect(inputs.rules.gap.text).toContain("COMPLEMENT");
+	});
+
+	it("carries the coverage ledger with its debts named", async () => {
+		await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		const inputs = coach.inputs.at(-1)!;
+
+		const prompt = buildCoachPrompt(inputs);
+		expect(prompt).toContain("COVERAGE LEDGER");
+		expect(prompt).toContain("COVERAGE DEBTS");
+		expect(prompt).toContain("quads: NEVER served in four weeks");
+		expect(prompt).toContain("stretching: NEVER served in four weeks");
+		expect(prompt).toContain("RETIRE THE LARGEST DEBTS");
+		// The lats were served this morning, so they are not on the debt list.
+		expect(inputs.features.coverage.find((entry) => entry.key === "lats")).toMatchObject({
+			days_since: 0,
+			overdue: false,
+		});
+	});
+
+	it("sizes the session, and asks for an introduction from the catalogue", async () => {
+		await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		const inputs = coach.inputs.at(-1)!;
+		const prompt = buildCoachPrompt(inputs);
+
+		expect(inputs.plan.session_minutes).toBe(60);
+		expect(inputs.plan.session_minutes_stated).toBe(false);
+		expect(prompt).toContain("SESSION LENGTH: 60 minutes");
+		expect(prompt).toContain("AT MOST ONE exercise the user has never logged");
+		// The candidates are real catalogue names, and never one already logged.
+		// The candidate list itself, not the paragraph it sits in.
+		const offered = inputs.rules.statements.join("\n").match(/nowhere else — (.+?) — set is_new true/)?.[1] ?? "";
+		expect(offered.length).toBeGreaterThan(40);
+		expect(offered).not.toContain("Lat Pulldown");
+		expect(offered).not.toContain("Seated Cable Row");
+	});
+
+	it("re-sizes the whole brief when the user says how long a session is", async () => {
+		await request(app).patch("/api/profile").set(headers).send({ session_minutes: 25 });
+		await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz });
+
+		const inputs = coach.inputs.at(-1)!;
+		expect(inputs.plan.session_minutes).toBe(25);
+		expect(inputs.plan.session_minutes_stated).toBe(true);
+		expect(inputs.rules.sizing.max_exercises).toBe(3);
+		expect(buildCoachPrompt(inputs)).toContain("SESSION LENGTH: 25 minutes (the user said so)");
+
+		// And the cap is enforced, not only asked for: five movements come back as three.
+		coach.nextBrief = {
+			...SAMPLE_BRIEF,
+			workout: {
+				type: "strength",
+				targets: ["back"],
+				exercises: Array.from({ length: 5 }, (_unused, index) => ({
+					name: `Movement ${index + 1}`,
+					load_lb: null,
+					sets: 3,
+					reps: 8,
+					minutes: null,
+					note: null,
+					is_new: false,
+				})),
+				finisher: [],
+			},
+		};
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, context: "feeling good" });
+		expect(res.body.brief.workout.exercises.map((e: { name: string }) => e.name)).toEqual([
+			"Movement 1",
+			"Movement 2",
+			"Movement 3",
+		]);
+		coach.nextBrief = SAMPLE_BRIEF;
+		await request(app).patch("/api/profile").set(headers).send({ session_minutes: null });
 	});
 });
 

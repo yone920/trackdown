@@ -13,7 +13,7 @@ import { getSpeech } from '@/lib/ports/speech';
 import { localDateKey, useAskCoach, useCoachNext, useUpdateGoal } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
-import type { CoachBrief } from '@/lib/types';
+import type { BriefExercise, CoachBrief, ExerciseCompletion } from '@/lib/types';
 
 // The coach (docs/concept-v2.md §Coach; docs/design-system.md §Today — the accent pill
 // that leads here). A button, and nothing else: no schedule, no notification, no second
@@ -34,6 +34,34 @@ import type { CoachBrief } from '@/lib/types';
 // The nudge's button is not generated. `nudge_action` is chosen by
 // backend/src/services/coach/rules.ts and only ever routes — the coach proposes, the
 // user's tap is what changes anything.
+
+/**
+ * The mark at the end of a Do row. A tick when it is done, "2/3" while it is half in, and
+ * nothing at all before it is started — an untouched plan should read as a plan, not as a
+ * column of zeroes (concept-v2 §Principles 8: nothing is owed).
+ */
+function tick(completion: ExerciseCompletion | undefined): string | null {
+  if (!completion) return null;
+  if (completion.done) return '✓';
+  if (completion.partial && completion.sets_prescribed != null) {
+    return `${completion.sets_done}/${completion.sets_prescribed}`;
+  }
+  return null;
+}
+
+/** "2 of 5 done" while the plan is being worked through; the count on its own before that. */
+function doneSummary(exercises: BriefExercise[]): string {
+  const done = exercises.filter((exercise) => exercise.completion?.done).length;
+  if (exercises.length === 0) return '0 moves';
+  return done === 0 ? `${exercises.length} moves` : `${done} of ${exercises.length} done`;
+}
+
+/** The big number on the Eat card: what is left, or how far over. Never a signed minus. */
+function eatFigure(brief: CoachBrief): string {
+  const now = brief.nutrition_now;
+  if (!now || now.remaining_kcal == null) return String(brief.nutrition?.kcal ?? '—');
+  return String(Math.abs(now.remaining_kcal));
+}
 
 export default function Coach() {
   const router = useRouter();
@@ -175,35 +203,61 @@ export default function Coach() {
         </Card>
       ) : null}
 
-      {/* Do — each exercise with the load, sets and reps its own history produced. */}
+      {/* Do — the day's plan, ticked off as it happens. Every line stays on screen all
+          day: a done item is dimmed with a ✓, a half-done one says how far in it is, and
+          a finished plan says so above a list that is still all there. */}
       {brief?.workout ? (
         <Section title="Do" summary={brief.workout.targets?.join(' · ') || null}>
           <Card style={{ paddingVertical: 4 }}>
             <GroupHeading
               label={brief.workout.type ?? 'Session'}
-              right={`${(brief.workout.exercises ?? []).length} moves`}
+              right={doneSummary(brief.workout.exercises ?? [])}
             />
             {(brief.workout.exercises ?? []).map((exercise, index, all) => (
-              <Row
-                key={`${exercise.name}-${index}`}
-                title={exercise.name}
-                onTitlePress={() =>
-                  openExercise(router, { id: exercise.exercise_id, name: exercise.name })
-                }
-                sub={[
-                  exercise.load_lb != null ? `${exercise.load_lb} lb` : null,
-                  exercise.sets != null && exercise.reps != null
-                    ? `${exercise.sets} × ${exercise.reps}`
-                    : exercise.sets != null
-                      ? `${exercise.sets} sets`
-                      : null,
-                  exercise.minutes != null ? `${exercise.minutes} min` : null,
-                  exercise.note,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-                divider={index < all.length - 1}
-              />
+              <View key={`${exercise.name}-${index}`}>
+                {/* An add-on the user asked for later in the day sits under its own
+                    divider, so the plan reads as the plan plus what was added to it. */}
+                {exercise.added_at && exercise.added_at !== all[index - 1]?.added_at ? (
+                  <View testID={`coach-added-${exercise.added_at}`} style={{ marginTop: 6 }}>
+                    <GroupHeading label={`Added ${exercise.added_at}`} />
+                  </View>
+                ) : null}
+                <View style={{ opacity: exercise.completion?.done ? 0.45 : 1 }}>
+                  <Row
+                    testID={`coach-do-${index}`}
+                    title={exercise.name}
+                    onTitlePress={() =>
+                      openExercise(router, { id: exercise.exercise_id, name: exercise.name })
+                    }
+                    sub={[
+                      exercise.load_lb != null ? `${exercise.load_lb} lb` : null,
+                      exercise.sets != null && exercise.reps != null
+                        ? `${exercise.sets} × ${exercise.reps}`
+                        : exercise.sets != null
+                          ? `${exercise.sets} sets`
+                          : null,
+                      exercise.minutes != null ? `${exercise.minutes} min` : null,
+                      exercise.note,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                    right={tick(exercise.completion)}
+                    rightColor={exercise.completion?.done ? C.good : C.mute}
+                    divider={index < all.length - 1}>
+                    {exercise.is_new ? (
+                      <View style={{ marginTop: 6, alignSelf: 'flex-start' }}>
+                        <Chip
+                          testID={`coach-new-${index}`}
+                          label="New to you"
+                          onPress={() =>
+                            openExercise(router, { id: exercise.exercise_id, name: exercise.name })
+                          }
+                        />
+                      </View>
+                    ) : null}
+                  </Row>
+                </View>
+              </View>
             ))}
             {/* An empty Do list is either a rest day or a brief that failed to fill
                 itself in. The second one is never drawn as blank space: the server
@@ -218,27 +272,78 @@ export default function Coach() {
               </View>
             ) : null}
           </Card>
+
+          {/* The plan is done. It says so, and it does not take the plan away. */}
+          {brief.workout.complete ? (
+            <Card
+              testID="coach-plan-complete"
+              style={{ marginTop: 10, borderLeftWidth: 3, borderLeftColor: C.good }}>
+              <Body style={{ lineHeight: 15 * 1.55 }}>
+                Plan complete — every item logged. Anything else today is extra.
+              </Body>
+            </Card>
+          ) : null}
+
+          {/* How the session ends. Short, scaled to its length, and never a rest day's. */}
+          {brief.workout.finisher && brief.workout.finisher.length > 0 ? (
+            <Card testID="coach-finisher" style={{ marginTop: 10, paddingVertical: 4 }}>
+              <GroupHeading label="To finish" right={`${brief.workout.finisher.length} items`} />
+              {brief.workout.finisher.map((item, index, all) => (
+                <Row
+                  key={`${item.name}-${index}`}
+                  title={item.name}
+                  sub={[item.minutes != null ? `${item.minutes} min` : null, item.note]
+                    .filter(Boolean)
+                    .join(' · ')}
+                  divider={index < all.length - 1}
+                />
+              ))}
+            </Card>
+          ) : null}
         </Section>
       ) : null}
 
-      {/* Eat */}
+      {/* Eat — what is LEFT of the day, not what the day was for. The big number is the
+          server's live arithmetic against everything logged so far; the model's meal
+          ideas sit under it. Past the allowance it is one flat line and no advice. */}
       {brief?.nutrition ? (
         <Section title="Eat">
           <Card>
             <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
-              <Disp size={38} style={TABULAR}>
-                {brief.nutrition.kcal ?? '—'}
+              <Disp size={38} testID="eat-remaining" style={TABULAR}>
+                {eatFigure(brief)}
               </Disp>
-              <Sub style={{ marginLeft: 6, fontFamily: FONT.medium, fontSize: 13 }}>kcal</Sub>
+              <Sub style={{ marginLeft: 6, fontFamily: FONT.medium, fontSize: 13 }}>
+                {brief.nutrition_now ? (brief.nutrition_now.past_target ? 'kcal over' : 'kcal left') : 'kcal'}
+              </Sub>
             </View>
-            <Sub style={[{ marginTop: 4 }, TABULAR]}>
-              {[
-                brief.nutrition.protein_g != null ? `${brief.nutrition.protein_g} g protein` : null,
-                brief.nutrition.carbs_max_g != null ? `≤ ${brief.nutrition.carbs_max_g} g carbs` : null,
-              ]
-                .filter(Boolean)
-                .join(' · ')}
+            <Sub testID="eat-line" style={[{ marginTop: 4 }, TABULAR]}>
+              {brief.nutrition_now
+                ? brief.nutrition_now.line
+                : [
+                    brief.nutrition.protein_g != null ? `${brief.nutrition.protein_g} g protein` : null,
+                    brief.nutrition.carbs_max_g != null
+                      ? `≤ ${brief.nutrition.carbs_max_g} g carbs`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
             </Sub>
+            {brief.nutrition_now ? (
+              <Sub style={[{ marginTop: 2, color: C.dim }, TABULAR]}>
+                {[
+                  `${brief.nutrition_now.eaten_kcal} eaten`,
+                  brief.nutrition_now.allowance_kcal != null
+                    ? `of ${brief.nutrition_now.allowance_kcal}`
+                    : null,
+                  brief.nutrition.carbs_max_g != null
+                    ? `· ≤ ${brief.nutrition.carbs_max_g} g carbs`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+              </Sub>
+            ) : null}
             {brief.nutrition.why ? (
               <Body style={{ marginTop: 12, lineHeight: 15 * 1.55 }}>{brief.nutrition.why}</Body>
             ) : null}

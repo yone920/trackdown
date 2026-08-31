@@ -347,6 +347,11 @@ stays null. Do not restate the statement itself in a field; it is recorded as te
 - diet_style: "keto", "lower carb", "high protein" — their own words, lower case.
 - protein_g / carbs_max_g: daily grams, when they named a number.
 - training_days: days per week, as a count.
+- session_minutes: how long a NORMAL session is for them, in minutes — "I've got about 45
+  minutes in the gym", "my sessions run an hour and a half". A standing fact about how they
+  train, which is what the coach sizes every brief to. It is NOT "only 30 minutes today" or
+  "I'm in a rush this morning": those are about one day and reach the coach as context, not
+  as a plan field. Null unless they described their usual session.
 - environment: "gym", "home", "outdoor", "mixed".
 - equipment: what they have to work with.
 - place_name / place_kind: the NAME of where they train, when they give one — "my gym is

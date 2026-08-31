@@ -35,6 +35,33 @@ const BriefExerciseSchema = z.object({
 	minutes: z.number().int().min(1).max(300).nullable(),
 	/** One short clause: why this movement, or how to run it. */
 	note: z.string().trim().nullable(),
+	/**
+	 * The one movement in this plan the user has never logged, when there is one (user
+	 * decision 2026-08-31 — variety and introductions). At most one per plan, chosen from
+	 * the catalogue, and the reason goes in `note`. The app draws a "new to you" chip that
+	 * opens the exercise sheet, so an introduction is never a name with nothing behind it.
+	 *
+	 * The count is enforced after the call as well as asked for in the prompt: a model that
+	 * marks four is corrected rather than believed (services/coach/coach.ts).
+	 */
+	is_new: z.boolean(),
+});
+
+/**
+ * The stretch / mobility close (user decision 2026-08-31). Two to four items on a training
+ * day, scaled with the session's minutes, targeting what the day actually trained.
+ *
+ * Its own array rather than more rows in `exercises` because the two lists answer different
+ * questions: the Do list is the session and is what completion is measured against; this is
+ * how it ends. Measured — the grammar this adds is about 300 JSON-schema bytes and the
+ * contract test compiles it (rules.test.ts pins the total).
+ */
+const BriefFinisherSchema = z.object({
+	name: z.string().trim().min(1),
+	/** How long to hold or move for. Null when it is a rep count in the note instead. */
+	minutes: z.number().int().min(1).max(30).nullable(),
+	/** One short clause — which muscle it is for, or how to run it. */
+	note: z.string().trim().nullable(),
 });
 
 // Free text carries no maximum: the model occasionally runs a clause long, and a length cap
@@ -44,7 +71,7 @@ const clamp = (value: string, max: number) => (value.length > max ? value.slice(
 
 export function clampBrief<T extends {
 	headline: string; why: string; nudge: string;
-	workout: { targets: string[]; exercises: { name: string; note: string | null }[] };
+	workout: { targets: string[]; exercises: { name: string; note: string | null }[]; finisher?: { name: string; note: string | null }[] };
 	nutrition: { ideas: string[]; why: string };
 }>(brief: T): T {
 	brief.headline = clamp(brief.headline, 140);
@@ -54,6 +81,10 @@ export function clampBrief<T extends {
 	for (const ex of brief.workout.exercises) {
 		ex.name = clamp(ex.name, 80);
 		if (ex.note) ex.note = clamp(ex.note, 160);
+	}
+	for (const item of brief.workout.finisher ?? []) {
+		item.name = clamp(item.name, 80);
+		if (item.note) item.note = clamp(item.note, 160);
 	}
 	brief.nutrition.ideas = brief.nutrition.ideas.map((i) => clamp(i, 100));
 	brief.nutrition.why = clamp(brief.nutrition.why, 400);
@@ -77,6 +108,12 @@ export const CoachBriefSchema = z.object({
 		 * grammar bytes, so raising it costs nothing the contract test can see.
 		 */
 		exercises: z.array(BriefExerciseSchema).max(10),
+		/**
+		 * 2–4 stretch or mobility items on a training day, scaled with the session's
+		 * minutes; empty on a rest day and empty when there is no room for one. Never part
+		 * of `assertUsableBrief`: a finisher is how a session ends, not whether it exists.
+		 */
+		finisher: z.array(BriefFinisherSchema).max(4),
 	}),
 	nutrition: z.object({
 		kcal: z.number().int().min(0).max(10000),
@@ -91,6 +128,45 @@ export const CoachBriefSchema = z.object({
 });
 
 export type CoachBriefOutput = z.infer<typeof CoachBriefSchema>;
+
+export const REVISION_MODES = ["append", "rewrite"] as const;
+export type RevisionMode = (typeof REVISION_MODES)[number];
+
+/**
+ * What a *revision* returns: the same brief, plus which of the two things the user asked
+ * for (user decision 2026-08-31 — "add-ons append").
+ *
+ *   * `append` — "give me another half hour", "add core", "throw in some abs". The plan on
+ *     screen stands and these items go under it. `workout.exercises` holds ONLY the new
+ *     ones; the service concatenates them onto the brief being revised and stamps them with
+ *     the local time they were added, which is what the app's "added 2:05p" divider draws.
+ *   * `rewrite` — "switch to legs", "make it 8 exercises", "harder". The whole Do list is
+ *     rebuilt and `workout.exercises` is the complete new one, exactly as it was before
+ *     this field existed.
+ *
+ * The model decides which it is, because only the model has read the sentence. It is on a
+ * revision-only schema rather than on `CoachBriefSchema` so a plain brief's grammar does
+ * not pay for a field that could never apply to it.
+ */
+export const COACH_REVISION_SCHEMA_NAME = "coach_brief_revision";
+
+export const CoachRevisionSchema = z.object({
+	/**
+	 * "append" when the instruction ADDS to the session in front of the user and leaves the
+	 * rest of it standing; "rewrite" when it changes what the session IS.
+	 *
+	 * **First in the object, and that is load-bearing.** Structured output is decoded in
+	 * schema order, so a field at the end is decided after the whole answer has been
+	 * written — and a model that has just written a complete replacement session says
+	 * "rewrite", because by then it is telling the truth. Measured against the live model:
+	 * "add core" came back as a rewrite with the flag last and as an append with it first,
+	 * on identical prompts. Deciding before answering is the point.
+	 */
+	revision_mode: z.enum(REVISION_MODES),
+	...CoachBriefSchema.shape,
+});
+
+export type CoachRevisionOutput = z.infer<typeof CoachRevisionSchema>;
 
 /**
  * A brief that says today is a training day and then lists nothing to do. It parses — the
@@ -116,4 +192,18 @@ export function assertUsableBrief<T extends { workout: { type: string; exercises
 		throw new UnusableBriefError(`the model called today a ${brief.workout.type} day and listed no exercises`);
 	}
 	return brief;
+}
+
+/**
+ * The same guarantee for an append: "add core" that adds nothing is not an answer either,
+ * and unlike a rewrite it cannot be spotted by looking at the merged result — the plan is
+ * still full of the exercises that were already there.
+ */
+export function assertUsableRevision<T extends { revision_mode: RevisionMode; workout: { type: string; exercises: unknown[] } }>(
+	answer: T
+): T {
+	if (answer.revision_mode === "append" && answer.workout.exercises.length === 0) {
+		throw new UnusableBriefError("the model said it was adding to the plan and added nothing");
+	}
+	return answer.revision_mode === "append" ? answer : assertUsableBrief(answer);
 }

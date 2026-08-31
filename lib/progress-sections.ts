@@ -473,6 +473,23 @@ export function untrainedGroups(muscles: { muscle: string }[]): string[] {
   return MUSCLE_GROUPS.filter((muscle) => !trained.has(muscle)).map(titleCase);
 }
 
+/**
+ * What the rotation owes, from the coverage ledger the server now sends (user decision
+ * 2026-08-31 §B7). One line, longest debt first, in the ledger's own words: "core, 21
+ * days" reads as a fact about the log, which is what it is.
+ *
+ * Deliberately a *marker* and not a chart. Twelve bars of "days since" would be a wall of
+ * red on any normal split, and the honest reading of a four-day rotation is that most
+ * things are fine and two are not.
+ */
+export function overdueGroups(
+  coverage: { label: string; days_since: number | null; overdue: boolean }[] | undefined,
+): string[] {
+  return (coverage ?? [])
+    .filter((entry) => entry.overdue)
+    .map((entry) => `${titleCase(entry.label)} · ${entry.days_since == null ? 'never' : `${entry.days_since} days`}`);
+}
+
 /** "3.1 a week over 8 weeks" — the line under the frequency bars. */
 export function frequencySummary(weeks: { sessions: number }[], average: number): string {
   return `${round1(average)} a week over ${weeks.length} week${weeks.length === 1 ? '' : 's'}`;
