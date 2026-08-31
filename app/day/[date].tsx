@@ -335,7 +335,14 @@ function ActivityRow({ activity, last }: { activity: DayActivity; last: boolean 
           ? () => openExercise(router, { id: activity.exercise_id, name: activity.exercise })
           : undefined
       }
-      sub={[shape, load, activity.duration_min == null ? null : `${activity.duration_min} min`]
+      // The machine belongs on this line and not in the title: the movement is what the
+      // week is compared on, and the kit is what the row is recognised by.
+      sub={[
+        activity.equipment,
+        shape,
+        load,
+        activity.duration_min == null ? null : `${activity.duration_min} min`,
+      ]
         .filter(Boolean)
         .join(' · ')}
       right={activity.kcal > 0 ? kcal(activity.kcal) : null}

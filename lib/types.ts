@@ -105,6 +105,8 @@ export type DayActivity = {
   exercise: string | null;
   /** The catalogue row the name resolved to; null makes the sheet name-only. */
   exercise_id: string | null;
+  /** The machine it was done on, when they named one — drawn as the sub-line. */
+  equipment: string | null;
   category: ActivityCategory | null;
   muscle_groups: string[];
   sets: number | null;
@@ -287,6 +289,7 @@ export type DayLogRecord =
       description: string;
       exercise: string | null;
       exercise_id: string | null;
+      equipment: string | null;
       category: ActivityCategory | null;
       muscle_groups: string[];
       sets: number | null;
@@ -415,6 +418,14 @@ export type ProfileTargets = {
   date: IsoDate;
 };
 
+/** Where they train now, and how much has been seen there (migration 0012). */
+export type PlaceSummary = {
+  id: string;
+  name: string;
+  kind: 'gym' | 'home' | 'travel' | 'other';
+  equipment_count: number;
+};
+
 export type Profile = Record<string, unknown> & {
   id: string;
   display_name: string | null;
@@ -423,6 +434,8 @@ export type Profile = Record<string, unknown> & {
   diet_style?: string | null;
   constraints?: string[] | null;
   preferences?: string[] | null;
+  /** Null until they say where they train, which is most of the time. */
+  place?: PlaceSummary | null;
   targets: ProfileTargets;
 };
 
@@ -432,8 +445,16 @@ export type Profile = Record<string, unknown> & {
 
 export type FieldSource = 'photo' | 'text' | null;
 
+/**
+ * "Was it a Chest-Supported Row?" — the one-tap upgrade offered when the reader could only
+ * paraphrase the movement. It is an offer and never a question: the record saves without it.
+ */
+export type Refinement = { question: string; exercise: string };
+
 export type ActivityItem = {
   exercise: string | null;
+  /** What it was done ON, when they named one: "cable stack", "chest-supported row machine". */
+  equipment: string | null;
   description: string;
   category: ActivityCategory | null;
   muscle_groups: string[] | null;
@@ -445,6 +466,7 @@ export type ActivityItem = {
   kcal: number | null;
   confidence: Confidence;
   sources: Record<string, FieldSource> | null;
+  refine?: Refinement | null;
 };
 
 export type MealItem = {
@@ -493,6 +515,9 @@ export type ProfileFields = {
   environment: string | null;
   equipment: string[] | null;
   eatback: 'none' | 'half' | 'all' | null;
+  /** The gym they named, if they named one — migration 0012. */
+  place_name?: string | null;
+  place_kind?: 'gym' | 'home' | 'travel' | 'other' | null;
 } | null;
 
 export type FusionResult =

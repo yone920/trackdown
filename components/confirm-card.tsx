@@ -181,8 +181,28 @@ export function ConfirmCard({
                 </Disp>
                 <ConfidenceChip level={item.confidence} />
               </View>
+              {/* The machine, when they named one. It reads as the sub-line because it is
+                  how the row is recognised when the movement is only a guess. */}
+              {item.equipment ? (
+                <Sub testID={`activity-equipment-line-${index}`} style={{ marginTop: 4 }}>
+                  {item.equipment}
+                </Sub>
+              ) : null}
               {sourcesLine(item.sources) ? (
                 <Sub style={{ marginTop: 4 }}>{sourcesLine(item.sources)}</Sub>
+              ) : null}
+              {/* An offer, never a question: the card saves with or without it, and it can
+                  be ignored forever (concept-v2 §Principles 3 — confirm, don't interrogate). */}
+              {item.refine && item.refine.exercise !== item.exercise ? (
+                <View style={{ marginTop: 10 }}>
+                  <Chips>
+                    <Chip
+                      testID={`activity-refine-${index}`}
+                      label={item.refine.question}
+                      onPress={() => patchActivity(index, { exercise: item.refine!.exercise, refine: null })}
+                    />
+                  </Chips>
+                </View>
               ) : null}
               <FieldGrid>
                 <Field
@@ -191,6 +211,13 @@ export function ConfirmCard({
                   value={item.exercise ?? ''}
                   onChangeText={(text) => patchActivity(index, { exercise: text || null })}
                   testID={`activity-exercise-${index}`}
+                />
+                <Field
+                  label="Machine"
+                  width="100%"
+                  value={item.equipment ?? ''}
+                  onChangeText={(text) => patchActivity(index, { equipment: text || null })}
+                  testID={`activity-equipment-${index}`}
                 />
                 <Field
                   label="Sets"

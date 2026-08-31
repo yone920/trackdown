@@ -19,6 +19,13 @@ export interface DayActivity {
 	 * has to match a string (routes/exercises.ts).
 	 */
 	exercise_id: string | null;
+	/**
+	 * What it was done on, when the user named it: "chest-supported row machine", "cable
+	 * stack". The Day and DayLog draw it as the sub-line under the movement. It is never
+	 * what `delta_vs_last` compares on — "heavier than last time" is a claim about the lift,
+	 * not about which machine was free (migration 0012).
+	 */
+	equipment: string | null;
 	category: ActivityCategory | null;
 	muscle_groups: string[];
 	sets: number | null;

@@ -84,6 +84,7 @@ function view(overrides: Partial<DayView> = {}): DayView {
 					description: "3 × 8 bench at 135 lb",
 					exercise: "Bench Press",
 					exercise_id: null,
+					equipment: null,
 					category: "strength",
 					muscle_groups: ["chest"],
 					sets: 3,

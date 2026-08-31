@@ -29,15 +29,35 @@ FIRST decide what kind each thing is, then fill in that kind and nothing else:
     * "constraint": a hard limit the coach must respect — an injury, an exercise to avoid, a
       medical restriction ("bad left knee", "no overhead pressing").
     * "preference": a soft steer, or a standing fact about how they train — diet style,
-      equipment, when they like to train, and their training background ("switching to
-      keto", "mornings only", "I hate burpees", "I've been lifting three years and I bench
-      165 for 3x5"). A load they say they lift NOW is a preference, not a workout they did
-      today and not a goal.
+      equipment, when they like to train, WHERE they train and what it is called, and their
+      training background ("switching to keto", "mornings only", "I hate burpees", "my gym
+      is New Millennium", "I've been lifting three years and I bench 165 for 3x5"). A load
+      they say they lift NOW is a preference, not a workout they did today and not a goal.
     * "coach_context": a passing state that should shape today's advice but is not a rule —
-      "only 30 minutes today", "slept badly", "feel like cardio".
-- "unclear" — you cannot tell what happened and a guess would be a lie. Ask the one question
-  that would settle it. Prefer any of the kinds above over this: a vague meal is a meal.
+      "only 30 minutes today", "slept badly", "feel like cardio". Naming the gym they train
+      at is a standing fact and therefore a preference, not one of these.
+- "unclear" — LAST RESORT. Reserved for input that cannot be interpreted at all: a stray
+  word, a photo of nothing, a sentence with no activity, food, weight, goal or statement in
+  it. It is NOT for input you can only partly read. If you can tell that something physical
+  happened, that is an "activities" log, however hazily it was described.
   "unclear" is about the WHOLE log: return it alone or not at all.
+
+ALWAYS LOG. BEST EFFORT.
+A question never stops a workout being saved. If the user describes a movement — the body
+position, what moved where, what it was pulled or pushed towards — it is an activity, and
+you fill in every field with your best guess:
+- "exercise": the catalogue's name for the movement they described, when you are reasonably
+  sure which one it is. When you are not, put a SHORT phrase in their own words ("inclined
+  machine chest pull"). Never leave it null when a movement was described, and never refuse
+  to name one because they did not know what it was called.
+- "equipment": the machine or kit, when they described one. This is separate from the
+  movement and is often the part they ARE sure about.
+- The numbers they gave — sets, reps, load — are facts and go in as stated, even when the
+  movement is a guess. "Three sets of 12 at 45 pounds" is 3, 12 and 45 whatever the machine
+  turns out to be called.
+- "confidence": "low" or "medium" when the identification was a guess. That is what the low
+  confidence is FOR. It is not a reason to return "unclear".
+The user can correct a name in one tap. They cannot correct a workout that was never saved.
 
 A log that states a current fact on the way to a goal ("I'm 191 now, want to get to 170")
 is the goal — the second step captures the 191 as a stated fact, so it is NOT a second
@@ -95,6 +115,9 @@ const FIELDS = `FIELDS
 - exercise: use the catalogue's exact spelling when the log is one of those movements, even
   if the user said it another way. If it is genuinely not in the catalogue, keep the user's
   own words — the catalogue normalises, it does not decide what they are allowed to log.
+- equipment: what the movement was done ON, in three or four words and only when they said
+  or showed it: "chest-supported row machine", "cable stack", "dumbbells", "treadmill".
+  It is NOT the movement and never a substitute for one; null when they named no kit.
 - description: a clean short phrase, sentence case, no leading article. For an activity,
   include the numbers ("3 × 10 dumbbell bench at 45 lb"). For a composed dish, name the dish.
 - kcal: integer. For a meal, calories eaten. For an activity, calories burned — a MET-style
@@ -211,7 +234,9 @@ ${describeGoals(context)}`;
 const PART_INTRO: Record<SegmentKind, string> = {
 	activities: `Pull out the PHYSICAL ACTIVITY they described — exercises, a walk, a run, a machine
 display — and nothing else. One item per distinct exercise; several sets of the same exercise
-in one breath are ONE item with the set count.`,
+in one breath are ONE item with the set count. If they could not name the movement, name your
+best guess anyway (or a short phrase in their own words) and mark the confidence low; put the
+machine in "equipment". Their numbers are facts whatever the movement turns out to be.`,
 	meal: `Pull out what they ATE OR DRANK and nothing else. All of it is ONE meal: sum the calories
 and macros, and let "description" briefly list what was had ("eggs, sourdough toast, coffee").
 Break it into "items" only when the evidence actually shows the parts.`,
@@ -223,8 +248,9 @@ and say in "scope" which of three it is:
 - "constraint": a hard limit the coach must respect — an injury, an exercise to avoid, a
   medical restriction ("bad left knee", "no overhead pressing").
 - "preference": a soft steer, or a standing fact about how they train — diet style,
-  equipment, when they like to train, and their training background ("switching to keto",
-  "mornings only", "three years of lifting, I bench 165 for 3x5").
+  equipment, when they like to train, where they train and what it is called, and their
+  training background ("switching to keto", "mornings only", "my gym is New Millennium",
+  "three years of lifting, I bench 165 for 3x5").
 - "coach_context": a passing state that should shape today's advice but is not a rule ("only
   30 minutes today", "slept badly", "knee is sore"). Leave every plan field null for one of
   these: a passing state changes no plan.
@@ -256,6 +282,8 @@ ${claims ? `${EVIDENCE_RULES}\n${PART_PHOTOS}\n\n${FIELDS}` : PLAN_FIELDS}
 CONTEXT
 It is ${context.localTime} on ${context.localDate} in the user's timezone. Units: pounds and miles.
 
+${clarifyBlock(context)}
+
 ${claims ? describeVocabulary(context) : ""}`;
 }
 
@@ -267,6 +295,11 @@ stays null. Do not restate the statement itself in a field; it is recorded as te
 - training_days: days per week, as a count.
 - environment: "gym", "home", "outdoor", "mixed".
 - equipment: what they have to work with.
+- place_name / place_kind: the NAME of where they train, when they give one — "my gym is
+  New Millennium" is place_name "New Millennium", place_kind "gym". place_kind is one of
+  gym, home, travel, other. A place they merely visited once ("did a session at a hotel
+  gym") is not where they train: leave both null unless it reads as their regular place.
+  "I train at the gym" names no place — that is "environment" and nothing more.
 - eatback: how much of the calories they burn they want back — none / half / all.
 
 TRAINING BACKGROUND — what they bring with them, when they say it. This is the only way the
@@ -298,11 +331,31 @@ What they said: ${text}
 It is ${context.localTime} on ${context.localDate} in the user's timezone.`;
 }
 
+/**
+ * The second half of a clarify round. The reader asked one question; the user's answer is
+ * the message it is now looking at, and on its own it says nothing ("yes"). So the words
+ * that prompted the question and the question itself are handed back with it, and the two
+ * are read together as one log.
+ */
+function clarifyBlock(context: FusionContext): string {
+	if (!context.clarify) return "";
+	return `THIS MESSAGE IS AN ANSWER TO A QUESTION YOU ASKED
+Their original log: "${context.clarify.original_text}"
+The question you asked: "${context.clarify.question}"
+
+The message above is their answer to it. Read the original log and the answer TOGETHER as
+one log and return the record they add up to — a bare "yes" confirms whatever the question
+proposed. Do not ask the question again, and do not return "unclear" a second time unless
+the answer genuinely added nothing at all.`;
+}
+
 export function buildFusionSystemPrompt(context: FusionContext): string {
 	const hint =
 		context.kindHint === null
 			? ""
 			: `\n\nThe app thinks this is a "${context.kindHint}". That is a hint from which button the user pressed, not an instruction — if the evidence says otherwise, follow the evidence.`;
+
+	const clarify = context.clarify ? `\n\n${clarifyBlock(context)}` : "";
 
 	return `${ROUTING}
 
@@ -322,5 +375,5 @@ ${describeToday(context)}
 
 ${describeVocabulary(context)}
 
-${describeGoals(context)}${hint}`;
+${describeGoals(context)}${hint}${clarify}`;
 }

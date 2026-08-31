@@ -6,6 +6,7 @@ import { lookupExercises } from "../entries.js";
 import type { ReferenceLoad } from "../fusion/schema.js";
 import { listGoals } from "../goals/store.js";
 import { formatClock, localDay, localMinutesOf, type IsoDate } from "../localTime.js";
+import { currentPlace, placeEquipment } from "../places.js";
 import { loadTargets } from "../profile.js";
 import { computeFeatures, type CoachFeatures } from "./features.js";
 import { assertUsableBrief, UnusableBriefError } from "./schema.js";
@@ -29,6 +30,13 @@ import { buildRules, type CoachGoal, type NudgeAction, type TrainingBackground }
 //     services/coach/rules.ts; the model writes the sentence around it.
 
 type Queryable = pg.Pool | pg.PoolClient;
+
+/**
+ * How much of the observed kit the prompt is told about. One compact line, most-used first:
+ * a hundred labels would be a list the model skims, and the tail of that list is the machine
+ * someone used once in March.
+ */
+const MAX_OBSERVED_EQUIPMENT = 20;
 
 /**
  * One line of the Do list, plus the catalogue row its name resolves to. The id is
@@ -271,6 +279,11 @@ export async function loadCoachInputs(
 
 	const rules = buildRules({ features, goals, equipment: await equipmentFor(db, features), background });
 
+	// Where they train, and what has been seen there (migration 0012). Two small reads and
+	// both skipped entirely when no place has ever been named, which is most accounts.
+	const place = await currentPlace(db, userId);
+	const observed = place ? await placeEquipment(db, place.id, MAX_OBSERVED_EQUIPMENT) : [];
+
 	const statements = await dayContexts(db, userId, date);
 	const said = [...statements, ...(context?.trim() ? [context.trim()] : [])];
 
@@ -285,6 +298,10 @@ export async function loadCoachInputs(
 		eatback: plan?.eatback ?? "half",
 		experience: background.experience,
 		background: background.background,
+		place:
+			place && observed.length > 0
+				? { name: place.name, kind: place.kind, equipment: observed.map((row) => row.label) }
+				: null,
 		units: "lb",
 		targets: {
 			kcal: view.target,

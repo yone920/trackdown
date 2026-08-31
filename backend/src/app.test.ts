@@ -9,6 +9,7 @@ import { setUserPassword } from "./services/password.js";
 import { createLogParser, type ParsedItem } from "./services/parseLog.js";
 import { createFusionAnalyzer } from "./services/fusion/analyze.js";
 import { createDayReadings } from "./services/readings/readings.js";
+import { buildCoachPrompt } from "./services/coach/prompt.js";
 import type { FusionResult, FusionRoute, SegmentKind } from "./services/fusion/schema.js";
 import { addDays, localDay } from "./services/localTime.js";
 import { startTestDatabase, type TestDatabase } from "./test/db.js";
@@ -51,13 +52,15 @@ function nextParse(items: ParsedItem[]): void {
  * routing schema the provider is actually given, not the widened public one — a fake that
  * answered in a shape the real model never produces would hide the mapping.
  */
-function nextFusion(result: FusionRoute, goalDetail?: unknown): void {
+function nextFusion(result: FusionRoute, goalDetail?: unknown, photoFields: string[] = []): void {
+	// `photo_fields` sits beside the result, not inside it — see FusionRouteOutputSchema.
+	const answer = { result, more_kinds: [], photo_fields: photoFields };
 	if (goalDetail === undefined) {
-		llm.nextOutput = { result, more_kinds: [] };
+		llm.nextOutput = answer;
 		return;
 	}
 	// The goal path asks twice: route, then spec.
-	llm.outputs.push({ result, more_kinds: [] }, goalDetail);
+	llm.outputs.push(answer, goalDetail);
 }
 
 /**
@@ -66,7 +69,7 @@ function nextFusion(result: FusionRoute, goalDetail?: unknown): void {
  * the same order.
  */
 function nextMixedFusion(result: FusionRoute, moreKinds: SegmentKind[], ...details: unknown[]): void {
-	llm.outputs.push({ result, more_kinds: moreKinds }, ...details);
+	llm.outputs.push({ result, more_kinds: moreKinds, photo_fields: [] }, ...details);
 }
 
 beforeAll(async () => {
@@ -435,6 +438,7 @@ describe("fusion — analyze", () => {
 			items: [
 				{
 					exercise: "db bench",
+					equipment: null,
 					description: "3 × 10 dumbbell bench at 45 lb",
 					sets: 3,
 					reps: 10,
@@ -443,10 +447,9 @@ describe("fusion — analyze", () => {
 					distance_mi: null,
 					kcal: 180,
 					confidence: "medium",
-					photo_fields: ["exercise", "load_lb"],
 				},
 			],
-		});
+		}, undefined, ["exercise", "load_lb"]);
 
 		const res = await request(app)
 			.post("/api/log/analyze")
@@ -565,6 +568,7 @@ describe("fusion — confirm", () => {
 			items: [
 				{
 					exercise: "db bench",
+					equipment: null,
 					description: "3 × 10 dumbbell bench at 40 lb",
 					sets: 3,
 					reps: 10,
@@ -573,10 +577,9 @@ describe("fusion — confirm", () => {
 					distance_mi: null,
 					kcal: 180,
 					confidence: "medium",
-					photo_fields: ["exercise", "load_lb"],
 				},
 			],
-		});
+		}, undefined, ["exercise", "load_lb"]);
 		const analyzed = await request(app)
 			.post("/api/log/analyze")
 			.set(auth)
@@ -717,6 +720,8 @@ describe("fusion — confirm", () => {
 				environment: "gym",
 				equipment: null,
 				eatback: null,
+				place_name: null,
+				place_kind: null,
 				experience: null,
 				background: null,
 				reference_loads: null,
@@ -836,12 +841,12 @@ describe("fusion — one input, several things", () => {
 		fiber_g: 3,
 		items: [],
 		confidence: "medium",
-		photo_fields: [],
 	};
 	const run = {
 		items: [
 			{
 				exercise: "Treadmill Run",
+				equipment: null,
 				description: "5 km run in 28 minutes",
 				sets: null,
 				reps: null,
@@ -850,9 +855,9 @@ describe("fusion — one input, several things", () => {
 				distance_mi: 3.11,
 				kcal: 300,
 				confidence: "medium",
-				photo_fields: [],
 			},
 		],
+		photo_fields: [] as string[],
 		photo_indexes: [] as number[],
 	};
 	const weighIn = { weight_lb: 181, confidence: "high", photo_fields: [], photo_indexes: [] };
@@ -990,7 +995,7 @@ describe("fusion — one input, several things", () => {
 	});
 
 	it("still answers a single-kind log the way it always did", async () => {
-		nextFusion({ kind: "weight", weight_lb: 179.6, confidence: "high", photo_fields: [] });
+		nextFusion({ kind: "weight", weight_lb: 179.6, confidence: "high" });
 		const analyzed = await request(app).post("/api/log/analyze").set(auth).field("text", "179.6 this morning");
 
 		expect(analyzed.status).toBe(200);
@@ -3023,5 +3028,344 @@ describe("the exercise sheet", () => {
 		for (const exercise of coachRes.body.brief.workout.exercises) {
 			expect(exercise.exercise_id).toMatch(/^[0-9a-f-]{36}$/);
 		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Always log, best effort · the machine as its own fact · places and equipment
+// ---------------------------------------------------------------------------
+
+/**
+ * The field report this branch is for, said the way it was actually said — twice over, with
+ * the user talking themselves through a movement they have no name for. The one rule it has
+ * to prove: **it saves, and it asks nothing.**
+ */
+const NAMELESS_MACHINE =
+	"I don't know what it is called but it is something is inclined, but I lay down on my " +
+	"tummy on my tummy and I pulled it up to my chest from down up down up. I don't know " +
+	"what that mission is called kind of inclined, but I laid up I lay on my tummy and using " +
+	"my BOSS hand pull it up to my chest. I don't know what that exercise what that machine " +
+	"is called but I did three reps of three sets of 12 rep at 45 pound.";
+
+describe("always log — a movement nobody could name", () => {
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("nameless@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+	}, 60_000);
+
+	it("saves it as a workout with the numbers, the machine and a guess at the movement", async () => {
+		// What the reader is asked to do with a log like this: name the closest movement it
+		// can, keep the machine separately, take the numbers at face value, and say it is a
+		// guess with the confidence rather than with a question.
+		nextFusion({
+			kind: "activities",
+			items: [
+				{
+					exercise: "Chest-Supported Row",
+					equipment: "inclined chest-supported row machine",
+					description: "3 × 12 chest-supported row at 45 lb",
+					sets: 3,
+					reps: 12,
+					load_lb: 45,
+					duration_min: null,
+					distance_mi: null,
+					kcal: 90,
+					confidence: "low",
+				},
+			],
+		});
+
+		const analyzed = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("text", NAMELESS_MACHINE)
+			.field("tz_offset_min", "0");
+
+		expect(analyzed.status).toBe(200);
+		// One part, and it is a workout. Nothing to answer before it can be saved.
+		expect(analyzed.body.results).toHaveLength(1);
+		expect(analyzed.body.results[0].kind).toBe("activities");
+		expect(analyzed.body.results[0].items[0]).toMatchObject({
+			sets: 3,
+			reps: 12,
+			load_lb: 45,
+			equipment: "inclined chest-supported row machine",
+			confidence: "low",
+		});
+
+		const saved = await request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({
+				client_id: randomUUID(),
+				results: analyzed.body.results,
+				text: NAMELESS_MACHINE,
+				text_kind: "transcript",
+				tz_offset_min: 0,
+			});
+		expect(saved.status).toBe(201);
+
+		// The movement resolved to the catalogue, so the muscle groups came with it — a
+		// workout with no muscles in it is invisible to coverage and to the weekly sets.
+		const row = saved.body.activities[0];
+		expect(row.exercise).toBe("Chest-Supported Row");
+		expect(row.exercise_id).not.toBeNull();
+		expect(row.equipment).toBe("inclined chest-supported row machine");
+		expect(row.muscle_groups).toContain("back");
+		expect(row.confidence).toBe("low");
+	});
+
+	it("shows the machine as the sub-line, and still compares on the movement", async () => {
+		const today = localDay(new Date(), 0).date;
+		const day = await request(app).get(`/api/day/${today}?tz=0`).set(headers);
+		expect(day.status).toBe(200);
+		const activity = day.body.items.activities.find(
+			(item: { exercise: string | null }) => item.exercise === "Chest-Supported Row"
+		);
+		expect(activity.equipment).toBe("inclined chest-supported row machine");
+
+		const log = await request(app).get(`/api/day/${today}/log?tz=0`).set(headers);
+		const entry = log.body.entries.find((row: { kind: string }) => row.kind === "activity");
+		expect(entry.record.equipment).toBe("inclined chest-supported row machine");
+		expect(entry.understood).toContain("inclined chest-supported row machine");
+		// And the words are kept, verbatim, under the record they became.
+		expect(entry.raw_text).toBe(NAMELESS_MACHINE);
+	});
+
+	it("offers the catalogue name as a chip when it could only paraphrase", async () => {
+		// The other half of best effort: the reader kept the user's words because it was not
+		// sure. The catalogue is matched against them here, so the card can offer the name.
+		nextFusion({
+			kind: "activities",
+			items: [
+				{
+					exercise: "inclined machine chest pull",
+					equipment: "incline bench row machine",
+					description: "3 × 12 at 45 lb on the inclined machine",
+					sets: 3,
+					reps: 12,
+					load_lb: 45,
+					duration_min: null,
+					distance_mi: null,
+					kcal: 90,
+					confidence: "low",
+				},
+			],
+		});
+		const analyzed = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("text", NAMELESS_MACHINE)
+			.field("tz_offset_min", "0");
+
+		const item = analyzed.body.results[0].items[0];
+		expect(item.refine).toEqual({ question: "Was it a Chest-Supported Row?", exercise: "Chest-Supported Row" });
+		// The guess is not silent: the muscle groups it borrows are on the card, editable,
+		// before anything is written.
+		expect(item.muscle_groups).toContain("back");
+		expect(item.exercise).toBe("inclined machine chest pull");
+	});
+});
+
+describe("the clarify loop — a question that remembers itself", () => {
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("clarify@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+	}, 60_000);
+
+	it("asks once, then resolves the answer against the question it asked", async () => {
+		nextFusion({ kind: "unclear", question: "Was that a bench press?" });
+		const asked = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("text", "did the thing")
+			.field("tz_offset_min", "0");
+		expect(asked.body.results[0]).toEqual({ kind: "unclear", question: "Was that a bench press?" });
+
+		// "Yes" on its own is not a log. Sent back with the words it is about and the
+		// question it answers, it is.
+		nextFusion({
+			kind: "activities",
+			items: [
+				{
+					exercise: "Bench Press",
+					equipment: null,
+					description: "bench press",
+					sets: null,
+					reps: null,
+					load_lb: null,
+					duration_min: null,
+					distance_mi: null,
+					kcal: 60,
+					confidence: "medium",
+				},
+			],
+		});
+		const answered = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("text", "yes")
+			.field("clarify_original", "did the thing")
+			.field("clarify_question", "Was that a bench press?")
+			.field("tz_offset_min", "0");
+
+		expect(answered.status).toBe(200);
+		expect(answered.body.results[0].kind).toBe("activities");
+		// The reader was handed both halves and told to read them together.
+		const system = llm.requests.at(-1)!.system!;
+		expect(system).toContain("did the thing");
+		expect(system).toContain("Was that a bench press?");
+		expect(system).toContain("ANSWER TO A QUESTION YOU ASKED");
+
+		const saved = await request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({ client_id: randomUUID(), results: answered.body.results, text: "yes", tz_offset_min: 0 });
+		expect(saved.status).toBe(201);
+		expect(saved.body.activities[0].exercise).toBe("Bench Press");
+	});
+
+	it("ignores half a clarify round rather than asking about a message it cannot see", async () => {
+		nextFusion({ kind: "weight", weight_lb: 180, confidence: "high" });
+		const res = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("text", "180 this morning")
+			.field("clarify_question", "Was that a bench press?")
+			.field("tz_offset_min", "0");
+		expect(res.status).toBe(200);
+		expect(llm.requests.at(-1)!.system).not.toContain("ANSWER TO A QUESTION");
+	});
+});
+
+describe("places — what the room has been seen to contain", () => {
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("place@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+	}, 60_000);
+
+	/** Save one activity, exactly as the Log sheet would. */
+	async function logActivity(exercise: string | null, equipment: string | null) {
+		return request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({
+				client_id: randomUUID(),
+				results: [
+					{
+						kind: "activities",
+						items: [
+							{
+								exercise,
+								equipment,
+								description: `${exercise ?? equipment}`,
+								category: null,
+								muscle_groups: null,
+								sets: 3,
+								reps: 10,
+								load_lb: 100,
+								duration_min: null,
+								distance_mi: null,
+								kcal: 90,
+								confidence: "medium",
+								sources: null,
+							},
+						],
+					},
+				],
+				tz_offset_min: 0,
+			});
+	}
+
+	it("saves a workout with no place set, and records nothing", async () => {
+		// The state every account starts in, and most stay in. It must simply work.
+		const saved = await logActivity("Lat Pulldown", "cable stack");
+		expect(saved.status).toBe(201);
+		const profile = await request(app).get("/api/profile").set(headers);
+		expect(profile.body.place).toBeNull();
+	});
+
+	it("names the place when the user names it, and makes it the current one", async () => {
+		nextFusion(
+			{ kind: "statement", scope: "preference", text: "my gym is New Millennium" },
+			{
+				fields: {
+					diet_style: null,
+					protein_g: null,
+					carbs_max_g: null,
+					training_days: null,
+					environment: "gym",
+					equipment: null,
+					eatback: null,
+					experience: null,
+					background: null,
+					reference_loads: null,
+					place_name: "New Millennium",
+					place_kind: "gym",
+				},
+			}
+		);
+		const analyzed = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("text", "my gym is New Millennium")
+			.field("tz_offset_min", "0");
+		expect(analyzed.body.results[0].kind).toBe("preference");
+
+		const saved = await request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({ client_id: randomUUID(), results: analyzed.body.results, tz_offset_min: 0 });
+		expect(saved.status).toBe(201);
+
+		const profile = await request(app).get("/api/profile").set(headers);
+		expect(profile.body.place).toMatchObject({ name: "New Millennium", kind: "gym", equipment_count: 0 });
+	});
+
+	it("accrues what each workout used, once per label", async () => {
+		await logActivity("Lat Pulldown", "cable stack");
+		let profile = await request(app).get("/api/profile").set(headers);
+		// The machine and the movement are two different facts about the room.
+		expect(profile.body.place.equipment_count).toBe(2);
+
+		// The same session again: the labels are bumped, not duplicated.
+		await logActivity("Lat Pulldown", "Cable Stack");
+		profile = await request(app).get("/api/profile").set(headers);
+		expect(profile.body.place.equipment_count).toBe(2);
+
+		// A movement the catalogue does not know is the user's paraphrase, not equipment.
+		await logActivity("the inclined thing", "leg sled");
+		profile = await request(app).get("/api/profile").set(headers);
+		expect(profile.body.place.equipment_count).toBe(3);
+	});
+
+	it("tells the coach what has been seen there, and how to treat it", async () => {
+		coachLlm.nextOutput = READING;
+		const res = await request(app).get("/api/coach/next?tz=0").set(headers);
+		expect(res.status).toBe(200);
+		const plan = coach.inputs.at(-1)!.plan;
+		expect(plan.place).toMatchObject({ name: "New Millennium", kind: "gym" });
+		expect(plan.place!.equipment).toContain("cable stack");
+		const prompt = buildCoachPrompt(coach.inputs.at(-1)!);
+		expect(prompt).toContain("Seen at New Millennium (gym)");
+		expect(prompt).toContain("prefer these when you prescribe");
+		expect(prompt).toContain("name a substitution");
+	});
+
+	it("says nothing about a place for a user who has never named one", async () => {
+		const token = await signUp("noplace@example.com");
+		const other = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+		const res = await request(app).get("/api/coach/next?tz=0").set(other);
+		expect(res.status).toBe(200);
+		const inputs = coach.inputs.at(-1)!;
+		expect(inputs.plan.place).toBeNull();
+		expect(buildCoachPrompt(inputs)).not.toContain("Seen at");
 	});
 });

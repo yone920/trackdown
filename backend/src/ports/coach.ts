@@ -17,6 +17,14 @@ import type { CoachBriefOutput } from "../services/coach/schema.js";
 // the shapes it carries; what it may not do is import an SDK.
 
 /** The plan the user has stated, as the coach reads it (docs/concept-v2.md §Coach — Inputs). */
+/** The gym (or spare room) the user trains in, and the kit seen there so far. */
+export interface CoachPlace {
+	name: string;
+	kind: string;
+	/** Machines and movements observed there, most used first. */
+	equipment: string[];
+}
+
 export interface CoachPlan {
 	goal_pace: string | null;
 	diet_style: string | null;
@@ -35,6 +43,13 @@ export interface CoachPlan {
 	 */
 	experience: string | null;
 	background: string | null;
+	/**
+	 * Where they train and what has actually been seen there (migration 0012). Not a claim
+	 * about what the room contains — it is what this user has used, accrued one workout at a
+	 * time — which is why the prompt says "prefer these", never "only these". Null until
+	 * they name a place, which is most accounts.
+	 */
+	place: CoachPlace | null;
 	units: "lb";
 	targets: {
 		kcal: number | null;

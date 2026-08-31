@@ -56,6 +56,7 @@ describe('todayCards', () => {
             description: '3 miles',
             exercise: 'Run',
             exercise_id: null,
+            equipment: null,
             category: 'cardio',
             muscle_groups: [],
             sets: null,

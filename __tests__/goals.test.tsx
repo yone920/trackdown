@@ -46,10 +46,10 @@ const PROFILE = {
   targets: { source: 'computed', eat_target: 2254, eatback: 'half' },
 };
 
-function serve(goals: unknown) {
+function serve(goals: unknown, profile: Record<string, unknown> = PROFILE) {
   mockApi.mockImplementation((path: string) => {
     if (path === '/api/goals') return Promise.resolve(goals);
-    if (path === '/api/profile') return Promise.resolve(PROFILE);
+    if (path === '/api/profile') return Promise.resolve(profile);
     return Promise.resolve(null);
   });
 }
@@ -156,5 +156,33 @@ describe('Goals — the measure says it is done', () => {
     expect(screen.getByText(/Stalled — adjust\?/)).toBeTruthy();
     fireEvent.press(screen.getByText('Adjust it'));
     expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { hint: 'goal' } });
+  });
+});
+
+// Where they train, and what has been seen there — accrued from their own logs rather than
+// filled in on a form (migration 0012).
+describe('Goals — the place they train', () => {
+  it('names the gym and the tally when there is one', async () => {
+    serve(
+      { active: [], history: [], no_goal: true },
+      { ...PROFILE, place: { id: 'p1', name: 'New Millennium', kind: 'gym', equipment_count: 14 } },
+    );
+    renderGoals();
+    await waitFor(() => expect(screen.getByText('New Millennium · 14 machines seen')).toBeTruthy());
+  });
+
+  it('says one machine, singular, and falls back to the stated date with no place', async () => {
+    serve(
+      { active: [], history: [], no_goal: true },
+      { ...PROFILE, place: { id: 'p1', name: 'The garage', kind: 'home', equipment_count: 1 } },
+    );
+    renderGoals();
+    await waitFor(() => expect(screen.getByText('The garage · 1 machine seen')).toBeTruthy());
+
+    mockApi.mockReset();
+    serve({ active: [], history: [], no_goal: true });
+    renderGoals();
+    await waitFor(() => expect(screen.getAllByText('How you train').length).toBeGreaterThan(0));
+    expect(screen.queryByText(/machines seen/)).toBeNull();
   });
 });

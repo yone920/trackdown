@@ -1,5 +1,7 @@
+import { CATEGORIES } from "../../db/exercises.js";
 import type { ImageMediaType, LlmContent, LlmPort } from "../../ports/llm.js";
 import type { FusionContext } from "./context.js";
+import { suggestRefinement } from "./refine.js";
 import {
 	buildFusionSystemPrompt,
 	buildGoalDetailSystemPrompt,
@@ -148,6 +150,38 @@ export function dropWeightStatedWithGoal<Part extends { result: FusionResult }>(
 	);
 }
 
+/**
+ * The best-effort half of "always log". A movement the user could only describe comes back
+ * named in their own words with a low confidence, which is right — but it then resolves to
+ * nothing in the catalogue, so the day sees a workout with no muscle groups in it and the
+ * coverage chart pretends it did not happen.
+ *
+ * So when those words point at exactly one catalogue entry (services/fusion/refine.ts), two
+ * things happen and neither of them is silent: the item borrows that entry's category and
+ * muscle groups, and it carries a chip offering the name itself. The borrowed fields are on
+ * the confirm card before anything is written, which is the whole difference between a guess
+ * and a fabrication — the user is looking at it and can take it off.
+ */
+export function withRefinements(result: FusionResult, context: FusionContext): FusionResult {
+	if (result.kind !== "activities") return result;
+	return {
+		...result,
+		items: result.items.map((item) => {
+			const refine = suggestRefinement(item, context.catalog);
+			if (!refine) return item;
+			const entry = context.catalog.find((candidate) => candidate.name === refine.exercise);
+			const category = CATEGORIES.find((known) => known === entry?.category) ?? null;
+			return {
+				...item,
+				refine,
+				// Only where the model left a blank: a stated muscle group is the user's.
+				category: item.category ?? category,
+				muscle_groups: item.muscle_groups ?? (entry && entry.primary_muscles.length > 0 ? entry.primary_muscles : null),
+			};
+		}),
+	};
+}
+
 export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 	/** The follow-up a routed record needs, if it needs one. */
 	async function detailFor(
@@ -191,16 +225,31 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 
 		switch (kind) {
 			case "activities": {
-				const { items, photo_indexes } = await ask(ActivitiesDetailOutputSchema, ACTIVITIES_DETAIL_SCHEMA_NAME);
-				return { result: toFusionResult({ kind: "activities", items }), photos: photo_indexes };
+				const { items, photo_fields, photo_indexes } = await ask(
+					ActivitiesDetailOutputSchema,
+					ACTIVITIES_DETAIL_SCHEMA_NAME
+				);
+				return {
+					result: toFusionResult({ kind: "activities", items }, { photoFields: photo_fields }),
+					photos: photo_indexes,
+				};
 			}
 			case "meal": {
-				const { photo_indexes, ...meal } = await ask(MealDetailOutputSchema, MEAL_DETAIL_SCHEMA_NAME);
-				return { result: toFusionResult({ kind: "meal", ...meal }), photos: photo_indexes };
+				const { photo_fields, photo_indexes, ...meal } = await ask(MealDetailOutputSchema, MEAL_DETAIL_SCHEMA_NAME);
+				return {
+					result: toFusionResult({ kind: "meal", ...meal }, { photoFields: photo_fields }),
+					photos: photo_indexes,
+				};
 			}
 			case "weight": {
-				const { photo_indexes, ...weight } = await ask(WeightDetailOutputSchema, WEIGHT_DETAIL_SCHEMA_NAME);
-				return { result: toFusionResult({ kind: "weight", ...weight }), photos: photo_indexes };
+				const { photo_fields, photo_indexes, ...weight } = await ask(
+					WeightDetailOutputSchema,
+					WEIGHT_DETAIL_SCHEMA_NAME
+				);
+				return {
+					result: toFusionResult({ kind: "weight", ...weight }, { photoFields: photo_fields }),
+					photos: photo_indexes,
+				};
 			}
 			case "goal": {
 				const goal = await ask(GoalDetailOutputSchema, GOAL_DETAIL_SCHEMA_NAME);
@@ -238,7 +287,7 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 			const parts = dropWeightStatedWithGoal(
 				await Promise.all([
 					detailFor(answer.result, context, messages).then((detail) => ({
-						result: toFusionResult(answer.result, detail),
+						result: toFusionResult(answer.result, { ...detail, photoFields: answer.photo_fields }),
 						photos: [] as number[],
 					})),
 					...segments.map((kind) => fillSegment(kind, context, messages)),
@@ -246,7 +295,7 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 			);
 
 			return {
-				results: parts.map((part) => part.result),
+				results: parts.map((part) => withRefinements(part.result, context)),
 				// The first part never claims: it is where an unclaimed photo lands anyway.
 				photoParts: photoPartsFrom(parts.slice(1).map((part) => part.photos), photos.length),
 			};

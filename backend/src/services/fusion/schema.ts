@@ -30,12 +30,16 @@ import { MEASURE_IDS } from "../goals/measures.js";
 //     came off the photo") in one array node instead of seven anyOf nodes.
 // Fields the catalogue derives on save (category, muscle_groups) are not asked for at all.
 //
-// **The ceiling is about 3.66 KB of JSON schema for this shape, and the routing schema is
-// 3580.** It is not the 4–5 KB an earlier note here guessed, and it is not even monotonic
-// in size: a 3.7 KB routing schema was refused while a 4.2 KB probe of a different shape
-// compiled. Anything added to a model-facing schema has to be measured against the live
-// API — `anthropic.fusion.contract.test.ts` is where that shows up, and the byte pin in
-// `fusion.test.ts` is only an early warning. See the table on FusionRouteOutputSchema.
+// **The ceiling is a field count, not a byte count, and the byte pin never measured the
+// right bytes.** `fusion.test.ts` weighs `z.toJSONSchema(...)`; what the provider actually
+// receives is `zodOutputFormat(...)`, which is a different and larger document — the SDK
+// rewrites bounds and enums into `description` strings and hoists shared shapes into
+// `$defs`. Adding `equipment` to the routing union was refused at *fewer* JSON-schema bytes
+// than the shape that shipped, and stayed refused when the same field was moved, relaxed
+// and slimmed; it compiled only once another field came off the union (the table on
+// FusionRouteOutputSchema has every measurement). So: a model-facing schema can afford a
+// new field only in trade for an old one, and **only the contract test knows**. Run
+// `anthropic.fusion.contract.test.ts` before believing any change here.
 //
 // Two rules both shapes follow:
 //   * Optional facts are `.nullable()`, never `.optional()`. Both providers' structured
@@ -54,6 +58,9 @@ const FieldSource = z.enum(FIELD_SOURCES).nullable();
 const ActivitySources = z
 	.object({
 		exercise: FieldSource,
+		// Defaulted, not required: a phone built before 0012 sends a sources map without it,
+		// and that is an old client rather than a malformed one.
+		equipment: FieldSource.default(null),
 		sets: FieldSource,
 		reps: FieldSource,
 		load_lb: FieldSource,
@@ -79,6 +86,23 @@ const WeightSources = z.object({ weight_lb: FieldSource }).nullable();
 const kcal = z.number().int().min(0).max(20_000).nullable();
 const grams = z.number().min(0).max(5000).nullable();
 
+/**
+ * "Was it a Chest-Supported Row?" — one tap that upgrades a best-guess movement to a
+ * catalogue one. Never a question the user has to answer: the record is already saved (or
+ * about to be), and this is an offer sitting beside it that can be ignored forever.
+ *
+ * Derived, not asked for: {@link file://./refine.ts} matches the words the model kept
+ * against the catalogue this user's prompt already carried. Model-facing schemas have no
+ * room for a field like this and it is not a judgement a model has to make twice.
+ */
+export const RefinementSchema = z.object({
+	/** The chip's label, as shown. */
+	question: z.string().trim().min(1).max(120),
+	/** The catalogue name a tap would set `exercise` to. */
+	exercise: z.string().trim().min(1).max(120),
+});
+export type Refinement = z.infer<typeof RefinementSchema>;
+
 export const ActivityItemSchema = z.object({
 	/**
 	 * The exercise as the catalogue spells it when it is one we know ("Dumbbell Bench
@@ -86,6 +110,13 @@ export const ActivityItemSchema = z.object({
 	 * catalogue on save — the model's guess is a suggestion, not the last word.
 	 */
 	exercise: z.string().trim().min(1).max(120).nullable(),
+	/**
+	 * What the movement was done ON, when the user named it: "chest-supported row
+	 * machine", "cable stack", "dumbbells". A separate fact from the movement, because
+	 * someone who cannot name the exercise can very often name the machine — and because
+	 * `delta_vs_last` keys on the movement, never on this.
+	 */
+	equipment: z.string().trim().min(1).max(80).nullable().default(null),
 	/** One human line for the day view: "3 × 10 dumbbell bench at 45 lb". */
 	description: z.string().trim().min(1).max(500),
 	category: z.enum(CATEGORIES).nullable(),
@@ -98,6 +129,8 @@ export const ActivityItemSchema = z.object({
 	kcal,
 	confidence: FieldConfidence,
 	sources: ActivitySources,
+	/** An offer, never a question. Defaulted so a client that knows nothing of it still saves. */
+	refine: RefinementSchema.nullable().default(null),
 });
 export type ActivityItem = z.infer<typeof ActivityItemSchema>;
 
@@ -206,6 +239,10 @@ export const ReferenceLoadSchema = z.object({
 });
 export type ReferenceLoad = z.infer<typeof ReferenceLoadSchema>;
 
+/** Where someone trains. `gym` is the overwhelming default; the rest are what people say. */
+export const PLACE_KINDS = ["gym", "home", "travel", "other"] as const;
+export type PlaceKind = (typeof PLACE_KINDS)[number];
+
 /** Plan fields a spoken constraint or preference may set on the profile. */
 export const ProfileFieldsSchema = z
 	.object({
@@ -221,6 +258,12 @@ export const ProfileFieldsSchema = z
 		experience: z.enum(EXPERIENCE_LEVELS).nullable(),
 		background: z.string().trim().max(600).nullable(),
 		reference_loads: z.array(ReferenceLoadSchema).max(12).nullable(),
+		// Where they train, when they NAME it (migration 0012). "I go to the gym" is
+		// `environment`; "my gym is New Millennium" is a place, and a place is what the
+		// equipment memory hangs off. Two flat fields rather than a nested object: the
+		// same fact for a third of the grammar, on a call that has room either way.
+		place_name: z.string().trim().max(120).nullable().default(null),
+		place_kind: z.enum(PLACE_KINDS).nullable().default(null),
 	})
 	.nullable();
 export type ProfileFields = z.infer<typeof ProfileFieldsSchema>;
@@ -301,22 +344,34 @@ const photoIndexes = z.array(z.number().int()).max(4);
 
 const ModelActivityItem = z.object({
 	exercise: z.string().nullable(),
+	/**
+	 * The machine or kit, when they named one. It is on the ROUTING schema and not only on
+	 * the roomy detail call because a workout is the hot path — one call — and "I don't know
+	 * what the machine is called, it's the inclined one you lie on" is precisely the log
+	 * this whole change is for. Measured: it takes the routing schema from 3580 to 3660-ish,
+	 * inside the ceiling, and the contract test is what actually proved it compiles.
+	 */
+	equipment: z.string().nullable(),
 	description: z.string(),
-	sets: z.number().int().nullable(),
-	reps: z.number().int().nullable(),
+	// Plain numbers, not integers, and that is a grammar decision rather than a modelling
+	// one. `z.number().int()` reaches the provider as an `anyOf` with a safe-integer bound
+	// written out in a description — about 110 bytes each, six times over on this schema —
+	// while a nullable number is `{"type":["number","null"]}`. The public schema still wants
+	// whole numbers, so {@link whole} rounds on the way out.
+	sets: z.number().nullable(),
+	reps: z.number().nullable(),
 	load_lb: z.number().nullable(),
-	duration_min: z.number().int().nullable(),
+	duration_min: z.number().nullable(),
 	distance_mi: z.number().nullable(),
-	kcal: z.number().int().nullable(),
+	kcal: z.number().nullable(),
 	confidence: FieldConfidence,
-	photo_fields: photoFields,
 });
 
 const ModelMeal = z.object({
 	kind: z.literal("meal"),
 	description: z.string(),
 	meal_type: z.enum(MEAL_TYPES).nullable(),
-	kcal: z.number().int().nullable(),
+	kcal: z.number().nullable(),
 	protein_g: z.number().nullable(),
 	carbs_g: z.number().nullable(),
 	fat_g: z.number().nullable(),
@@ -324,7 +379,7 @@ const ModelMeal = z.object({
 	items: z.array(
 		z.object({
 			name: z.string(),
-			kcal: z.number().int().nullable(),
+			kcal: z.number().nullable(),
 			protein_g: z.number().nullable(),
 			carbs_g: z.number().nullable(),
 			fat_g: z.number().nullable(),
@@ -333,7 +388,6 @@ const ModelMeal = z.object({
 		})
 	).max(30),
 	confidence: FieldConfidence,
-	photo_fields: photoFields,
 });
 
 /** constraint, preference and coach_context are one shape; `scope` says which it is. */
@@ -342,12 +396,7 @@ export const STATEMENT_SCOPES = ["constraint", "preference", "coach_context"] as
 export const FusionRouteSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("activities"), items: z.array(ModelActivityItem).min(1).max(20) }),
 	ModelMeal,
-	z.object({
-		kind: z.literal("weight"),
-		weight_lb: z.number(),
-		confidence: FieldConfidence,
-		photo_fields: photoFields,
-	}),
+	z.object({ kind: z.literal("weight"), weight_lb: z.number(), confidence: FieldConfidence }),
 	// The routing decision only; the spec comes from a second call (GoalDetailOutputSchema).
 	z.object({ kind: z.literal("goal"), title: z.string() }),
 	// The plan fields a constraint or preference sets come from a second call too: seven
@@ -382,16 +431,28 @@ export type SegmentKind = (typeof SEGMENT_KINDS)[number];
  * focused call carrying only its own kind's schema.
  *
  * **`more_kinds` is a list of enum values and nothing else, and that is not a style
- * choice.** Anthropic compiles this into a decoding grammar and the real ceiling sits at
- * about 3.66 KB of JSON schema for this shape — not the 4.5 KB the old pin claimed. Every
- * richer segment was measured against the live API and refused:
+ * choice.** Anthropic compiles this into a decoding grammar and refuses one over a limit
+ * that is *not* a byte count and is not monotonic in one either. Measured against the live
+ * API while fitting `equipment` in — every row a request that was actually sent:
  *
- *   OK    3486  the routing union alone, as it was before
- *   OK    3655  + more_kinds: SegmentKind[]          ← this shape (3580 as shipped)
- *   FAIL  3687  + more_kinds and one free-text field
- *   FAIL  3764  + more: [{ kind, text }]
- *   FAIL  3908  + more: [{ kind, text, photo_indexes }]
- *   FAIL  3679  results: FusionRoute[] — an array multiplies a union's grammar
+ *   OK    the union as it shipped, 10 fields on the activity item
+ *   FAIL  the same + `equipment` on the item                 (fewer bytes, one more field)
+ *   FAIL  the same + `equipment`, with `photo_fields` moved off the item onto the branch
+ *   FAIL  the same + `equipment`, with the item's integers relaxed to plain numbers
+ *   OK    the same + `equipment`, with `photo_fields` hoisted OUT of all three branches
+ *
+ * The pattern the failures make is that **one more field anywhere in this union is one too
+ * many**, wherever it sits and however few bytes it costs, so a field can only be added by
+ * taking one out. `photo_fields` was the one to take: it was three copies of the same fact
+ * (the meal branch's, the weight branch's, and one per activity item) answering a question
+ * that is about the whole log — which photo a *fact* was read off, when there is one set of
+ * photos and one message. Hoisting it here is a net −2 fields on the union and pays for
+ * `equipment` with room to spare.
+ *
+ * The cost, stated plainly: within one activities log every item now shares one photo
+ * attribution. "Load from the photo" was never really per-exercise anyway — a photographed
+ * machine belongs to the log — and the focused per-kind calls keep their own `photo_fields`
+ * where there is room for it.
  *
  * A follow-up call is given the whole original message anyway, so a quoted segment text
  * would have told it nothing it could not read for itself; which photos a part was read
@@ -400,6 +461,8 @@ export type SegmentKind = (typeof SEGMENT_KINDS)[number];
 export const FusionRouteOutputSchema = z.object({
 	result: FusionRouteSchema,
 	more_kinds: z.array(z.enum(SEGMENT_KINDS)).max(MAX_PARTS - 1),
+	/** Which fields in `result` were read off a photo — one answer for the whole log. */
+	photo_fields: photoFields,
 });
 export const FUSION_ROUTE_SCHEMA_NAME = "fusion_result";
 
@@ -409,11 +472,15 @@ export const FUSION_ROUTE_SCHEMA_NAME = "fusion_result";
 
 export const ActivitiesDetailOutputSchema = z.object({
 	items: z.array(ModelActivityItem).min(1).max(20),
+	photo_fields: photoFields,
 	photo_indexes: photoIndexes,
 });
 export const ACTIVITIES_DETAIL_SCHEMA_NAME = "activities";
 
-export const MealDetailOutputSchema = ModelMeal.omit({ kind: true }).extend({ photo_indexes: photoIndexes });
+export const MealDetailOutputSchema = ModelMeal.omit({ kind: true }).extend({
+	photo_fields: photoFields,
+	photo_indexes: photoIndexes,
+});
 export const MEAL_DETAIL_SCHEMA_NAME = "meal";
 
 export const WeightDetailOutputSchema = z.object({
@@ -473,6 +540,12 @@ export const PLAN_FIELDS_SCHEMA_NAME = "plan_fields";
 export interface FusionDetail {
 	goal?: z.infer<typeof GoalDetailOutputSchema>;
 	fields?: ProfileFields;
+	/**
+	 * Which fields were read off a photo. It sits beside the record rather than on it since
+	 * the routing schema had to give up three copies of this field to make room for
+	 * `equipment` — see the note on FusionRouteOutputSchema.
+	 */
+	photoFields?: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -481,7 +554,7 @@ export interface FusionDetail {
 
 /** Which fields each kind can carry a source for, in the order the card shows them. */
 const SOURCE_FIELDS = {
-	activity: ["exercise", "sets", "reps", "load_lb", "duration_min", "distance_mi", "kcal"],
+	activity: ["exercise", "equipment", "sets", "reps", "load_lb", "duration_min", "distance_mi", "kcal"],
 	meal: ["description", "kcal", "protein_g", "carbs_g", "fat_g", "fiber_g"],
 	weight: ["weight_lb"],
 } as const;
@@ -524,6 +597,15 @@ function sanitizeGoalFacts(facts: unknown): GoalFacts | null {
 	return Object.values(clean).every((value) => value === null) ? null : clean;
 }
 
+/**
+ * The model-facing schemas ask for plain numbers where the public ones want integers — a
+ * nullable number is a quarter of the grammar of a bounded integer (see ModelActivityItem).
+ * So the translation rounds: "180.4 kcal" is 180, and three sets is three sets.
+ */
+function whole(value: number | null): number | null {
+	return value === null ? null : Math.round(value);
+}
+
 function pick<T>(source: unknown, key: string, schema: z.ZodType<T>): T | null {
 	const value = (source as Record<string, unknown> | null | undefined)?.[key];
 	const parsed = schema.safeParse(value);
@@ -536,23 +618,27 @@ function pick<T>(source: unknown, key: string, schema: z.ZodType<T>): T | null {
  */
 export function toFusionResult(route: FusionRoute, detail: FusionDetail = {}): FusionResult {
 	const goalDetail = detail.goal;
+	const photoFieldNames = detail.photoFields ?? [];
 	switch (route.kind) {
 		case "activities":
 			return {
 				kind: "activities",
 				items: route.items.map((item) => ({
 					exercise: item.exercise,
+					equipment: item.equipment,
 					description: item.description,
 					category: null,
 					muscle_groups: null,
-					sets: item.sets,
-					reps: item.reps,
+					sets: whole(item.sets),
+					reps: whole(item.reps),
 					load_lb: item.load_lb,
-					duration_min: item.duration_min,
+					duration_min: whole(item.duration_min),
 					distance_mi: item.distance_mi,
-					kcal: item.kcal,
+					kcal: whole(item.kcal),
 					confidence: item.confidence,
-					sources: expandSources(SOURCE_FIELDS.activity, item.photo_fields, item),
+					sources: expandSources(SOURCE_FIELDS.activity, photoFieldNames, item),
+					// Offered by services/fusion/refine.ts once the catalogue is to hand.
+					refine: null,
 				})),
 			};
 
@@ -561,14 +647,14 @@ export function toFusionResult(route: FusionRoute, detail: FusionDetail = {}): F
 				kind: "meal",
 				description: route.description,
 				meal_type: route.meal_type,
-				kcal: route.kcal,
+				kcal: whole(route.kcal),
 				protein_g: route.protein_g,
 				carbs_g: route.carbs_g,
 				fat_g: route.fat_g,
 				fiber_g: route.fiber_g,
-				items: route.items,
+				items: route.items.map((item) => ({ ...item, kcal: whole(item.kcal) })),
 				confidence: route.confidence,
-				sources: expandSources(SOURCE_FIELDS.meal, route.photo_fields, route),
+				sources: expandSources(SOURCE_FIELDS.meal, photoFieldNames, route),
 			};
 
 		case "weight":
@@ -576,7 +662,7 @@ export function toFusionResult(route: FusionRoute, detail: FusionDetail = {}): F
 				kind: "weight",
 				weight_lb: route.weight_lb,
 				confidence: route.confidence,
-				sources: expandSources(SOURCE_FIELDS.weight, route.photo_fields, route),
+				sources: expandSources(SOURCE_FIELDS.weight, photoFieldNames, route),
 			};
 
 		case "goal": {

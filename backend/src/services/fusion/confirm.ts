@@ -14,11 +14,20 @@ import { InvalidGoalError, createGoal } from "../goals/store.js";
 import { localDateOf } from "../localTime.js";
 import type { GoalProposal } from "../goals/proposal.js";
 import {
+	currentPlace,
+	equipmentLabelsFor,
+	recordPlaceEquipment,
+	setCurrentPlace,
+	upsertPlace,
+} from "../places.js";
+import {
 	FusionResultSchema,
 	MAX_PARTS,
+	PLACE_KINDS,
 	type FusionKind,
 	type FusionResult,
 	type GoalFacts,
+	type PlaceKind,
 	type ReferenceLoad,
 } from "./schema.js";
 
@@ -230,6 +239,43 @@ export function mergeReferenceLoads(
 	return [...byExercise.values()].slice(-MAX_REFERENCE_LOADS);
 }
 
+/**
+ * What each saved activity teaches us about the room it happened in. No current place is
+ * the normal state — someone who has never named their gym gets exactly the behaviour they
+ * had before this existed, which is why nothing above has to check first.
+ */
+async function accruePlaceEquipment(client: pg.PoolClient, userId: string, rows: readonly Row[]): Promise<void> {
+	const place = await currentPlace(client, userId);
+	if (!place) return;
+	for (const row of rows) {
+		for (const { label, exerciseId } of equipmentLabelsFor({
+			equipment: row.equipment as string | null,
+			exercise: row.exercise as string | null,
+			exercise_id: row.exercise_id as string | null,
+		})) {
+			await recordPlaceEquipment(client, place.id, label, { exerciseId });
+		}
+	}
+}
+
+/**
+ * "My gym is New Millennium" — the one sentence that turns the passive equipment memory on.
+ * The place is created (or found, case-insensitively) and becomes the profile's current
+ * place, so every workout saved afterwards accrues against it.
+ */
+async function applyStatedPlace(
+	client: pg.PoolClient,
+	userId: string,
+	fields: Record<string, unknown> | null
+): Promise<void> {
+	const name = typeof fields?.place_name === "string" ? fields.place_name.trim() : "";
+	if (name === "") return;
+	const kindSaid = fields?.place_kind;
+	const kind = (PLACE_KINDS as readonly string[]).includes(kindSaid as string) ? (kindSaid as PlaceKind) : "gym";
+	const place = await upsertPlace(client, userId, name, kind);
+	if (place) await setCurrentPlace(client, userId, place.id);
+}
+
 async function applyProfileStatement(
 	client: pg.PoolClient,
 	userId: string,
@@ -365,6 +411,7 @@ async function savePart(
 				description: item.description,
 				kcal: item.kcal ?? 0,
 				exercise: item.exercise,
+				equipment: item.equipment,
 				category: item.category,
 				muscle_groups: item.muscle_groups,
 				sets: item.sets,
@@ -379,6 +426,9 @@ async function savePart(
 			const rows = await insertEntries(client, userId, "movement", entries);
 			saved.activities.push(...rows);
 			part.activity_ids = rows.map((row) => row.id as string);
+			// The room remembers what was done in it (migration 0012). Passive, silent, and
+			// a no-op when the user has never said where they train.
+			await accruePlaceEquipment(client, userId, rows);
 			// Evidence hangs off the first activity: one photo of a machine belongs to the
 			// exercise it shows, and a log with several exercises was one moment anyway.
 			keep(
@@ -485,6 +535,8 @@ async function savePart(
 
 		case "constraint":
 		case "preference": {
+			// Before the profile merge, so the row the merge returns already carries the id.
+			await applyStatedPlace(client, userId, result.fields);
 			saved.profile = await applyProfileStatement(
 				client,
 				userId,

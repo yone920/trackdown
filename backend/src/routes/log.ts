@@ -36,6 +36,7 @@ function toFusionResult(item: ParsedItem): FusionResult | null {
 				items: [
 					{
 						exercise: null,
+						equipment: null,
 						description: item.description,
 						category: null,
 						muscle_groups: null,
@@ -48,6 +49,8 @@ function toFusionResult(item: ParsedItem): FusionResult | null {
 						confidence: item.confidence,
 						// Typed, not read off a photo.
 						sources: null,
+						// A typed line the v1 parser split has no catalogue guess behind it.
+						refine: null,
 					},
 				],
 			};

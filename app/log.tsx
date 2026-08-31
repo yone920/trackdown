@@ -69,6 +69,10 @@ export default function LogSheet() {
   const [results, setResults] = useState<FusionResult[]>([]);
   const [clientId, setClientId] = useState<string | null>(null);
   const [dateChoice, setDateChoice] = useState<DateChoice>('proposed');
+  // The question the last read came back with, and the words it was about. Kept so that
+  // "yes" means something: an answer with no question attached is not a log (concept-v2
+  // §One input mechanism — the app remembers what it asked).
+  const [clarify, setClarify] = useState<{ originalText: string; question: string } | null>(null);
   const [listening, setListening] = useState(false);
   const [transcribed, setTranscribed] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -99,6 +103,7 @@ export default function LogSheet() {
     setClientId(null);
     setDateChoice('proposed');
     setTranscribed(false);
+    setClarify(null);
     setError(null);
   };
 
@@ -110,10 +115,22 @@ export default function LogSheet() {
         text: withText.trim() || null,
         photos: withPhotos,
         kindHint: typeof params.hint === 'string' ? params.hint : null,
+        clarify,
       });
       // `results` since the mixed-input fix; `result` is the old single-part shape, kept
       // for one release so a phone that has not updated still works against a new server.
-      setResults(response.results ?? (response.result ? [response.result] : []));
+      const read = response.results ?? (response.result ? [response.result] : []);
+      setResults(read);
+      // A question comes back with the words it was asked about, so the next Read-it can
+      // resolve a one-word answer. Anything else clears the round: it was understood.
+      const question = read.find((result) => result.kind === 'unclear');
+      if (question?.kind === 'unclear') {
+        setClarify({ originalText: clarify?.originalText ?? withText.trim(), question: question.question });
+        // The box is emptied for the answer; the words it was asked about are kept here.
+        setText('');
+      } else {
+        setClarify(null);
+      }
       setEvidenceIds(response.evidence.map((item) => item.id));
       setEvidenceParts(response.evidence.map((item) => item.part ?? 0));
       // One id per Save, however many parts it holds: a retry after a timeout must replay,
@@ -253,7 +270,7 @@ export default function LogSheet() {
             setTranscribed(false);
           }}
           multiline
-          placeholder="Shoulder press, three sets of ten at forty pounds…"
+          placeholder={clarify ? 'Answer the question…' : 'Shoulder press, three sets of ten at forty pounds…'}
           placeholderTextColor={C.dim}
           style={{
             marginTop: 18,

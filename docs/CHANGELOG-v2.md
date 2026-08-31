@@ -85,6 +85,148 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-08-31 — always log, the machine as its own fact, and a gym that remembers itself (`field-fixes-best-effort-places`)
+
+One transcript, said out loud into the Log sheet by someone who did not know the name of the
+machine they had just used:
+
+> "I don't know what it is called but it is something is inclined, but I lay down on my tummy
+> on my tummy and I pulled it up to my chest from down up down up. I don't know what that
+> mission is called kind of inclined, but I laid up I lay on my tummy and using my BOSS hand
+> pull it up to my chest. I don't know what that exercise what that machine is called but I
+> did three reps of three sets of 12 rep at 45 pound."
+
+It came back as a question. Three sets of twelve at forty-five pounds, described twice over
+in as much detail as anyone could give, and the app asked what it was instead of writing it
+down. That is the wrong trade in every direction: the numbers were certain, the name was not,
+and the one thing the user cannot do later is log a workout that was never saved.
+
+#### A — a question never gates a workout
+
+- **`unclear` is now a last resort in the prompt.** It is for input that cannot be
+  interpreted at all — a stray word, a photo of nothing. If a *movement* was described,
+  however hazily, it is an activity, and every field is filled in with a best guess: the
+  catalogue name when the reader is reasonably sure, a short phrase in the user's own words
+  when it is not, the numbers exactly as stated, and a **low confidence** to say so. "That is
+  what the low confidence is FOR. It is not a reason to return unclear."
+- **A guessed movement is not a movement with nothing in it.** A paraphrase resolves to
+  nothing in the catalogue, so the day used to see a workout with no muscle groups — invisible
+  to coverage and to weekly sets. When the user's words point at exactly one catalogue entry,
+  the item borrows that entry's category and muscle groups **on the confirm card, before
+  anything is written**, which is the whole difference between a guess and a fabrication.
+- **The refinement chip.** The same match becomes a one-tap offer — "Was it a Chest-Supported
+  Row?" — that fills in the catalogue name and its id. It never blocks the Save, it is not
+  drawn when the card already says what it would suggest, and it can be ignored forever.
+  `services/fusion/refine.ts` is the matcher: stopword-stripped, crudely stemmed
+  ("inclined" and "incline" are one word to a gym), scored on shared distinctive tokens
+  across a name and its aliases, silent on a tie.
+
+#### B — the movement and the machine are two facts
+
+`0012_places_equipment.sql` adds **`activities.equipment`**. "Chest-Supported Row" is the
+movement; "chest-supported row machine", "cable stack", "dumbbells" is the kit. Squashing them
+into one string made the exercise name unmatchable *and* threw away the one detail the user
+was actually sure of. It is on the confirm card as its own field, the sub-line on the Day and
+in the DayLog's "understood" line — and `delta_vs_last` still keys on the movement, because
+"heavier than last time" is a claim about the lift, not about which machine was free.
+
+#### C — the clarify loop remembers its question
+
+For the rare log that really cannot be read. `POST /api/log/analyze` takes `clarify_original`
+and `clarify_question`; the app keeps both when a question comes back, empties the box, flips
+the placeholder to "Answer the question…", and sends all three next time. "Yes" on its own is
+not a log. "Yes" plus the question plus the words it was asked about is.
+
+#### D — places, and what has been seen in them
+
+Passive, and there is no form anywhere in it.
+
+- `0012` also adds **`places`** (name, kind gym|home|travel|other), **`place_equipment`**
+  (label, `exercise_id`, `first_seen`, `last_seen`, `times_seen`, source, unique on
+  `(place_id, lower(label))`) and **`profiles.current_place_id`**.
+- **"My gym is New Millennium"** — the statement's own detail call now extracts `place_name`
+  and `place_kind`; the confirm upserts the place and makes it the current one.
+- **Every workout saved afterwards accrues against it**, at confirm time: the machine it
+  named, and the movement when the movement was identified. Bumping `last_seen` and
+  `times_seen` rather than writing a second row, so it is safe on a replayed confirm.
+- **The coach is told, in one line**: what has been seen there, most used first, with the
+  instruction to prefer it, assume barbells and dumbbells and benches anyway, and name a
+  substitution from the list when it prescribes something not on it. Observed is evidence of
+  what is there, never proof of what is not.
+- `GET /api/profile` returns `place` with an `equipment_count`, and the Goals tab's **Where**
+  row reads "New Millennium · 14 machines seen".
+
+**Decisions**
+
+- **The grammar ceiling is a field budget, not a byte budget — and the byte pin was never
+  weighing the right bytes.** `fusion.test.ts` measures `z.toJSONSchema(...)`; what the SDK
+  actually sends is `zodOutputFormat(...)`, a different and larger document (bounds and enums
+  become `description` strings, shared shapes become `$defs`). Adding `equipment` to the
+  routing union was refused *at fewer JSON-schema bytes than the shape that shipped*, and
+  stayed refused when the field was moved onto the branch, when the item's integers were
+  relaxed to plain numbers (−600 bytes), and when the array bounds came off. It compiled only
+  when another field came off the union. Every row of that was a real request against the live
+  API; the table is in the note on `FusionRouteOutputSchema`.
+- **`photo_fields` paid for `equipment`.** It was three copies of one fact — the meal branch's,
+  the weight branch's, and one per activity item — answering a question about the whole log:
+  which fields were read off a photo, when there is one message and one set of photos. Hoisted
+  beside `result` it is a net −2 fields, which bought `equipment` with room to spare. The cost,
+  stated plainly: within one activities log every item now shares one photo attribution. The
+  focused per-kind calls keep their own, where there is room.
+- **The size test now pins the field count, not the bytes**, and says in as many words that
+  only `anthropic.fusion.contract.test.ts` knows. The old exact-byte pin was worse than
+  useless: it went *down* while the schema became one the provider would not compile.
+- **The refinement is derived, not asked for.** The model already has the whole catalogue in
+  its prompt; if it could name the movement it did, and the save resolves it. This function is
+  for the other case, and it answers a narrower question than the model was asked. It also
+  costs the union nothing, which after the above is not a small consideration.
+- **A named gym is a preference, not coach context.** The router called "my gym is New
+  Millennium" a passing state — reasonably, on the old wording — so no plan-fields call ran and
+  no place was ever created. One line in the routing rules ("WHERE they train and what it is
+  called") fixed it; proved on the live model.
+- **An unidentified exercise is not equipment.** A paraphrase of a movement the user could not
+  name is their words, not a machine, so it is not accrued as a place label. The machine beside
+  it is, and that is the half worth keeping.
+- **No place set is the normal state** and every function in `services/places.ts` returns null
+  or does nothing for it. Nothing upstream checks first, and nothing fails.
+- No new dependencies. One migration.
+
+**Tests** — 410 passing, 2 skipped in `backend` (was 384/2, with the key set so the contract
+tests run); 89 passing in the app (was 82).
+
+- `src/services/fusion/fusion.test.ts` (+11): the prompt's best-effort policy and the
+  reserved `unclear`; the clarify block present and absent; the stemmer, the stopwords, the
+  candidate and its silence on a tie; the three gates on the offer; the borrowed muscle groups
+  and the ones it leaves alone; and the field-count pin on the routing union.
+- `src/app.test.ts` (+15): the transcript above through analyze → confirm — one part, sets 3,
+  reps 12, load 45, the machine on its own field, the muscle groups off the catalogue, the
+  confidence low, and **no question**; the machine as the Day's sub-line and in the DayLog's
+  understood line; the chip offered when the reader could only paraphrase; the clarify round
+  end to end and the half-round ignored; a confirm with **no place set** saving cleanly; the
+  place named from one sentence; accrual **idempotent per label**, case-insensitively, with an
+  unidentified movement not counted; the coach's line present with data and absent without.
+- `anthropic.fusion.contract.test.ts` (+4), **run here against the real model, eleven for
+  eleven**: the nameless-machine transcript coming back as one activity with 3 × 12 at 45 and
+  a low confidence; the machine kept out of the movement's name; "my gym is New Millennium"
+  read as a place; and a bare "yes" resolving against the question it answers.
+- `__tests__/log.test.tsx` (+2), `__tests__/confirm-card.test.tsx` (+3),
+  `__tests__/goals.test.tsx` (+2): the question remembered and both halves sent back, and no
+  clarify round on an ordinary log; the machine line and its field; the chip's one tap and its
+  absence; the place row, singular and plural, and nothing drawn without one.
+
+**Deferred**
+
+- **The chip is one candidate, or none.** A tie is silence, which means the hardest cases — the
+  ones where two movements fit equally — get no offer at all. A short list of two would be a
+  better answer and needs a card that can draw one.
+- **`place_equipment.source` is only ever `fused` or `stated`.** Nothing reads a machine off a
+  photo into it yet, though the column and the check constraint are ready for it.
+- **A place cannot be renamed, listed or switched from a screen.** Saying a different gym makes
+  that one current, which is the only control there is. There is no screen for the equipment
+  list either — it is memory the coach reads, not a page.
+- **One place at a time.** Travelling means saying so; nothing infers a place from a location
+  or a time of day, and nothing ever should without being asked.
+
 ### 2026-08-31 — a background, a brief you can argue with, and a screen that waits well (`field-fixes-background-revisions`)
 
 Three things the morning test turned up, in one branch because they are all the same

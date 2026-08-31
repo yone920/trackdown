@@ -33,9 +33,13 @@ becomes tomorrow's log.
    Cached for the day so asking twice is consistent and free. No weekly programs, no pushes.
 6. **Never make the user open or close anything.** No sessions to start. The day is the
    container and it closes itself.
-7. **One input mechanism for everything.** Logging an exercise, a meal, a weight, asking the
-   coach, and setting goals all use the same Photo / Speak / Type panel. Claude classifies what
-   was said and routes it; the user confirms. No forms.
+7. **One input mechanism for everything — and NO FORMS, ever.** Logging an exercise, a meal,
+   a weight, asking the coach, setting goals, correcting anything already logged: the same
+   Photo / Speak / Type panel. Claude classifies and routes; the app shows what it understood
+   on a review screen ("Does this look right?" → Log it / Make a change); a change is *told*
+   ("reps were 3, not 4"), never typed into a field. There are no editable field grids
+   anywhere in the app. The single exception is the sign-in screen (passwords cannot be
+   spoken). This is a product law, not a styling preference — user decision 2026-08-31.
 
 ## Logging
 
