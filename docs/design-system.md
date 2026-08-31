@@ -53,7 +53,9 @@ HR (Health); strength → target lift + next step due + push/pull/legs; no goal 
 cardio minutes + coverage, **no judgement colours**. Then **Right now** reading (LLM, regenerated on
 every log; ≤ 2 sentences + the single next action) with action chips. **DayArc**. Then Training and
 Eating sections organised as on Day (below) — **only what was logged**: no placeholder row for a
-meal nobody has eaten (decision 2026-08-31). Every logged row carries the ✕. Coach button
+meal nobody has eaten (decision 2026-08-31). Every logged row has three targets: the exercise
+**name** opens its sheet, the **✕** deletes it, the **rest of the row** opens it for a
+correction (the same `/log` review-and-tell screen the DayLog routes to). Coach button
 (`accent` pill): "What should I do today?" → "…tomorrow?" once today's workout is logged.
 Tabs + `+`.
 
