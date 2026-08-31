@@ -1,10 +1,12 @@
 import { CATEGORIES } from "../../db/exercises.js";
 import type { ImageMediaType, LlmContent, LlmPort } from "../../ports/llm.js";
+import { checkMeal, discrepancyLine } from "./arithmetic.js";
 import type { FusionContext } from "./context.js";
 import { suggestRefinement } from "./refine.js";
 import {
 	buildFusionSystemPrompt,
 	buildGoalDetailSystemPrompt,
+	buildMealReconcilePrompt,
 	buildPartDetailSystemPrompt,
 	buildPlanFieldsSystemPrompt,
 	buildRevisionSystemPrompt,
@@ -200,6 +202,63 @@ export function withRefinements(result: FusionResult, context: FusionContext): F
 }
 
 export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
+	/**
+	 * The arithmetic gate (services/fusion/arithmetic.ts), applied to every meal this
+	 * analyzer produces — at analyze and at revise, on the routed part and on a segment.
+	 *
+	 * A meal whose macros and calories cannot both be true gets exactly ONE automatic re-ask:
+	 * the same meal detail call, the same message, with the discrepancy spelled out in the
+	 * system prompt. If the second answer adds up it is kept and the card says the numbers
+	 * were adjusted. If it does not — or the re-ask fails, or it comes back with the macros
+	 * quietly removed so there is nothing left to check — the reading is presented anyway and
+	 * the confidence is **forced to low**, whatever the model claimed.
+	 *
+	 * Presented anyway, always: the user said what they ate, and refusing to log it because
+	 * we cannot price it is the failure "always log" exists to prevent. What we can honestly
+	 * do is stop calling it high confidence.
+	 */
+	async function gateMeal(
+		result: FusionResult,
+		context: FusionContext,
+		messages: { role: "user"; content: LlmContent[] }[]
+	): Promise<FusionResult> {
+		if (result.kind !== "meal") return result;
+		const first = checkMeal(result);
+		if (!first.checked || first.ok) return result;
+
+		let reread: FusionResult = result;
+		try {
+			// The photo claim is the first read's answer and stays it: which photos a part
+			// was read from is not what this call is being asked to reconsider.
+			const { photo_fields, photo_indexes: _claimed, ...meal } = await llm.parseStructured({
+				system: buildMealReconcilePrompt(context, compactPart(result), discrepancyLine(first)),
+				schema: MealDetailOutputSchema,
+				schemaName: MEAL_DETAIL_SCHEMA_NAME,
+				maxTokens: DETAIL_MAX_TOKENS,
+				messages,
+			});
+			reread = toFusionResult({ kind: "meal", ...meal }, { photoFields: photo_fields });
+		} catch {
+			// A failed re-ask is not a failed log. The first reading stands, flagged below.
+			reread = result;
+		}
+
+		const second = checkMeal(reread);
+		const settled = second.checked && second.ok;
+		if (reread.kind !== "meal") return reread;
+		return {
+			...reread,
+			// The whole point of the gate: a claim of "high" about numbers that do not add up
+			// is the one thing the user cannot check for themselves at a glance.
+			confidence: settled ? reread.confidence : "low",
+			consistency: {
+				outcome: settled ? "adjusted" : "flagged",
+				stated_kcal: second.stated_kcal ?? reread.kcal,
+				implied_kcal: second.implied_kcal,
+			},
+		};
+	}
+
 	/** The follow-up a routed record needs, if it needs one. */
 	async function detailFor(
 		route: FusionRoute,
@@ -260,7 +319,12 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 			case "meal": {
 				const { photo_fields, photo_indexes, ...meal } = await ask(MealDetailOutputSchema, MEAL_DETAIL_SCHEMA_NAME);
 				return {
-					result: toFusionResult({ kind: "meal", ...meal }, { photoFields: photo_fields }),
+					// Every meal goes through the arithmetic gate, wherever it was read.
+					result: await gateMeal(
+						toFusionResult({ kind: "meal", ...meal }, { photoFields: photo_fields }),
+						context,
+						messages
+					),
 					photos: photo_indexes,
 				};
 			}
@@ -309,8 +373,15 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 			// more than a plain log, not three.
 			const parts = dropWeightStatedWithGoal(
 				await Promise.all([
-					detailFor(answer.result, context, messages).then((detail) => ({
-						result: toFusionResult(answer.result, { ...detail, photoFields: answer.photo_fields }),
+					detailFor(answer.result, context, messages).then(async (detail) => ({
+						// The routed part's meal fields came off the ROUTING call, which never
+						// reaches fillSegment — so the gate runs here too, and its re-ask is
+						// the meal detail call the routing path otherwise never makes.
+						result: await gateMeal(
+							toFusionResult(answer.result, { ...detail, photoFields: answer.photo_fields }),
+							context,
+							messages
+						),
 						photos: [] as number[],
 					})),
 					...segments.map((kind) => fillSegment(kind, context, messages)),

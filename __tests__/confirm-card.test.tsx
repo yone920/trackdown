@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import React from 'react';
 
-import { ConfirmCard, notedFactsLine, sourcesLine } from '@/components/confirm-card';
+import { ConfirmCard, consistencyLine, notedFactsLine, sourcesLine } from '@/components/confirm-card';
 import type { ActivityItem, FusionResult } from '@/lib/types';
 
 // The confirm card has to render every kind the classifier can return — that is the whole
@@ -244,5 +244,48 @@ describe('the confidence chip says what it is about', () => {
     screen.rerender(<ConfirmCard result={{ ...meal, confidence: 'medium' }} />);
     expect(screen.getByText('Medium confidence')).toBeTruthy();
     expect(screen.queryByText('Low confidence — check me')).toBeNull();
+  });
+});
+
+// The arithmetic gate's half of "confirm, don't trust" (backend
+// services/fusion/arithmetic.ts). The chip already had the words for a low reading; what
+// was missing was the reason — and it is a reason the user cannot see, because it is a
+// multiplication nothing on the card performs.
+describe('a meal whose numbers did not add up', () => {
+  it('says so under the plate, with both figures, when it was flagged', () => {
+    render(
+      <ConfirmCard
+        result={{
+          ...meal,
+          kcal: 918,
+          protein_g: 67,
+          carbs_g: 398,
+          fat_g: 35,
+          // Forced by the server, whatever the model claimed.
+          confidence: 'low',
+          consistency: { outcome: 'flagged', stated_kcal: 918, implied_kcal: 2175 },
+        }}
+      />,
+    );
+    expect(screen.getByText('Low confidence — check me')).toBeTruthy();
+    const line = screen.getByTestId('meal-consistency');
+    expect(line).toHaveTextContent(/918 kcal against 2,175 from the macros/);
+    expect(line).toHaveTextContent(/flagged, not adjusted/);
+  });
+
+  it('says it was put right, when the one re-ask put it right', () => {
+    render(
+      <ConfirmCard
+        result={{ ...meal, consistency: { outcome: 'adjusted', stated_kcal: 918, implied_kcal: 939 } }}
+      />,
+    );
+    expect(screen.getByTestId('meal-consistency')).toHaveTextContent(/read again and adjusted/);
+  });
+
+  it('draws nothing for the meal that added up first time, which is nearly all of them', () => {
+    render(<ConfirmCard result={meal} />);
+    expect(screen.queryByTestId('meal-consistency')).toBeNull();
+    expect(consistencyLine(null)).toBeNull();
+    expect(consistencyLine(undefined)).toBeNull();
   });
 });

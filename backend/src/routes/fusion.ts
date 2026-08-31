@@ -8,6 +8,7 @@ import { storePhotoEvidence } from "../services/evidence.js";
 import { isAcceptedUploadMime, ACCEPTED_UPLOAD_MIMES } from "../services/images.js";
 import type { FusionAnalyzer, FusionPhoto } from "../services/fusion/analyze.js";
 import { buildFusionContext } from "../services/fusion/context.js";
+import { diffResults } from "../services/corrections.js";
 import { ConfirmBody, NothingToSaveError, confirmLog } from "../services/fusion/confirm.js";
 import { FusionResultSchema, MAX_PARTS, type FusionResult } from "../services/fusion/schema.js";
 import { proposalForSpec } from "../services/goals/store.js";
@@ -189,6 +190,14 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 					context,
 				});
 
+		// What the told change actually moved, field by field (migration 0015). Computed
+		// here because here is where both sides are — the parts as they went in and the
+		// parts as they came back. Nothing is written: a pending preview has no rows to
+		// write against yet, so the diff travels back with the review and comes home on the
+		// confirm, which writes it against the ids the parts turned into. A correction to a
+		// row that is ALREADY saved is written by that row's own PATCH instead.
+		const corrections = revise ? diffResults(revise.results, results, revise.instruction) : [];
+
 		// The timeline is arithmetic, not language: whatever the model guessed is replaced
 		// by the projection from the user's own facts at the safe rates in concept-v2
 		// §Goals, so the confirm card shows the date the goal will actually be saved with
@@ -210,6 +219,8 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 
 		res.json({
 			results,
+			/** Empty for a fresh log; one entry per record a revision moved. */
+			corrections,
 			// One release of app compatibility: a client written before mixed input reads
 			// `result` and would otherwise see nothing. Only when there is one part —
 			// a sentence with three things in it has no single result to name.

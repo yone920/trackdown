@@ -15,6 +15,7 @@ import type {
   GoalRecord,
   GoalsView,
   IsoDate,
+  PartCorrection,
   Profile,
   TrainingBoard,
   WeekView,
@@ -266,6 +267,13 @@ export type ConfirmInput = {
   /** A goal part: keep the user's own date, or save with no finish line. */
   confirmDate?: boolean;
   noDate?: boolean;
+  /**
+   * The told changes this preview went through before it was saved, exactly as
+   * /api/log/analyze measured them. Relayed, never computed here: the server diffed the
+   * parts it was handed against the parts it answered with, and it writes them against the
+   * rows the parts turn into (migration 0015).
+   */
+  corrections?: PartCorrection[];
 };
 
 /** POST /api/log/confirm — writes every part of the (edited) preview in one transaction. */
@@ -286,6 +294,7 @@ export function useConfirm() {
           tz_offset_min: tzOffsetMin(),
           ...(input.confirmDate === undefined ? {} : { confirm_date: input.confirmDate }),
           ...(input.noDate === undefined ? {} : { no_date: input.noDate }),
+          corrections: input.corrections ?? [],
         },
       }),
     onSuccess: () => invalidateAfterLog(qc),
@@ -308,6 +317,12 @@ export type PatchInput = {
   kind: 'activity' | 'meal' | 'weight' | 'goal';
   id: string;
   patch: Record<string, unknown>;
+  /**
+   * What the user SAID to make this change. Sent with the patch so the server can file the
+   * correction — its own diff of the row before and after — beside the record it changed
+   * (migration 0015). Absent when nothing was told: the Goals screen's own edits.
+   */
+  instruction?: string | null;
 };
 
 /**
@@ -318,8 +333,11 @@ export type PatchInput = {
 export function usePatchRecord() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ kind, id, patch }: PatchInput) =>
-      api<Record<string, unknown>>(PATCH_PATH[kind]!(id), { method: 'PATCH', body: patch }),
+    mutationFn: ({ kind, id, patch, instruction }: PatchInput) =>
+      api<Record<string, unknown>>(PATCH_PATH[kind]!(id), {
+        method: 'PATCH',
+        body: instruction ? { ...patch, correction_instruction: instruction } : patch,
+      }),
     onSuccess: () => invalidateAfterLog(qc),
   });
 }

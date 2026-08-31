@@ -9,6 +9,7 @@ import {
 	type NewEntry,
 	type ProfilePatch,
 } from "../entries.js";
+import { FieldChangeSchema, recordCorrection } from "../corrections.js";
 import { insertTextEvidence, linkEvidence, type EvidenceRow } from "../evidence.js";
 import { InvalidGoalError, createGoal } from "../goals/store.js";
 import { localDateOf } from "../localTime.js";
@@ -47,6 +48,18 @@ import {
 type Row = Record<string, unknown>;
 
 const isoDate = z.string().datetime({ offset: true });
+
+/** More told changes than this on one unsaved preview is not a log, it is a conversation. */
+export const MAX_CORRECTIONS = 20;
+
+/** One told change, as `/api/log/analyze` computed it (services/corrections.ts). */
+const CorrectionInput = z.object({
+	part: z.number().int().min(0).max(MAX_PARTS - 1),
+	/** Which item of an activities part; null (or absent) for a meal or a weigh-in. */
+	item: z.number().int().min(0).max(19).nullable().default(null),
+	instruction: z.string().trim().min(1).max(500),
+	changes: z.array(FieldChangeSchema).min(1).max(40),
+});
 
 export const ConfirmBody = z
 	.object({
@@ -87,6 +100,17 @@ export const ConfirmBody = z
 		confirm_date: z.boolean().optional(),
 		/** kind: "goal" — save it open-ended instead of taking the proposed date. */
 		no_date: z.boolean().optional(),
+		/**
+		 * The corrections made to this preview before it was saved (migration 0015), exactly
+		 * as `/api/log/analyze` returned them from each "Make a change". They are written
+		 * against the rows the parts turn into, inside the same transaction — a correction
+		 * whose record failed to save is not a correction that happened.
+		 *
+		 * The client relays them rather than computing them: the diff is the server's, taken
+		 * between the parts it was handed and the parts it answered with, and a client that
+		 * could write its own history could write one that never happened.
+		 */
+		corrections: z.array(CorrectionInput).max(MAX_CORRECTIONS).default([]),
 	})
 	// One of the two has to be there. A 400 saying so beats a 201 that saved nothing.
 	.refine((body) => (body.results?.length ?? 0) > 0 || body.result !== undefined, {
@@ -376,7 +400,45 @@ export async function saveConfirmed(
 	for (const [index, result] of results.entries()) {
 		await savePart(client, userId, body, result, buckets[index]!, saved);
 	}
+	await saveCorrections(client, userId, body, saved);
 	return saved;
+}
+
+/**
+ * The told changes this preview went through, written against the rows it just became
+ * (migration 0015). After the parts, because until then there is nothing to point at.
+ *
+ * A correction naming a part or an item that is not there is dropped rather than filed
+ * somewhere else: the parts can change between the revision and the Save — dropping one
+ * with its ✕ renumbers everything after it — and a correction attached to the wrong record
+ * is worse history than no history.
+ */
+async function saveCorrections(
+	client: pg.PoolClient,
+	userId: string,
+	body: ConfirmBody,
+	saved: SavedLog
+): Promise<void> {
+	for (const correction of body.corrections) {
+		const part = saved.parts[correction.part];
+		if (!part) continue;
+		// By the part's own kind, never by "whichever id it happens to carry": a goal part
+		// carries the weigh-in its stated facts produced, and a correction to the goal is not
+		// a correction to that weight. Goals and statements keep no history here (0015).
+		const activityId = part.kind === "activities" ? part.activity_ids[correction.item ?? 0] : undefined;
+		const owner =
+			part.kind === "activities"
+				? activityId
+					? { activityId }
+					: null
+				: part.kind === "meal" && part.meal_id
+					? { mealId: part.meal_id }
+					: part.kind === "weight" && part.weight_id
+						? { weightId: part.weight_id }
+						: null;
+		if (!owner) continue;
+		await recordCorrection(client, userId, owner, correction.instruction, correction.changes);
+	}
 }
 
 /** One part of the confirm, written into the running {@link SavedLog}. */

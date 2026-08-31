@@ -1,4 +1,4 @@
-import type { DayLogRecord, FusionResult } from '@/lib/types';
+import type { DayLogRecord, FusionResult, PartCorrection } from '@/lib/types';
 
 // The DayLog's "tap → correct" (docs/design-system.md §DayLog). A saved row is turned back
 // into the shape the confirm card already knows how to draw and edit, and the edited shape
@@ -104,4 +104,31 @@ export function resultToPatch(kind: EditKind, result: FusionResult): Record<stri
     return { title: result.spec.title, metrics: result.spec.metrics };
   }
   return null;
+}
+
+/**
+ * The corrections that belong to the parts actually being saved, renumbered onto the list
+ * the confirm sends.
+ *
+ * `results` is what is on screen and `POST /api/log/confirm` is sent only the parts that
+ * are records — an `unclear` is a question and goes no further than the card — so the part
+ * indexes the corrections were measured against are not the indexes the server will file
+ * them under. A correction pointing at the wrong record is worse history than no history,
+ * so one whose part is not being saved is dropped rather than moved somewhere plausible.
+ */
+export function savableCorrections(
+  corrections: readonly PartCorrection[],
+  results: readonly FusionResult[],
+): PartCorrection[] {
+  const renumbered = new Map<number, number>();
+  let next = 0;
+  results.forEach((result, index) => {
+    if (result.kind === 'unclear') return;
+    renumbered.set(index, next);
+    next += 1;
+  });
+  return corrections.flatMap((correction) => {
+    const part = renumbered.get(correction.part);
+    return part === undefined ? [] : [{ ...correction, part }];
+  });
 }

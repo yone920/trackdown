@@ -2,6 +2,7 @@ import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { config } from "../../config/index.js";
 import { createFusionAnalyzer } from "../../services/fusion/analyze.js";
+import { checkMeal } from "../../services/fusion/arithmetic.js";
 import type { FusionContext } from "../../services/fusion/context.js";
 import { createAnthropicLlm } from "./anthropic.js";
 
@@ -49,6 +50,30 @@ const context: FusionContext = {
 	kindHint: null,
 	clarify: null,
 };
+
+/**
+ * A nutrition label, generated rather than photographed, so no binary fixture has to live
+ * in the repo. Two columns — per slice and per package — which is the whole trap: 20 × 15 g
+ * of carbohydrate is 300 g, and four slices is 60.
+ */
+function labelImage(): Promise<Buffer> {
+	const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="520" height="360">
+	<rect width="520" height="360" fill="white"/>
+	<g font-family="Helvetica" font-size="20" fill="black">
+		<text x="20" y="40" font-size="26" font-weight="bold">Nutrition Facts</text>
+		<text x="20" y="72">Serving size: 1 slice (45 g)</text>
+		<text x="20" y="100">Servings per package: 20</text>
+		<text x="20" y="140" font-weight="bold">Per slice</text>
+		<text x="300" y="140" font-weight="bold">Per package</text>
+		<text x="20" y="176">Calories 80</text><text x="300" y="176">1600</text>
+		<text x="20" y="210">Total Fat 1 g</text><text x="300" y="210">20 g</text>
+		<text x="20" y="244">Total Carbohydrate 15 g</text><text x="300" y="244">300 g</text>
+		<text x="20" y="278">Dietary Fiber 2 g</text><text x="300" y="278">40 g</text>
+		<text x="20" y="312">Protein 3 g</text><text x="300" y="312">60 g</text>
+	</g>
+</svg>`;
+	return sharp(Buffer.from(svg)).png().toBuffer();
+}
 
 /** A tiny generated image, so no binary fixture has to live in the repo. */
 function tinyImage(): Promise<Buffer> {
@@ -328,6 +353,7 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 					items: [],
 					confidence: "medium",
 					sources: null,
+					consistency: null,
 				},
 			],
 			instruction: "that meal was lunch not dinner",
@@ -341,6 +367,69 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 		expect(revised!.kcal).toBe(620);
 		expect(revised!.description.toLowerCase()).toContain("chicken");
 	}, 90_000);
+
+	// ── The meal-accuracy field case, against the real model ──────────────────────────
+	//
+	// Reported 2026-08-31: a spoken lunch with photographs of the bread bag's label and the
+	// tuna can's came back kcal 918, protein 67, **carbs 398**, fat 35 — and HIGH. The macros
+	// imply about 2,175 kcal. It is the label's whole-loaf carbohydrate figure, taken for
+	// four slices of it, asserted with confidence.
+	//
+	// The contract is NOT that the model prices this lunch correctly — nobody can, from those
+	// words. It is the honesty guarantee the arithmetic gate exists to make: whatever comes
+	// back either adds up, or it says so and is not called high confidence.
+	it("never returns a meal that is both internally inconsistent and confident", async () => {
+		const { results } = await analyzer().analyze({
+			text:
+				"for lunch I had a can of tuna, two eggs, a quarter of an onion, one chilli, two cups of " +
+				"vegetables, two tablespoons of olive oil, and four slices of this bread",
+			context,
+		});
+
+		const meal = results.find((part) => part.kind === "meal");
+		expect(meal?.kind).toBe("meal");
+		if (meal?.kind !== "meal") return;
+
+		const check = checkMeal(meal);
+		if (check.ok) {
+			// The common case: it adds up, and there is nothing to say about it.
+			expect(meal.consistency).toBeNull();
+		} else {
+			// The gate ran, re-asked, and could not reconcile it — so it says so, in the two
+			// places the user can see: the chip and the line under the plate.
+			expect(meal.confidence).toBe("low");
+			expect(meal.consistency?.outcome).toBe("flagged");
+		}
+		// Either way the lunch is logged. Refusing to save what somebody ate is the failure
+		// "always log" exists to prevent.
+		expect(meal.kcal).toBeGreaterThan(0);
+	}, 120_000);
+
+	// The photo-binding rules, on the evidence that produced the bug: a nutrition label is a
+	// PER-SERVING table, and the user said how many servings they had.
+	it("prices a nutrition label by the servings stated, not by the package", async () => {
+		const label = await labelImage();
+		const { results, photoParts } = await analyzer().analyze({
+			text: "I ate four slices of this bread",
+			photos: [{ mediaType: "image/png", base64: label.toString("base64") }],
+			context,
+		});
+
+		// The label is evidence ABOUT the bread they mentioned; it does not log itself.
+		expect(results).toHaveLength(1);
+		expect(photoParts).toEqual([0]);
+		const meal = results[0]!;
+		expect(meal.kind).toBe("meal");
+		if (meal.kind !== "meal") return;
+
+		// Four slices at 15 g is 60 g. The whole loaf is 300 g, and that is the answer this
+		// rule exists to keep out of the record; anything under half the loaf is the model
+		// having read the per-serving column.
+		expect(meal.carbs_g ?? 0).toBeLessThan(150);
+		expect(meal.carbs_g ?? 0).toBeGreaterThan(20);
+		// And whatever it decided, it adds up or it says it does not.
+		if (!checkMeal(meal).ok) expect(meal.confidence).toBe("low");
+	}, 120_000);
 
 	// The clarify round: the question is remembered, so "yes" resolves instead of looping.
 	it("resolves a bare answer against the question it was asked", async () => {

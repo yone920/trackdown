@@ -10,6 +10,7 @@ import type {
   FieldSource,
   FusionResult,
   GoalFacts,
+  MealConsistency,
   ProposedTimeline,
 } from '@/lib/types';
 
@@ -140,6 +141,31 @@ export function sourcesLine(sources: Record<string, FieldSource> | null | undefi
   return parts.length === 0 ? null : parts.join(' · ');
 }
 
+/**
+ * What the server's arithmetic gate made of a meal's numbers, in one quiet line under the
+ * plate (backend services/fusion/arithmetic.ts). Null when the reading added up first time,
+ * which is nearly always — this line exists for the reading that did not.
+ *
+ * The field case it is written for: kcal 918 beside 67 g protein, 398 g carbs and 35 g fat,
+ * which is 2,175 kcal of macros, marked HIGH. The chip already says "Low confidence — check
+ * me" whenever the gate forced it; this says WHY, because "check me" with no reason is a
+ * shrug and the user cannot see the multiplication.
+ */
+export function consistencyLine(consistency: MealConsistency | null | undefined): string | null {
+  if (!consistency) return null;
+  const stated = consistency.stated_kcal;
+  const implied = consistency.implied_kcal;
+  const sum =
+    stated != null && implied != null
+      ? ` — ${Math.round(stated).toLocaleString('en-US')} kcal against ${Math.round(
+          implied,
+        ).toLocaleString('en-US')} from the macros`
+      : '';
+  return consistency.outcome === 'adjusted'
+    ? `The numbers didn’t add up${sum}; read again and adjusted.`
+    : `The numbers didn’t add up${sum}; flagged, not adjusted.`;
+}
+
 function timelineLine(timeline: ProposedTimeline | null): string | null {
   if (!timeline) return null;
   const parts = [timeline.rate, timeline.by ? `→ ${timeline.by}` : null, timeline.note].filter(Boolean);
@@ -267,6 +293,11 @@ export function ConfirmCard({
             </Sub>
           ) : null}
           {sourcesLine(result.sources) ? <Sub style={{ marginTop: 4 }}>{sourcesLine(result.sources)}</Sub> : null}
+          {consistencyLine(result.consistency) ? (
+            <Sub testID="meal-consistency" style={{ marginTop: 4, color: C.accent }}>
+              {consistencyLine(result.consistency)}
+            </Sub>
+          ) : null}
           <Facts>
             <Fact label="Kcal" numeric value={result.kcal} testID="meal-kcal" />
             <Fact label="Protein g" numeric value={result.protein_g} />

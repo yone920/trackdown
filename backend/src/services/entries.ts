@@ -1,6 +1,7 @@
 import type pg from "pg";
 import { z } from "zod";
 import { CATEGORIES, type ExerciseCategory, type LoadDirection } from "../db/exercises.js";
+import { CORRECTABLE_FIELDS, diffFields, recordCorrection } from "./corrections.js";
 import { buildExerciseIndex } from "./exerciseMatch.js";
 import { EXPERIENCE_LEVELS, ReferenceLoadSchema } from "./fusion/schema.js";
 
@@ -63,6 +64,15 @@ export const NewEntry = z.object({
 });
 export type NewEntry = z.infer<typeof NewEntry>;
 
+/**
+ * What the user SAID to make this change, when the change came from telling rather than
+ * from a screen (concept-v2 §Principles 7 — NO FORMS). Not a column: it is the instruction
+ * behind the correction, and it is filed with the field-level diff in `record_corrections`
+ * (migration 0015). Absent on any other write, and a patch carrying only this changes
+ * nothing and records nothing.
+ */
+const correctionInstruction = z.string().trim().min(1).max(500);
+
 export const EntryPatch = z
 	.object({
 		description: z.string().trim().min(1).max(500),
@@ -73,6 +83,7 @@ export const EntryPatch = z
 		fiber_g: macro,
 		logged_at: isoDate,
 		...activityFields,
+		correction_instruction: correctionInstruction,
 	})
 	.partial()
 	.refine((patch) => Object.keys(patch).length > 0, { message: "Empty patch." });
@@ -86,7 +97,11 @@ export type NewWeight = z.infer<typeof NewWeight>;
 
 /** A correction to a weigh-in — the DayLog's edit card (docs/design-system.md §DayLog). */
 export const WeightPatch = z
-	.object({ weight_lb: z.number().positive().max(2000), logged_at: isoDate })
+	.object({
+		weight_lb: z.number().positive().max(2000),
+		logged_at: isoDate,
+		correction_instruction: correctionInstruction,
+	})
 	.partial()
 	.refine((patch) => Object.keys(patch).length > 0, { message: "Empty patch." });
 export type WeightPatch = z.infer<typeof WeightPatch>;
@@ -297,6 +312,10 @@ export async function updateEntry(db: Queryable, userId: string, kind: Kind, id:
 		kind === "meals"
 			? ["description", "kcal", "logged_at", ...MACRO_COLUMNS]
 			: ["description", "kcal", "logged_at", ...ACTIVITY_PATCH_COLUMNS];
+	// Read before writing only when there is a correction to file: this is the DayLog's
+	// "tap → make a change" and not the hot path (migration 0015).
+	const said = patch.correction_instruction;
+	const before = said ? await getEntry(db, userId, kind, id) : null;
 	const sets: string[] = [];
 	const params: unknown[] = [userId, id];
 	for (const [key, value] of Object.entries(patch)) {
@@ -325,7 +344,23 @@ export async function updateEntry(db: Queryable, userId: string, kind: Kind, id:
 		`UPDATE ${KINDS[kind]} SET ${sets.join(", ")} WHERE user_id = $1 AND id = $2 RETURNING *`,
 		params
 	);
-	return rows[0] ?? null;
+	const after = rows[0] ?? null;
+	// The told change, kept beside the row it changed. Written after the update and only
+	// for what actually moved — a correction that changed nothing is not history.
+	if (said && before && after) {
+		await recordCorrection(
+			db,
+			userId,
+			kind === "meals" ? { mealId: id } : { activityId: id },
+			said,
+			diffFields(
+				before as Record<string, unknown>,
+				after as Record<string, unknown>,
+				kind === "meals" ? CORRECTABLE_FIELDS.meal : CORRECTABLE_FIELDS.activity
+			)
+		);
+	}
+	return after;
 }
 
 export async function deleteEntry(db: Queryable, userId: string, kind: Kind, id: string): Promise<boolean> {
@@ -368,6 +403,8 @@ export async function insertWeights(db: Queryable, userId: string, weights: NewW
 export async function updateWeight(db: Queryable, userId: string, id: string, patch: WeightPatch) {
 	const sets: string[] = [];
 	const params: unknown[] = [userId, id];
+	const said = patch.correction_instruction;
+	const before = said ? await getWeight(db, userId, id) : null;
 	for (const [key, value] of Object.entries(patch)) {
 		if (key !== "weight_lb" && key !== "logged_at") continue;
 		params.push(value);
@@ -378,7 +415,17 @@ export async function updateWeight(db: Queryable, userId: string, id: string, pa
 		`UPDATE weight_logs SET ${sets.join(", ")} WHERE user_id = $1 AND id = $2 RETURNING *`,
 		params
 	);
-	return rows[0] ?? null;
+	const after = rows[0] ?? null;
+	if (said && before && after) {
+		await recordCorrection(
+			db,
+			userId,
+			{ weightId: id },
+			said,
+			diffFields(before as Record<string, unknown>, after as Record<string, unknown>, CORRECTABLE_FIELDS.weight)
+		);
+	}
+	return after;
 }
 
 export async function deleteWeight(db: Queryable, userId: string, id: string): Promise<boolean> {

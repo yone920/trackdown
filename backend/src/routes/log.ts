@@ -67,6 +67,9 @@ function toFusionResult(item: ParsedItem): FusionResult | null {
 				items: [],
 				confidence: item.confidence,
 				sources: null,
+				// The v1 parser reads a typed line, never macros off a label: the
+				// arithmetic gate has nothing to have said about it.
+				consistency: null,
 			};
 		case "weight":
 			// v1 allowed a weight item with no number; there is nothing to save in that.
@@ -120,6 +123,7 @@ export function logRouter(pool: pg.Pool, parser: LogParser): Router {
 					results: [result],
 					evidence_ids: [],
 					evidence_parts: [],
+					corrections: [],
 					// The typed line is the provenance for the whole log, so it is kept
 					// once and hung off the first thing it produced.
 					...(keptText ? {} : { text }),

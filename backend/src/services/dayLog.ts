@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { correctionsByRecord, type RecordCorrection } from "./corrections.js";
 import { boundsOf, type IsoDate } from "./localTime.js";
 
 // "The log, as recorded" (docs/design-system.md §DayLog; concept-v2 §The two day views:
@@ -81,6 +82,13 @@ export interface DayLogEntry {
 	understood: string;
 	/** False when there is no endpoint that can correct it — a statement. */
 	editable: boolean;
+	/**
+	 * Every told change this record has been through, oldest first (migration 0015). The
+	 * record view appends them to its provenance list, under the words that logged it, so a
+	 * number nobody recognises can say when it changed and what it used to be. Empty for a
+	 * record nobody has corrected, which is most of them.
+	 */
+	corrections: RecordCorrection[];
 	record: DayLogRecord;
 }
 
@@ -252,6 +260,13 @@ export async function dayLog(db: Queryable, { userId, date, tzOffsetMin }: DayLo
 		[...window, ...ownerIds]
 	);
 
+	// One query for the day's whole correction history, keyed by the record it is about.
+	const corrections = await correctionsByRecord(db, userId, {
+		activityIds: activities.rows.map((row) => row.id),
+		mealIds: meals.rows.map((row) => row.id),
+		weightIds: weights.rows.map((row) => row.id),
+	});
+
 	const byOwner = new Map<string, DayLogEvidence[]>();
 	const orphans: EvidenceRow[] = [];
 	for (const row of evidence.rows) {
@@ -295,6 +310,7 @@ export async function dayLog(db: Queryable, { userId, date, tzOffsetMin }: DayLo
 			confidence: row.confidence,
 			understood: activityUnderstood(record),
 			editable: true,
+			corrections: corrections.get(row.id) ?? [],
 			record,
 		});
 	}
@@ -322,6 +338,7 @@ export async function dayLog(db: Queryable, { userId, date, tzOffsetMin }: DayLo
 			confidence: null,
 			understood: mealUnderstood(record),
 			editable: true,
+			corrections: corrections.get(row.id) ?? [],
 			record,
 		});
 	}
@@ -339,6 +356,7 @@ export async function dayLog(db: Queryable, { userId, date, tzOffsetMin }: DayLo
 			confidence: null,
 			understood: `Weighed ${round1(row.weight_lb)} lb`,
 			editable: true,
+			corrections: corrections.get(row.id) ?? [],
 			record: { kind: "weight", weight_lb: row.weight_lb },
 		});
 	}
@@ -356,6 +374,9 @@ export async function dayLog(db: Queryable, { userId, date, tzOffsetMin }: DayLo
 			confidence: null,
 			understood: `Goal · ${row.title}`,
 			editable: true,
+			// A goal is corrected on the Goals screen, not here, and 0015 keeps no history
+			// for one: the spec IS the record and it is edited in place.
+			corrections: [],
 			record: { kind: "goal", title: row.title, goal_kind: row.kind, metrics: row.metrics ?? [] },
 		});
 	}
@@ -376,6 +397,7 @@ export async function dayLog(db: Queryable, { userId, date, tzOffsetMin }: DayLo
 			// Nothing to PATCH: a constraint lives in an array on the profile and a coach
 			// context is gone tomorrow. The Goals screen edits the plan.
 			editable: false,
+			corrections: [],
 			record: { kind: "statement", text },
 		});
 	}
