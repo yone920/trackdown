@@ -55,3 +55,4 @@ supabase/.temp/
 # Evidence photos written by the local EvidenceStore in dev (EVIDENCE_DIR)
 backend/uploads/
 uploads/
+.metro.log
