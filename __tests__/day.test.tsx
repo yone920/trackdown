@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
 import Day from '@/app/day/[date]';
@@ -199,5 +199,23 @@ describe('Day', () => {
     expect(screen.getByText('181.9')).toBeTruthy();
     expect(screen.getByTestId('open-day-log')).toBeTruthy();
     expect(screen.getByTestId('export-day')).toBeTruthy();
+  });
+
+  it('deletes a lift and a meal from a closed day, asking in the row first', async () => {
+    renderDay();
+    await waitFor(() => expect(screen.getByText('Bench Press')).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId('row-activity-a1-delete'));
+    expect(screen.getByText('Delete?')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('row-activity-a1-delete-yes'));
+    await waitFor(() =>
+      expect(mockApi).toHaveBeenCalledWith('/api/entries/movement/a1', { method: 'DELETE' }),
+    );
+
+    fireEvent.press(screen.getByTestId('row-meal-m1-delete'));
+    fireEvent.press(screen.getByTestId('row-meal-m1-delete-yes'));
+    await waitFor(() =>
+      expect(mockApi).toHaveBeenCalledWith('/api/entries/meals/m1', { method: 'DELETE' }),
+    );
   });
 });

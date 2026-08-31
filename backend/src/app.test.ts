@@ -1229,6 +1229,43 @@ describe("day — the live day", () => {
 		expect((await request(app).get(`/api/day/today?tz=999`).set(headers)).status).toBe(400);
 		expect((await request(app).get(`/api/day/today?tz=${tz}`)).status).toBe(401);
 	});
+
+	// Deleting a row is the one write that has to move *everything* — the endpoint was
+	// already covered, what was not is that the computed day agrees with it afterwards.
+	it("recomputes the day when a logged row is deleted, and takes its evidence with it", async () => {
+		const before = (await request(app).get(`/api/day/today?tz=${tz}`).set(headers)).body;
+		expect(before.earned).toBe(310);
+		const row = before.items.activities.find((a: { exercise: string }) => a.exercise === "Dumbbell Row");
+		const muscle = row.muscle_groups[0] as string;
+		const setsBefore = before.muscle_summary.find((m: { muscle: string }) => m.muscle === muscle).sets;
+
+		// A photo hanging off the row, so the cascade is exercised rather than assumed
+		// (0004_v2.sql: evidence.activity_id REFERENCES activities(id) ON DELETE CASCADE).
+		const evidenceId = randomUUID();
+		await db.pool.query(
+			`INSERT INTO evidence (id, user_id, activity_id, kind, storage_key)
+			 VALUES ($1::uuid, (SELECT user_id FROM activities WHERE id = $2::uuid), $2::uuid, 'photo', $3)`,
+			[evidenceId, row.id, `deleted-row-${evidenceId}`]
+		);
+
+		expect((await request(app).delete(`/api/entries/movement/${row.id}`).set(headers)).status).toBe(204);
+
+		const after = (await request(app).get(`/api/day/today?tz=${tz}`).set(headers)).body;
+		expect(after.earned).toBe(310 - row.kcal);
+		expect(after.items.activities).toHaveLength(before.items.activities.length - 1);
+		expect(after.blocks[0].exercise_count).toBe(before.blocks[0].exercise_count - 1);
+		expect(after.blocks[0].kcal).toBe(after.earned);
+		// The allowance is target + half of what is left, so the ring moves with it.
+		expect(after.allowance).toBe(after.target + Math.round(after.earned / 2));
+		const setsAfter = after.muscle_summary.find((m: { muscle: string }) => m.muscle === muscle)?.sets ?? 0;
+		expect(setsAfter).toBe(setsBefore - row.sets);
+		// The day changed, so the Right-now reading is not the one that was cached.
+		expect(after.reading.inputs_hash).not.toBe(before.reading.inputs_hash);
+
+		expect((await db.pool.query(`SELECT 1 FROM evidence WHERE id = $1`, [evidenceId])).rowCount).toBe(0);
+		// A retry of the same delete is a 404, not a second success.
+		expect((await request(app).delete(`/api/entries/movement/${row.id}`).set(headers)).status).toBe(404);
+	});
 });
 
 describe("day — Health overlap over real rows", () => {

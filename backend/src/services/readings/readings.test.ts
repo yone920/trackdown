@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildDaySheet, buildInShortPrompt, buildRightNowPrompt } from "./prompt.js";
 import { dayInputsHash } from "./readings.js";
 import { InShortSchema, RightNowSchema } from "./schema.js";
-import type { DayView } from "../day.js";
+import { dayViewFixture as view } from "../../test/fixtures/dayView.js";
 
 // The readings, without a provider and without a database: the two schemas, the sheet the
 // model is given, and the cache key. The generation itself is covered end to end in
@@ -53,123 +53,6 @@ describe("the reading schemas", () => {
 	});
 });
 
-/** A day with one gym block, two meals and a weigh-in — enough for the sheet to be real. */
-function view(overrides: Partial<DayView> = {}): DayView {
-	const base: DayView = {
-		date: "2026-08-29",
-		tz_offset_min: 0,
-		is_today: true,
-		closed_at: null,
-		day_number: 12,
-		items: {
-			meals: [
-				{
-					id: "m1",
-					logged_at: "2026-08-29T07:30:00.000Z",
-					description: "eggs and toast",
-					slot: "breakfast",
-					stated_slot: null,
-					kcal: 480,
-					protein_g: 32,
-					carbs_g: 40,
-					fat_g: 20,
-					fiber_g: 4,
-					evidence: [],
-				},
-			],
-			activities: [
-				{
-					id: "a1",
-					logged_at: "2026-08-29T17:10:00.000Z",
-					description: "3 × 8 bench at 135 lb",
-					exercise: "Bench Press",
-					exercise_id: null,
-					equipment: null,
-					category: "strength",
-					muscle_groups: ["chest"],
-					sets: 3,
-					reps: 8,
-					load_lb: 135,
-					duration_min: null,
-					distance_mi: null,
-					kcal: 120,
-					source: "manual",
-					confidence: "high",
-					block_id: "block-a1",
-					delta_vs_last: {
-						text: "+5 lb",
-						direction: "up",
-						field: "load_lb",
-						load_lb: 5,
-						sets: 0,
-						reps: 0,
-						previous: { logged_at: "2026-08-22T17:00:00.000Z", load_lb: 130, sets: 3, reps: 8 },
-					},
-					evidence: [],
-				},
-			],
-			weights: [{ id: "w1", logged_at: "2026-08-29T06:40:00.000Z", weight_lb: 182.4, source: "manual" }],
-		},
-		blocks: [
-			{
-				id: "block-a1",
-				title: "Chest",
-				start: "2026-08-29T17:10:00.000Z",
-				end: "2026-08-29T17:55:00.000Z",
-				minutes: 45,
-				kcal: 120,
-				kcal_from_health: false,
-				kcal_estimated: false,
-				exercise_count: 1,
-				activity_ids: ["a1"],
-				muscle_groups: ["chest"],
-				category: "strength",
-				health: null,
-			},
-		],
-		eaten: 480,
-		earned: 120,
-		target: 2260,
-		allowance: 2320,
-		remaining: 1840,
-		eatback: "half",
-		tdee: 2828,
-		balance: 2468,
-		status: "on_track",
-		over_by: null,
-		macros: {
-			protein_g: { eaten: 32, target: 159, note: "under" },
-			carbs_g: { eaten: 40, target: 265, note: "on target" },
-			fat_g: { eaten: 20, target: 63, note: "under" },
-			fiber_g: { eaten: 4, target: 32, note: "under" },
-		},
-		weight: { day: 182.4, avg_7d: 183.1, trend_per_week: -0.7 },
-		muscle_groups: ["chest"],
-		muscle_summary: [{ muscle: "chest", sets: 3, exercises: ["Bench Press"] }],
-		health: { active_energy: null, steps: null },
-		eating_pattern: "One meal, at 7:30 am — all 480 kcal of the day.",
-		arc: [],
-		expected: [{ kind: "meal", slot: "dinner", label: "Dinner", at_minutes: 1140 }],
-		verdict: "served",
-		verdict_words: "Served your goal",
-		verdict_why: "Ate inside the allowance (+2,468 kcal).",
-		goal: {
-			id: "g1",
-			kind: "lose_fat",
-			title: "Down to 170 lb",
-			metrics: [],
-			priority: 1,
-			status: "active",
-			active_from: "2026-08-01",
-			active_to: null,
-		},
-		goal_involves_calories: true,
-		summary_line: "Chest · 480 kcal in 1 meal · 120 earned · 182.4 lb",
-		facts: { date: "2026-08-29", tdee: 2828, meals: [], activities: [], weights: [], healthSamples: [] },
-	};
-	return { ...base, ...overrides };
-}
-
 describe("the day sheet the model is given", () => {
 	it("carries the computed day and nothing raw", () => {
 		const sheet = buildDaySheet(view());
@@ -181,10 +64,17 @@ describe("the day sheet the model is given", () => {
 		expect(sheet).toContain("vs last time: +5 lb");
 		expect(sheet).toContain("protein: 32 g of 159 g (under)");
 		expect(sheet).toContain("7-day average: 183.1 lb");
-		expect(sheet).toContain("EXPECTED BUT NOT LOGGED\nDinner (meal)");
 		// No database ids anywhere: the model is given facts, not rows.
 		expect(sheet).not.toContain("block-a1");
 		expect(sheet).not.toContain("m1");
+	});
+
+	it("names the empty slots as open, not as something owed", () => {
+		const sheet = buildDaySheet(view());
+		expect(sheet).toContain("Dinner (meal)");
+		expect(sheet).toContain("not something the user owes");
+		// The old heading is the framing this app dropped (user decision 2026-08-31).
+		expect(sheet).not.toContain("EXPECTED BUT NOT LOGGED");
 	});
 
 	it("says a Health workout measured the same minutes rather than adding one", () => {
@@ -215,7 +105,27 @@ describe("the day sheet the model is given", () => {
 		expect(closed).toContain("(closed)");
 		expect(closed).toContain("past tense");
 		expect(closed).toContain("This is a record, not a nudge.");
-		expect(closed).not.toContain("EXPECTED BUT NOT LOGGED");
+		expect(closed).not.toContain("OPEN SLOTS");
+	});
+
+	it("forbids obligation phrasing in both prompts and still allows the arithmetic", () => {
+		for (const prompt of [buildRightNowPrompt(view(), "6:40 pm"), buildInShortPrompt(view())]) {
+			expect(prompt).toContain("NOTHING IS OWED");
+			// The three phrasings the field report named, quoted as things not to write.
+			expect(prompt).toContain('Never write that a meal is "due" or "expected"');
+			expect(prompt).toContain('"still needs to"');
+			expect(prompt).toContain('"missing"');
+			// And the closer that is still welcome, because it is arithmetic.
+			expect(prompt).toContain("would close today's targets");
+		}
+	});
+
+	it("makes the next-action chip a shortcut rather than a reminder", () => {
+		const prompt = buildRightNowPrompt(view(), "6:40 pm");
+		expect(prompt).toContain("a shortcut to a screen, not a reminder");
+		expect(prompt).toContain("The chip's label is a place, not an order");
+		// The instruction that used to point the model at "what the day is waiting for".
+		expect(prompt).not.toContain("what the day is actually waiting for");
 	});
 
 	it("tells the live prompt what time it is for the user", () => {
@@ -238,7 +148,7 @@ describe("the inputs hash", () => {
 		expect(after).not.toBe(before);
 	});
 
-	it("changes when the day stops expecting something", () => {
+	it("changes when a slot stops being empty", () => {
 		expect(dayInputsHash(view({ expected: [] }))).not.toBe(dayInputsHash(view()));
 	});
 });

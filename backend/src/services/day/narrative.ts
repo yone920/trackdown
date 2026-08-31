@@ -1,4 +1,4 @@
-import { formatClock, instantAt, localMinutesOf, type IsoDate } from "../localTime.js";
+import { formatClock, localMinutesOf } from "../localTime.js";
 import type { Block, DayActivity, DayMeal, DayWeight, MealSlot } from "./types.js";
 
 // The parts of the day that are *sentences* but not opinions: which slot a meal belongs
@@ -16,13 +16,6 @@ const SLOT_WINDOWS: { slot: MealSlot; from: number; to: number; label: string }[
 	{ slot: "lunch", from: 11 * 60, to: 15 * 60, label: "Lunch" },
 	{ slot: "dinner", from: 17 * 60, to: 21 * 60 + 30, label: "Dinner" },
 ];
-
-/** When the app expects a meal, for the dashed placeholder on the arc. */
-const SLOT_EXPECTED_AT: Record<Exclude<MealSlot, "snack">, number> = {
-	breakfast: 8 * 60,
-	lunch: 12 * 60 + 30,
-	dinner: 19 * 60,
-};
 
 export function slotForMinutes(minutes: number): MealSlot {
 	return SLOT_WINDOWS.find((w) => minutes >= w.from && minutes < w.to)?.slot ?? "snack";
@@ -91,7 +84,7 @@ export function eatingPattern(meals: DayMeal[], tzOffsetMin: number): string | n
 // The day arc
 // ---------------------------------------------------------------------------
 
-export type ArcKind = "meal" | "activity" | "weight" | "block" | "now" | "expected";
+export type ArcKind = "meal" | "activity" | "weight" | "block" | "now";
 
 export interface ArcEvent {
 	kind: ArcKind;
@@ -107,28 +100,23 @@ export interface ArcEvent {
 }
 
 export interface ArcInput {
-	date: IsoDate;
 	tzOffsetMin: number;
 	meals: DayMeal[];
 	activities: DayActivity[];
 	weights: DayWeight[];
 	blocks: Block[];
-	expected: ExpectedItem[];
 	/** The live day's NOW marker; omitted for a closed day, which is not happening any more. */
 	now?: string | null;
 }
 
-/** Everything that happened, in one ordered list the arc and the "day arc" section draw. */
-export function buildArc({
-	date,
-	tzOffsetMin,
-	meals,
-	activities,
-	weights,
-	blocks,
-	expected,
-	now,
-}: ArcInput): ArcEvent[] {
+/**
+ * Everything that happened, in one ordered list the arc draws.
+ *
+ * *Everything that happened* — the arc used to also carry an `expected` event per unlogged
+ * slot, which the app drew as a dashed ghost dot. It carries none now: a day with one meal
+ * in it has one dot on its line (user decision 2026-08-31).
+ */
+export function buildArc({ tzOffsetMin, meals, activities, weights, blocks, now }: ArcInput): ArcEvent[] {
 	const events: ArcEvent[] = [];
 	const at = (instant: string) => localMinutesOf(instant, tzOffsetMin);
 
@@ -163,24 +151,28 @@ export function buildArc({
 			instant: weight.logged_at,
 		});
 	}
-	for (const item of expected) {
-		events.push({ kind: "expected", label: item.label, at: item.at_minutes, instant: instantAt(date, tzOffsetMin, item.at_minutes) });
-	}
 	if (now) events.push({ kind: "now", label: "Now", at: at(now), instant: now });
 
 	return events.sort((a, b) => a.at - b.at);
 }
 
 // ---------------------------------------------------------------------------
-// What the day is still expecting
+// What the day has not had — a fact for the reading, never a row on a screen
 // ---------------------------------------------------------------------------
 
+/**
+ * A slot the day has nothing in yet.
+ *
+ * Nothing renders this. It exists because the Right-now reading is written from the
+ * computed day and this is how it knows which meal would close the remaining targets — the
+ * difference between "a ~650 kcal, 45 g-protein dinner would close today's targets" and a
+ * sentence about dinner in general. Everything the *user* sees is what they logged, so
+ * `at_minutes` (where the dashed dot used to sit) is gone with the dot.
+ */
 export interface ExpectedItem {
 	kind: "meal" | "weigh_in";
 	slot?: MealSlot;
 	label: string;
-	/** Where the dashed dot sits on the arc, in local minutes. */
-	at_minutes: number;
 }
 
 export interface ExpectedInput {
@@ -192,9 +184,9 @@ export interface ExpectedInput {
 }
 
 /**
- * The dashed dots: the next meal the clock says is due, and a weigh-in if the day has had
- * none. Only ever one meal — a list of everything not yet eaten reads as a scolding, and
- * the Today screen has room for one placeholder row.
+ * The open slots: the next meal window that is still open and empty, and a weigh-in if the
+ * day has had none. Only ever one meal — a list of everything not yet eaten reads as a
+ * scolding even to a model.
  */
 export function expectedItems({ tzOffsetMin, meals, weights, now }: ExpectedInput): ExpectedItem[] {
 	if (!now) return [];
@@ -202,23 +194,11 @@ export function expectedItems({ tzOffsetMin, meals, weights, now }: ExpectedInpu
 	const logged = new Set(meals.map((meal) => meal.slot));
 	const items: ExpectedItem[] = [];
 
-	// The next slot that has not closed yet and has nothing in it. A missed breakfast at
-	// 3 pm is not "expected" any more; lunch is.
+	// The next slot that has not closed yet and has nothing in it. A breakfast nobody ate
+	// is not an open slot at 3 pm; lunch is.
 	const next = SLOT_WINDOWS.find((window) => minutes < window.to && !logged.has(window.slot));
-	if (next) {
-		items.push({
-			kind: "meal",
-			slot: next.slot,
-			label: next.label,
-			at_minutes: Math.max(SLOT_EXPECTED_AT[next.slot as Exclude<MealSlot, "snack">], minutes),
-		});
-	}
-
-	if (weights.length === 0) {
-		// Weigh-ins are a morning thing; once the morning is gone the dot sits at now, so
-		// it stays visible rather than falling off the left of the arc.
-		items.push({ kind: "weigh_in", label: "Weigh-in", at_minutes: Math.max(7 * 60, Math.min(minutes, 22 * 60)) });
-	}
+	if (next) items.push({ kind: "meal", slot: next.slot, label: next.label });
+	if (weights.length === 0) items.push({ kind: "weigh_in", label: "Weigh-in" });
 
 	return items;
 }

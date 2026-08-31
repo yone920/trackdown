@@ -87,6 +87,107 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-08-31 — a log you can take back, and a day that stops asking for dinner (`field-fixes-delete-no-expectations`)
+
+Two changes with one idea under them, which is now **concept-v2 §Principles 8**: the app is a
+record of what happened. It can be corrected, and it never shows what was supposed to happen.
+
+#### A — delete, in two taps, wherever the row is
+
+Everything logged could be *corrected* and nothing could be *removed*. The endpoints had been
+there since WP1 (`DELETE /api/entries/:kind/:id`, `DELETE /api/weight/:id`); no screen called
+them, so a meal logged twice stayed logged twice and moved the ring, the week and the coach's
+picture of the day for ever.
+
+- **`DeleteControl` (`components/kit.tsx`)** is the whole affordance: a `dim` stroke ✕ drawn
+  at 28 px with `hitSlop={8}` — 44 px of target without changing the row's height. One tap
+  arms it and the row grows **"Delete? ✓ ✕"** in place; the second tap deletes. No Alert (a
+  modal for a row is fussier than the row), no swipe gesture (undiscoverable, and the row
+  already has a tap), **no new dependency**. `Row` takes `onDelete` and draws it; the DayLog's
+  hand-rolled row imports the same component.
+- **Where it is:** Today's Training rows (in a block and standalone) and Eating rows, the Day
+  screen's activity and meal rows, and every activity / meal / **weigh-in** in "the log, as
+  recorded". A `goal` is dropped from the Goals screen and a `statement` lives on the plan —
+  neither is a row with a DELETE behind it, so neither gets a ✕.
+- **`useDeleteRecord` (`lib/queries.ts`)** invalidates through the same `invalidateAfterLog`
+  list a confirm uses — day, week, days, goals, profile, coach — so `earned`, the sets per
+  muscle group, the status line, the allowance and the **Right-now reading** all recompute on
+  the next read. The reading regenerates because the day's inputs hash changed, not because
+  anything asked it to.
+- **Evidence cascades, verified rather than assumed.** `evidence.activity_id`, `.meal_id` and
+  `.plan_id` are `ON DELETE CASCADE` (`0004_v2.sql`), and `.weight_id` likewise
+  (`0009_day_log.sql`). The new backend test inserts a photo row against the activity and
+  asserts it is gone after the DELETE — the FK is what does it, not application code.
+- Nested-Pressable note: on the DayLog the ✕ sits inside the row's own "tap to correct"
+  Pressable. React Native gives the touch to the innermost responder, and the test pins that
+  arming the ✕ does not open the correction sheet.
+
+#### B — no expectations, anywhere
+
+Today drew a dashed **"Dinner — not logged yet"** row and the arc drew a dashed ghost dot for
+the same thing. Both are a to-do list the user never wrote.
+
+- **Gone from the screens.** The placeholder row and the `Row` `dashed` prop are deleted (that
+  prop had one caller); `DayArc` no longer draws ghost dots and `buildArc` no longer emits
+  them, so `ArcKind` loses `"expected"` and `ArcInput` loses `expected` and `date`.
+- **`expected` stays on `GET /api/day`.** The brief's preferred simplification — stop emitting
+  it — was checked and refused: `services/readings/` uses it, both in `dayInputsHash` (an empty
+  dinner slot changes what the sentence should say) and on the sheet the model is given. So it
+  is computed, sent, and rendered by nothing; the field carries a comment saying so on both the
+  server type and `lib/types.ts`. `ExpectedItem.at_minutes` *is* gone: it was where the dashed
+  dot sat.
+- **The prompt.** `VOICE` gains **NOTHING IS OWED**, with the three phrasings named as things
+  not to write ("due", "expected", "missing", "still needs to") and the two that are welcome
+  quoted beside them, because they are arithmetic: *"a ~650 kcal, 45 g-protein dinner would
+  close today's targets"*. `RIGHT_NOW` no longer tells the model to prefer "what the day is
+  actually waiting for"; the chip is described as **a shortcut to a screen, not a reminder**,
+  and its label as "a place, not an order". The sheet's `EXPECTED BUT NOT LOGGED` heading is
+  now `OPEN SLOTS (nothing logged here yet — a fact about the log, not something the user
+  owes)`.
+- **The action chips stay.** They are how the user gets to the Log sheet in one tap; nothing
+  about them says anything is due.
+
+**Decisions**
+
+- **Inline confirm over `Alert.alert`.** The question is asked where the answer lands, it is
+  testable in jest without mocking a native module, and it costs one `useState`.
+- **A Health-sourced row is deletable too.** It is a row in `activities` like any other, and a
+  walk the watch invented wrongly is exactly the thing someone wants gone. The next Health sync
+  may bring it back — nothing has asked for a tombstone yet, and inventing one for a feature
+  that is not built (Phase C) would be guessing.
+- **The DayView fixture moved** to `src/test/fixtures/dayView.ts`, out of `readings.test.ts`,
+  so the contract test can ask the real model with the **real prompt**. Pinning the wording
+  against a hand-written sheet would have pinned nothing.
+
+**Tests** — 444 passing, 2 skipped in `backend` (was 439/2, with the key set so the contract
+tests run); 105 passing in the app (was 99).
+
+- `src/app.test.ts` (+1): deleting one lift out of a three-lift block — `earned` drops by its
+  calories, the block's `exercise_count` and kcal follow, the allowance is `target + half` of
+  what is left, the muscle's set count drops by that row's sets, the Right-now hash changes,
+  the row's evidence is gone, and a retry of the same delete is a 404.
+- `src/services/readings/readings.test.ts` (+3, one rewritten): the open-slots heading and the
+  absence of the old one, the obligation ban present in **both** prompts with the arithmetic
+  closer still allowed, and the chip described as a shortcut.
+- `anthropic.readings.contract.test.ts` (+1), **run here against the real model, four for
+  four**: the real `buildRightNowPrompt` over the real fixture, with the answer's text, the
+  next action's label and hint and every chip label checked against ten obligation phrasings.
+- `__tests__/today.test.tsx` (+3): the two-tap delete of a lift with the training line going
+  from "264 kcal earned" to "Nothing yet", the same for a meal with the cancel path proving no
+  request goes out, and a day whose `expected` holds a dinner rendering no trace of it.
+- `__tests__/day.test.tsx` (+1) and `__tests__/day-log.test.tsx` (+2): the same two taps on a
+  closed day, on the record view, and no ✕ on a statement.
+
+**Deferred**
+
+- **No undo.** The confirm is the undo; a deleted row is gone. A soft delete would need a
+  column, a filter on every read and a place to un-delete from, and nothing has asked.
+- **No bulk delete**, and no delete on a whole block: a block is presentation, and removing one
+  would mean deciding what happens to the rows inside it.
+- **`ExpectedItem` is still called `expected`** in the API and the code. Renaming it (to
+  `open_slots`, say) is a response-shape change for a field nothing renders; the comments say
+  what it is for and the prompt is where the word mattered.
+
 ### 2026-08-31 — a lifting session worth 0 kcal (`fix-strength-kcal`)
 
 **The report.** Four strength exercises logged between 8:00 and 8:39, no calories on any of

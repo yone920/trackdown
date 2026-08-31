@@ -4,11 +4,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { EvidenceThumbs } from '@/components/evidence';
 import { IconCamera, IconChevronLeft, IconHeart, IconKeyboard, IconMic } from '@/components/icons';
-import { Card } from '@/components/kit';
+import { Card, DeleteControl } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { openExercise } from '@/lib/exercise';
 import { clock, dateLabel } from '@/lib/format';
-import { localDateKey, useDayLog } from '@/lib/queries';
+import { localDateKey, useDayLog, useDeleteRecord, type DeleteKind } from '@/lib/queries';
 import { C, FONT, SPACE, TABULAR } from '@/lib/theme';
 import type { DayLogEntry, DayLogIcon } from '@/lib/types';
 
@@ -31,6 +31,7 @@ export default function DayLog() {
   const date = typeof params.date === 'string' && params.date ? params.date : localDateKey();
 
   const log = useDayLog(date);
+  const remove = useDeleteRecord();
   const entries = log.data?.entries ?? [];
 
   const correct = (entry: DayLogEntry) => {
@@ -59,7 +60,8 @@ export default function DayLog() {
         The log, as recorded
       </Disp>
       <Sub style={{ marginTop: 8, lineHeight: 18 }}>
-        Every entry as it arrived, and what it was understood to be. Tap one to correct it.
+        Every entry as it arrived, and what it was understood to be. Tap one to correct it, or
+        ✕ to delete it.
       </Sub>
 
       {log.isLoading && entries.length === 0 ? (
@@ -76,15 +78,37 @@ export default function DayLog() {
 
       <View style={{ marginTop: 16 }}>
         {entries.map((entry) => (
-          <LogRow key={`${entry.kind}-${entry.id}`} entry={entry} onPress={() => correct(entry)} />
+          <LogRow
+            key={`${entry.kind}-${entry.id}`}
+            entry={entry}
+            onPress={() => correct(entry)}
+            onDelete={
+              // A goal is dropped from the Goals screen and a statement lives on the plan;
+              // neither is a row with a DELETE behind it (lib/queries.ts §DeleteKind).
+              DELETABLE.has(entry.kind)
+                ? () => remove.mutate({ kind: entry.kind as DeleteKind, id: entry.id })
+                : undefined
+            }
+          />
         ))}
       </View>
     </ScrollView>
   );
 }
 
+/** The kinds this screen can take back. The rest are corrections, not rows. */
+const DELETABLE = new Set<string>(['activity', 'meal', 'weight']);
+
 /** time · icon · the words in quotes (or "photo") · source · what it became · confidence. */
-function LogRow({ entry, onPress }: { entry: DayLogEntry; onPress: () => void }) {
+function LogRow({
+  entry,
+  onPress,
+  onDelete,
+}: {
+  entry: DayLogEntry;
+  onPress: () => void;
+  onDelete?: () => void;
+}) {
   const router = useRouter();
   const Icon = ICONS[entry.icon] ?? IconKeyboard;
   // The row's own tap is a correction (the whole point of this screen), so the exercise
@@ -149,6 +173,15 @@ function LogRow({ entry, onPress }: { entry: DayLogEntry; onPress: () => void })
             <Eyebrow style={{ marginTop: 6, fontFamily: FONT.semi }}>Kept on your plan</Eyebrow>
           )}
         </View>
+        {onDelete ? (
+          <View style={{ marginLeft: 8, paddingTop: 2 }}>
+            <DeleteControl
+              label={entry.understood}
+              onDelete={onDelete}
+              testID={`log-delete-${entry.id}`}
+            />
+          </View>
+        ) : null}
       </View>
     </Pressable>
   );

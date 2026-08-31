@@ -40,6 +40,14 @@ becomes tomorrow's log.
    ("reps were 3, not 4"), never typed into a field. There are no editable field grids
    anywhere in the app. The single exception is the sign-in screen (passwords cannot be
    spoken). This is a product law, not a styling preference — user decision 2026-08-31.
+8. **Log reality only — the app never shows what you were supposed to do.** A day with one
+   meal in it shows one meal: no "Dinner — not logged yet" row, no dashed ghost dot on the
+   arc, and no reading that says a meal is *due*, *expected* or *missing*. Anything logged
+   can also be taken back where it is shown — one tap to ask, one to delete — because a
+   record of reality has to be correctable. Arithmetic about what is left is welcome ("a
+   ~650 kcal, 45 g-protein dinner would close today's targets"); an instruction is not, and
+   the Right-now action chips are shortcuts to a screen, never reminders. Also a product
+   law — user decision 2026-08-31.
 
 ## Logging
 
@@ -150,8 +158,9 @@ always showing what it understood before saving.
 - **Today** is live: a header stating where you are (day N, on track), the goal banner and
   goal-driven cards, a **Right now** reading (≤ 2 LLM sentences regenerated on each log: what's
   done, what's short, the one best next action, with action chips), a **day arc** (6a–11p line:
-  logs as dots, workout as a bar, NOW, expected-but-missing as dashed), then Training and Eating
-  organised like the closed day with a placeholder for the next meal.
+  logs as dots, workout as a bar, NOW), then Training and Eating organised like the closed day.
+  Only what was logged is on it — no ghost dot and no placeholder row for a meal nobody has
+  eaten (§Principles 8) — and every logged row carries a ✕ that deletes it in two taps.
 - **Day** (closed) is a reading, not a replay: verdict vs the goal active that day, an **In
   short** paragraph written at day close, training by muscle group with each exercise's load and
   its delta vs last time, eating as macros vs targets + a pattern line + meals by slot, body,

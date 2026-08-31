@@ -82,7 +82,8 @@ export function dayInputsHash(view: DayView): string {
 			item.duration_min,
 			item.delta_vs_last?.text ?? null,
 		]),
-		// What the day is waiting for is part of the reading's point ("dinner is still open").
+		// Which slots are still empty changes what would close the day's numbers, so it
+		// changes the sentence. (It is never *said* as an expectation — see prompt.ts §VOICE.)
 		expected: view.expected.map((item) => [item.kind, item.slot ?? null]),
 	};
 	return createHash("sha256").update(JSON.stringify(material)).digest("hex").slice(0, 32);

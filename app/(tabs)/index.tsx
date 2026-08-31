@@ -13,7 +13,7 @@ import { ReadingCard } from '@/components/reading-card';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { openExercise } from '@/lib/exercise';
 import { clock, dateEyebrow, dateLabel, grams, kcal, slotLabel } from '@/lib/format';
-import { localDateKey, useDay, useGoals, useProfile, useWeek } from '@/lib/queries';
+import { localDateKey, useDay, useDeleteRecord, useGoals, useProfile, useWeek } from '@/lib/queries';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
 import { todayCards } from '@/lib/today-cards';
 import type { ActionKind, DayView, MealSlot } from '@/lib/types';
@@ -45,6 +45,7 @@ export default function Today() {
   const week = useWeek();
   const goals = useGoals();
   const profile = useProfile();
+  const remove = useDeleteRecord();
 
   const refreshing = day.isRefetching || week.isRefetching || goals.isRefetching;
   const onRefresh = useCallback(() => {
@@ -98,7 +99,6 @@ export default function Today() {
     slot,
     meals: view.items.meals.filter((meal) => meal.slot === slot),
   })).filter((group) => group.meals.length > 0);
-  const expectedMeal = view.expected.find((item) => item.kind === 'meal') ?? null;
   const standalone = view.items.activities.filter((activity) => activity.block_id === null);
   // Lifts print no calories, so their block's figure is a MET estimate (concept-v2
   // §Calories). Say so, quietly, wherever that number is shown.
@@ -239,6 +239,7 @@ export default function Today() {
                   {members.map((activity, index) => (
                     <Row
                       key={activity.id ?? `${block.id}-${index}`}
+                      testID={activity.id ? `row-activity-${activity.id}` : undefined}
                       time={clock(activity.logged_at)}
                       title={activity.exercise ?? activity.description}
                       onTitlePress={
@@ -252,6 +253,12 @@ export default function Today() {
                       }
                       sub={activity.exercise ? activity.description : null}
                       right={activity.kcal > 0 ? kcal(activity.kcal) : null}
+                      onDelete={
+                        activity.id
+                          ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
+                          : undefined
+                      }
+                      deleteLabel={activity.exercise ?? activity.description}
                       divider={index < members.length - 1}>
                       {activity.delta_vs_last ? (
                         <Sub style={{ marginTop: 3, color: deltaColor(activity.delta_vs_last.direction) }}>
@@ -270,6 +277,7 @@ export default function Today() {
                 {standalone.map((activity, index) => (
                   <Row
                     key={activity.id ?? `standalone-${index}`}
+                    testID={activity.id ? `row-activity-${activity.id}` : undefined}
                     time={clock(activity.logged_at)}
                     title={activity.exercise ?? activity.description}
                     onTitlePress={
@@ -280,6 +288,12 @@ export default function Today() {
                     }
                     sub={activity.source === 'health' ? 'From Health' : null}
                     right={activity.kcal > 0 ? kcal(activity.kcal) : null}
+                    onDelete={
+                      activity.id
+                        ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
+                        : undefined
+                    }
+                    deleteLabel={activity.exercise ?? activity.description}
                     divider={index < standalone.length - 1}
                   />
                 ))}
@@ -303,10 +317,12 @@ export default function Today() {
               {group.meals.map((meal, index) => (
                 <Row
                   key={meal.id}
+                  testID={`row-meal-${meal.id}`}
                   time={clock(meal.logged_at)}
                   title={meal.description}
                   sub={grams(meal.protein_g) ? `${grams(meal.protein_g)} protein` : null}
                   right={kcal(meal.kcal)}
+                  onDelete={() => remove.mutate({ kind: 'meal', id: meal.id })}
                   divider={index < group.meals.length - 1}>
                   <EvidenceThumbs photos={meal.evidence} />
                 </Row>
@@ -314,23 +330,10 @@ export default function Today() {
             </View>
           ))}
 
-          {/* The dashed placeholder for the meal the clock says is due. */}
-          {expectedMeal ? (
-            <View>
-              <GroupHeading label={slotLabel(expectedMeal.slot ?? 'snack')} right="Expected" />
-              <Row
-                title={expectedMeal.label}
-                sub="Not logged yet"
-                right="—"
-                rightColor={C.dim}
-                dashed
-                divider={false}
-                onPress={() => openLog('meal')}
-              />
-            </View>
-          ) : null}
-
-          {mealsBySlot.length === 0 && !expectedMeal ? (
+          {/* One meal logged is one meal shown. There is no row for a dinner nobody has
+              eaten: the day is a record of what happened, not a list of what is owed
+              (concept-v2 §Principles 6, user decision 2026-08-31). */}
+          {mealsBySlot.length === 0 ? (
             <View style={{ paddingVertical: 14 }}>
               <Sub>Nothing eaten yet today.</Sub>
             </View>

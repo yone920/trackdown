@@ -6,9 +6,13 @@ import { C, FONT } from '@/lib/theme';
 import type { ArcEvent } from '@/lib/types';
 
 // The day arc (docs/design-system.md §Shared components): 6a→11p, `ink` dots for logs,
-// an `accent` bar for the workout span, the `good` NOW marker, and a dashed dot for
-// something the day expected and has not had. Every event on it is computed by the server
-// (backend/src/services/day/narrative.ts) — this draws the list it is given.
+// an `accent` bar for the workout span and the `good` NOW marker. Every event on it is
+// computed by the server (backend/src/services/day/narrative.ts) — this draws the list it
+// is given.
+//
+// It once also drew a dashed ghost dot where a meal was "expected". It does not any more:
+// the arc is a record of the day that happened, and a dot for something nobody ate is a
+// reminder wearing a fact's clothes (user decision 2026-08-31).
 
 const START = 6 * 60;
 const END = 23 * 60;
@@ -35,7 +39,6 @@ export function DayArc({ events }: { events: ArcEvent[] }) {
 
   const blocks = events.filter((e) => e.kind === 'block');
   const now = events.find((e) => e.kind === 'now');
-  const expected = events.filter((e) => e.kind === 'expected');
   const dots = events.filter((e) => e.kind === 'meal' || e.kind === 'activity' || e.kind === 'weight');
 
   return (
@@ -70,19 +73,6 @@ export function DayArc({ events }: { events: ArcEvent[] }) {
 
           {dots.map((event, i) => (
             <Circle key={`dot-${i}`} cx={x(event.at)} cy={BASELINE} r={3.5} fill={C.ink} />
-          ))}
-
-          {expected.map((event, i) => (
-            <Circle
-              key={`exp-${i}`}
-              cx={x(event.at)}
-              cy={BASELINE}
-              r={4}
-              fill={C.bg}
-              stroke={C.dim}
-              strokeWidth={1.5}
-              strokeDasharray="2 2"
-            />
           ))}
 
           {now ? (

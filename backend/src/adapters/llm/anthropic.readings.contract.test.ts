@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { config } from "../../config/index.js";
+import { buildRightNowPrompt } from "../../services/readings/prompt.js";
 import {
 	IN_SHORT_SCHEMA_NAME,
 	InShortSchema,
 	RIGHT_NOW_SCHEMA_NAME,
 	RightNowSchema,
 } from "../../services/readings/schema.js";
+import { dayViewFixture } from "../../test/fixtures/dayView.js";
 import { createAnthropicLlm } from "./anthropic.js";
 
 // The WP3 half of WP2's lesson: a structured-output schema is compiled into a decoding
@@ -46,7 +48,7 @@ EATING
 7:30 am breakfast: eggs and toast — 480 kcal
 12:30 pm lunch: chicken and rice — 700 kcal
 
-EXPECTED BUT NOT LOGGED
+OPEN SLOTS (nothing logged here yet — a fact about the log, not something the user owes)
 Dinner (meal)`;
 
 describe.skipIf(!apiKey)("anthropic day readings (contract)", () => {
@@ -63,9 +65,41 @@ next action. Use only the numbers on the sheet.\n\n${DAY_SHEET}`,
 		// Two sentences is the design constraint, and the reason the card is one paragraph.
 		const sentences = answer.text.split(/[.!?]+\s/).filter((part) => part.trim() !== "");
 		expect(sentences.length).toBeLessThanOrEqual(2);
-		// Dinner is the thing the day is waiting for, so the action should be about eating.
+		// Dinner is the slot with nothing in it, so the action should be about eating.
 		expect(["log_meal", "coach", "workout", "weigh_in"]).toContain(answer.next_action.kind);
 		expect(answer.actions.length).toBeLessThanOrEqual(3);
+	}, 90_000);
+
+	// The VOICE rule that is a product law rather than a style note: the app logs what
+	// happened and never tells the user what they owe (user decision 2026-08-31). A prompt
+	// can say so and a model can still say "dinner is due", so this asks the real one, on
+	// the real prompt — the hand-written sheet above would prove nothing about the wording.
+	it("writes the day with no obligation in it", async () => {
+		const answer = await coach().parseStructured({
+			system: buildRightNowPrompt(dayViewFixture(), "6:40 pm"),
+			schema: RightNowSchema,
+			schemaName: RIGHT_NOW_SCHEMA_NAME,
+			maxTokens: 400,
+			messages: [{ role: "user", content: "Write the Right now reading for the day above." }],
+		});
+
+		const said = `${answer.text} ${answer.next_action.label} ${answer.next_action.hint ?? ""} ${answer.actions
+			.map((action) => action.label)
+			.join(" ")}`.toLowerCase();
+		for (const forbidden of [
+			"is due",
+			"are due",
+			"expected",
+			"still need",
+			"still needs",
+			"you should log",
+			"don't forget",
+			"remember to",
+			"missing",
+			"owe",
+		]) {
+			expect({ forbidden, said }).toMatchObject({ forbidden, said: expect.not.stringContaining(forbidden) });
+		}
 	}, 90_000);
 
 	it("compiles the in_short grammar", async () => {

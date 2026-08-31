@@ -162,7 +162,7 @@ export type Block = {
 };
 
 export type ArcEvent = {
-  kind: 'meal' | 'activity' | 'weight' | 'block' | 'now' | 'expected';
+  kind: 'meal' | 'activity' | 'weight' | 'block' | 'now';
   label: string;
   at: number;
   until?: number;
@@ -170,11 +170,16 @@ export type ArcEvent = {
   kcal?: number;
 };
 
+/**
+ * A slot today has nothing in yet. Nothing renders it — the app shows what was logged and
+ * not what is owed (user decision 2026-08-31). It stays on the response because the
+ * server's Right-now reading is written from it: what the day has not had is how the
+ * reading knows a dinner is what would close the remaining targets.
+ */
 export type ExpectedItem = {
   kind: 'meal' | 'weigh_in';
   slot?: MealSlot;
   label: string;
-  at_minutes: number;
 };
 
 export type MacroLine = {

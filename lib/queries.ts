@@ -308,6 +308,35 @@ export function usePatchRecord() {
   });
 }
 
+/** The three kinds of row a tap can take back. A goal is dropped, not deleted; a
+ * statement lives on the plan and has no row of its own. */
+export type DeleteKind = 'activity' | 'meal' | 'weight';
+
+const DELETE_PATH: Record<DeleteKind, (id: string) => string> = {
+  activity: (id) => `/api/entries/movement/${id}`,
+  meal: (id) => `/api/entries/meals/${id}`,
+  weight: (id) => `/api/weight/${id}`,
+};
+
+/**
+ * DELETE one logged row. Something logged by mistake is undone where it is shown — one
+ * tap to ask, one to do it — and the row's evidence goes with it, cascaded by the
+ * database (migrations 0004_v2.sql `evidence.activity_id/meal_id`, 0009_day_log.sql
+ * `evidence.weight_id`, all ON DELETE CASCADE).
+ *
+ * Everything a delete moves is invalidated on the same list a log uses: earned and eaten,
+ * the sets per muscle group, the day's status, the week, the goal progress and the
+ * Right-now reading, which the server regenerates because the day's inputs hash changed.
+ */
+export function useDeleteRecord() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ kind, id }: { kind: DeleteKind; id: string }) =>
+      api<void>(DELETE_PATH[kind](id), { method: 'DELETE' }),
+    onSuccess: () => invalidateAfterLog(qc),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Goals — the Goals tab's own writes
 // ---------------------------------------------------------------------------

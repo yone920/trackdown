@@ -133,6 +133,12 @@ export interface DayView {
 
 	eating_pattern: string | null;
 	arc: ArcEvent[];
+	/**
+	 * The slots today has nothing in. No screen renders it (user decision 2026-08-31 — the
+	 * app logs reality, not expectations); it is here because the Right-now reading is
+	 * written from the computed day and this is the fact behind "a ~650 kcal dinner would
+	 * close today's targets". See services/day/narrative.ts §ExpectedItem.
+	 */
 	expected: ExpectedItem[];
 
 	verdict: Verdict;
@@ -643,13 +649,11 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 	const overBy = allowance == null ? null : Math.max(0, eaten - allowance);
 	const expected = expectedItems({ tzOffsetMin, meals, weights, now: isToday ? now.toISOString() : null });
 	const arc = buildArc({
-		date,
 		tzOffsetMin,
 		meals,
 		activities: items,
 		weights,
 		blocks,
-		expected,
 		now: isToday ? now.toISOString() : null,
 	});
 
