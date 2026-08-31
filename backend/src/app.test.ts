@@ -3878,3 +3878,117 @@ describe("fusion — revising by telling it", () => {
 		expect(res.body.results[0].proposed_timeline).not.toBeNull();
 	});
 });
+
+describe("the training board", () => {
+	const tz = tzForLocalHour(17);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+
+	async function lift(
+		date: string,
+		clock: string,
+		exercise: string,
+		load: number,
+		sets = 3,
+		reps = 8
+	): Promise<void> {
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({
+				description: `${sets} × ${reps} ${exercise.toLowerCase()} at ${load} lb`,
+				exercise,
+				sets,
+				reps,
+				load_lb: load,
+				kcal: 110,
+				confidence: "high",
+				logged_at: localInstant(date, clock, tz),
+			});
+	}
+
+	beforeAll(async () => {
+		const token = await signUp("board@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		await request(app).patch("/api/profile").set(headers).send({ training_days: 4 });
+
+		// Two clean sessions at 135 — the step is due — and an assisted machine coming down,
+		// which is the case the whole load_direction flag exists for.
+		await lift(addDays(today, -14), "18:05", "Bench Press", 130);
+		await lift(addDays(today, -8), "18:05", "Bench Press", 135);
+		await lift(addDays(today, -1), "18:05", "Bench Press", 135);
+		await lift(addDays(today, -8), "18:25", "Assisted Chin-Up", 60, 3, 10);
+		await lift(addDays(today, -1), "18:25", "Assisted Chin-Up", 55, 3, 10);
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({
+				description: "30 minute run",
+				exercise: "Running",
+				duration_min: 30,
+				distance_mi: 3,
+				kcal: 320,
+				logged_at: localInstant(addDays(today, -2), "07:00", tz),
+			});
+		await request(app)
+			.post("/api/weight")
+			.set(headers)
+			.send({ weight_lb: 212, logged_at: localInstant(addDays(today, -7), "06:40", tz) });
+		await request(app)
+			.post("/api/weight")
+			.set(headers)
+			.send({ weight_lb: 210.4, logged_at: localInstant(today, "06:40", tz) });
+	}, 60_000);
+
+	it("draws a row per lift, with the coach's own next step on it", async () => {
+		const res = await request(app).get(`/api/training/board?tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+		expect(res.body.date).toBe(today);
+
+		const bench = res.body.lifts.find((lift: { exercise: string }) => lift.exercise === "Bench Press");
+		expect(bench).toMatchObject({ load_lb: 135, load_text: "135 lb", sessions: 3, sentiment: "good" });
+		// The catalogue resolved the name, so the row can open the same sheet Today opens.
+		expect(bench.exercise_id).toEqual(expect.any(String));
+		expect(bench.next).toMatchObject({ rule: "step_up", load_lb: 140, text: "Up to 140 lb next" });
+		expect(bench.series.map((point: { load_lb: number }) => point.load_lb)).toEqual([130, 135, 135]);
+
+		// The number on an assisted machine is help, and less of it is the good news.
+		const chin = res.body.lifts.find((lift: { exercise: string }) => lift.exercise === "Assisted Chin-Up");
+		expect(chin).toMatchObject({
+			load_direction: "assistance",
+			load_text: "55 lb of assistance",
+			delta_text: "5 lb less help",
+			sentiment: "good",
+		});
+		expect(chin.next.text).toContain("of assistance");
+	});
+
+	it("counts sessions a week, sets per muscle group, cardio minutes and the weigh-ins", async () => {
+		const res = await request(app).get(`/api/training/board?tz=${tz}`).set(headers);
+		expect(res.body.frequency.weeks).toHaveLength(8);
+		expect(res.body.frequency.weeks.at(-1).sessions).toBe(2);
+		expect(res.body.frequency.training_days_target).toBe(4);
+		expect(res.body.frequency.muscles.map((row: { muscle: string }) => row.muscle)).toContain("chest");
+
+		expect(res.body.cardio.weeks.at(-1).minutes).toBe(30);
+		expect(res.body.cardio.weekly_target_min).toBe(150);
+		expect(res.body.cardio.last).toMatchObject({ pace_min_mi: 10, distance_mi: 3 });
+
+		expect(res.body.body.latest).toBe(210.4);
+		expect(res.body.body.series).toHaveLength(2);
+	});
+
+	it("is quiet, not wrong, for an account with nothing in it", async () => {
+		const token = await signUp("emptyboard@example.com");
+		const res = await request(app).get("/api/training/board?tz=0").set({ Authorization: `Bearer ${token}` });
+		expect(res.status).toBe(200);
+		expect(res.body.lifts).toEqual([]);
+		expect(res.body.frequency.sessions_this_week).toBe(0);
+		expect(res.body.cardio.last).toBeNull();
+		expect(res.body.body.latest).toBeNull();
+	});
+
+	it("needs a session", async () => {
+		expect((await request(app).get("/api/training/board?tz=0")).status).toBe(401);
+	});
+});

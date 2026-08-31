@@ -19,6 +19,7 @@ import { fusionRouter } from "./routes/fusion.js";
 import { goalsRouter } from "./routes/goals.js";
 import { logRouter } from "./routes/log.js";
 import { profileRouter } from "./routes/profile.js";
+import { trainingRouter } from "./routes/training.js";
 import { weightRouter } from "./routes/weight.js";
 import type { FusionAnalyzer } from "./services/fusion/analyze.js";
 import type { DayReadings } from "./services/readings/readings.js";
@@ -109,6 +110,7 @@ export function createApp({
 	app.use(exercisesRouter(pool, exerciseMedia));
 	app.use(dayRouter(pool, readings));
 	app.use(goalsRouter(pool));
+	app.use(trainingRouter(pool));
 	app.use(coachRouter(pool, coach, readings));
 
 	app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {

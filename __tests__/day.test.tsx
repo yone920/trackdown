@@ -266,13 +266,13 @@ describe('Day', () => {
 
     fireEvent.press(screen.getByTestId('row-activity-a1-delete'));
     expect(screen.getByText('Delete?')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('row-activity-a1-delete-yes'));
+    fireEvent.press(screen.getByTestId('row-activity-a1-delete-confirm'));
     await waitFor(() =>
       expect(mockApi).toHaveBeenCalledWith('/api/entries/movement/a1', { method: 'DELETE' }),
     );
 
     fireEvent.press(screen.getByTestId('row-meal-m1-delete'));
-    fireEvent.press(screen.getByTestId('row-meal-m1-delete-yes'));
+    fireEvent.press(screen.getByTestId('row-meal-m1-delete-confirm'));
     await waitFor(() =>
       expect(mockApi).toHaveBeenCalledWith('/api/entries/meals/m1', { method: 'DELETE' }),
     );

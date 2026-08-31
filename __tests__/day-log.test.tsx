@@ -125,7 +125,7 @@ describe('DayLog', () => {
     // Arming the row is not opening it: the correction must not fire under the ✕.
     expect(mockPush).not.toHaveBeenCalled();
 
-    fireEvent.press(screen.getByTestId('log-delete-a1-yes'));
+    fireEvent.press(screen.getByTestId('log-delete-a1-confirm'));
     await waitFor(() =>
       expect(mockApi).toHaveBeenCalledWith('/api/entries/movement/a1', { method: 'DELETE' }),
     );

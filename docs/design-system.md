@@ -24,7 +24,8 @@ display (`disp`). Numerals always `fontVariant: ['tabular-nums']`.
 Scale: eyebrow 11px/600, letterSpacing 1.6, uppercase, `mute`; body 15/500; secondary 12–13
 `mute`; card numeral 40–44 `disp` 700; screen title 26–32 `disp` 700; section title 20 `disp` 600.
 Radii: cards 20, pills 999, thumbnails 10, small tiles 14. Screen padding 24. Card padding 18.
-Tab bar 84 high, 4 tabs: Today · Days · Progress · Goals (icons stroke 1.8, inactive `dim`).
+Tab bar 84 high, 4 items: Today · Days · Progress · **You** (icons stroke 1.8, inactive `dim`).
+You is a stack screen rather than a tab route — the fourth item pushes it, as the avatars do.
 Floating `+` 64px circle, `ink` on `bg`, bottom-right above the tab bar → opens Log.
 No emoji anywhere; icons are stroke SVGs (react-native-svg).
 
@@ -37,8 +38,11 @@ No emoji anywhere; icons are stroke SVGs (react-native-svg).
 - **DayArc**: 6a→11p line; `ink` dots = logs, `accent` bar = workout span, `good` NOW marker,
   hour labels 9px. **No ghost dots** — the arc draws what happened (decision 2026-08-31).
 - **Row**: time (12 `mute`, 50 wide) · title 15/500 + sub 12 `mute` · right numeral `disp` 18;
-  optional trailing ✕ (`dim`, drawn at 28px, 44px hit target) that arms into "Delete? ✓ ✕" in
-  the row itself — `DeleteControl` in `components/kit.tsx`.
+  optional trailing ✕ (`dim`, 44px target) that **morphs** into one wide "Delete?" pill in
+  the same spot — the whole pill is the target, and a tap elsewhere, a scroll or 3 s puts it
+  back. `DeleteControl` in `components/kit.tsx` (redesign 2026-08-31: the old ✓/✕ pair was
+  two small confusable targets). The row's sub-line is **structured facts, never the raw
+  description again** — `lib/row-facts.ts`.
 - **Chips**: pill, 12/700; primary = `ink` bg / `bg` text; secondary = 1px `track` border.
 - **Section**: `disp` 20 title left, 12 `mute` summary right, 26 top padding.
 
@@ -60,12 +64,20 @@ correction (the same `/log` review-and-tell screen the DayLog routes to). Coach 
 Tabs + `+`.
 
 ### Log (modal from `+`, also from chips) — NO FORMS (concept-v2 principle 7)
-Title `disp` 34 "What did you do?"; transcript/typed text area (`disp` 20) with attached photo
-thumbnails; three 76px controls Photo / Speak / Type (Speak is the primary, `ink` filled);
+Title `disp` 34 "What did you do?"; transcript/typed text area (`disp` 20), capped at ~42 %
+of the window so a long log scrolls inside itself, with attached photo thumbnails — each
+carrying a 24px ✕ badge over its corner, which is the ONLY thing that removes it (tapping
+the image opens it full screen); three 76px controls Photo / Speak / Type (Speak is the
+primary, `ink` filled); the **primary action is a pinned bar below the scroller** that rises
+with the keyboard: one 56px `accent` pill ("Log" → "Log it" → "Save changes", the same
+button when disabled and while pending) with the small secondary chips beneath it;
 helper line "Say it, snap it, or type it — any mix. Same for food, weight, goals." Below: the
 **confirm card** for whatever was recognised (exercise / meal / weight / goal / coach context):
-eyebrow "RECOGNIZED · <kind>", confidence chip (`good` high / `mute` medium / `accent` low),
-title, sources line ("machine from photo, load from your voice"), a read-only review of what was understood; corrections are TOLD via the same input ("Make a change" returns to the panel), never edited in fields. Primary button label: **Log** → review page → **Log it** / **Make a change**. In Expo Go, Speak is hidden if the
+eyebrow "RECOGNIZED · <kind>", confidence chip, in words — "High confidence" / "Medium confidence" / "Low confidence —
+check me" (`good` / `mute` / `accent`; only the low one asks for the eye),
+title, sources line ("machine from photo, load from your voice"), a read-only review of what was understood; corrections are TOLD via the same input ("Make a change" returns to the panel), never edited in fields. Primary button label: **Log** → review page → **Log it** / **Make a change**. A record opened
+for correction reads: the as-recorded card first, then the change affordance, then a quieter
+**"How this was recorded"** list — the quote, with the record's photos attached to it. In Expo Go, Speak is hidden if the
 speech port reports unavailable.
 
 ### Days (tab)
@@ -90,16 +102,30 @@ Title `disp` 28 "The log, as recorded"; rows: time · icon (keyboard/mic/camera/
 text in quotes or "photo" italic · meta (source · what was understood · confidence). Tap → correct.
 Export = share sheet with JSON/CSV of the day.
 
-### Progress (tab)
-One section per active goal, rendered from its metrics (weight line with 7-day average and
-target line; lift load trend; weekly cardio bars; sets per muscle group); then Consistency
-(workouts/week, 8 weeks) and Coverage bars. No goal → Consistency + Coverage + weight line if
-logged, no judgement colours.
+### Progress (tab) — goals and training in one place (user decision 2026-08-31)
+Header: eyebrow ("2 active" / "No goal set") · `disp` 30 "Progress" · avatar → You.
+1. **A card per active goal**: title `disp` 26; standing line "212.0 → 210.4 lb now (7-day
+   avg) · 10.4 lb to go · −0.4 lb/wk"; the metric as a `TrendLine` with the target dashed
+   across it and a **dotted projection** from today to where the rate lands; the pace verdict
+   ("Ahead of / On pace for / Behind · <date> at this rate", `good`/`accent`/`mute`); "This
+   week: 5 of 7 served · −0.6 lb"; reached/stalled prompts; Mark reached · Not yet · Adjust
+   it · Drop; priority arrows. Then **Add another goal**. Extra metrics of the same goal
+   render as small widgets inside its card (`goalSections`).
+2. **Lifts** — one row per exercise logged in four weeks, goal or not: name (tappable →
+   exercise sheet), working load ("55 lb of assistance" where that is what it is), sparkline,
+   sentiment-coloured delta, and the **next step** from `prescribeLoads` with an eta
+   ("Hold 135 lb until 3 × 8 twice · ~1–2 wks").
+3. **How often** — sessions a week (8 weeks) + sets per muscle group (4 weeks), and one dim
+   line naming the groups with no sets at all.
+4. **Cardio** — minutes a week against the plan's weekly target, last and best pace.
+5. **Body** — the weight line, only when no weight goal owns it.
+6. Goal history with outcomes, at the bottom.
+Every empty state is one quiet `Sub`; no judgement colours without a goal.
+Data: `GET /api/goals`, `GET /api/goals/:id/progress`, `GET /api/week`, and
+`GET /api/training/board`.
 
-### Goals (tab)
-Active goals as GoalBanner-style cards (progress ring, pace line, "reached?" prompt when the
-measure says so). Empty state: `disp` 26 "No goal yet" + "Training for consistency" + a Speak
-button "Tell me what you're after". Setting a goal = the Log sheet in goal mode: recognised
-card shows kind, metrics, proposed date ("about 20 weeks at a standard pace → Jan 14 · change
-date · no date"); Confirm. History list of past goals with outcome. Below goals: **How you
-train** / **How you eat** / **Constraints** / **Health sync** / **Account** (email, sign out).
+### You (stack, from the avatars and the tab bar's fourth item)
+What was the bottom half of the old Goals tab: **How you train** / **How you eat** (each row
+dated with when it was stated, the daily target with its provenance) / **Constraints** and
+preferences / **Health sync** (disabled, WP7) / **Account** (email, sign out). Read-only —
+NO FORMS; "Tell me" opens the Log sheet.

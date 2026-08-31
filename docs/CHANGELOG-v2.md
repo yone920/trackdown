@@ -87,6 +87,156 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-08-31 — one tab for where you stand, and a board for what you lift (`wp-progress-scoreboard`)
+
+Two tabs answered one question badly. **Goals** said what was being chased and **Progress**
+said where it stood, and neither of them said anything at all about the thing the user
+actually does four times a week: lifting. The user's decision, in one line — *Progress is
+"what am I chasing and where do I stand", and training is first class on it.*
+
+#### A — Goals and Progress are one tab
+
+The tab bar is **Today · Days · Progress · You**. `app/(tabs)/goals.tsx` is deleted;
+`components/tab-bar.tsx` maps the three tab routes and draws **You** as a fourth button that
+pushes a stack screen, because You is one screen deep from two places (the avatar on Today
+and the avatar on Progress) and nothing about it wants a navigation stack of its own.
+
+The new `app/(tabs)/progress.tsx` is, top to bottom:
+
+1. **A card per active goal.** Title big; then one line of standing — *"212.0 → 210.4 lb now
+   (7-day avg) · 10.4 lb to go · −0.4 lb/wk"* — the metric drawn from where it started to
+   where it is, with a **dotted projection** to where this rate lands, the target as a dashed
+   line across it, and a **pace verdict against the date the user named**: *Ahead of / On pace
+   for / Behind · <projected> at this rate*, in `good` or `accent`. Then *"This week: 4 of 7
+   served · −0.4 lb"*, the reached and stalled prompts (still questions — nothing here closes
+   a goal), Mark reached / Not yet / Drop, the priority arrows, and **Add another goal**.
+   Goal history sits at the bottom of the screen with its outcomes.
+2. **The lifts board.** One row per exercise logged in four weeks, goal or no goal: the name
+   (tappable → the exercise sheet), the working load, a sparkline, a sentiment-coloured delta,
+   and the **next step**.
+3. **How often** — sessions a week over eight weeks, and sets per muscle group over four.
+4. **Cardio** — minutes a week against the plan's intent, last and best pace where there is
+   distance.
+5. **Body** — the weight line, and **only when no weight goal already owns it**.
+
+Every no-data state is one quiet line (`Nothing lifted in the last four weeks.`), never a
+chart of zeroes and never a judgement colour.
+
+The pace verdict and the standing line are `lib/progress-sections.ts` `goalCard()` — pure,
+tested without a renderer, like every other calculation in this app. `consistencySection`
+and `coverageSection` are gone: they counted days-with-a-muscle-group out of the Days list,
+and the board carries the real thing (sessions, sets, minutes).
+
+#### B — `GET /api/training/board`, and why it is not a second progression engine
+
+`services/training/board.ts` builds the board from `computeFeatures` and **calls
+`prescribeLoads`** — the same function `buildRules` calls for the brief. The board adds one
+thing a brief does not need: **when**. A hold reads *"Hold 135 lb until 3 × 8 twice · ~1–2
+wks"*, where the weeks are the sessions still to go at that exercise's own median cadence.
+An assisted machine reads *"50 lb of assistance next — one step less help"*, and its delta
+reads *"5 lb less help"* in green (migration 0013's `load_direction`, the same flag the day's
+`sentiment` uses).
+
+The test that matters is at the bottom of `board.test.ts`: six histories, each run through
+`buildRules` and through `buildBoard`, asserting rule, load, sets, reps and `why` are
+identical. Two opinions about the next weight is the failure this design exists to prevent.
+
+`catalogFactsFor` moved out of `services/coach/coach.ts` into `services/coach/catalog.ts`
+unchanged, because the board needs the same equipment and load-direction lookup and two
+copies is how they start disagreeing. The route is a plain read — no model, no cache,
+nothing written — which is why a tab may fetch it on open.
+
+#### C — You
+
+`app/you.tsx` is the old Goals bottom half: how you train / how you eat with each field's
+stated date and the target's provenance, constraints and preferences, the place and its
+machine tally, the disabled Health toggle, the account and sign out. **NO FORMS** — the test
+asserts there is not one `TextInput` on the screen; every row is changed by saying it again
+through the Log sheet.
+
+#### D — The delete control is one control
+
+Reported: the targets were too small and ✓/✕ were confusable. `DeleteControl` no longer arms
+into "Delete? ✓ ✕". At rest it is **one ✕** with 44 pt of target; armed, the same spot becomes
+**one wide pill reading "Delete?"** — the whole pill is the target and there is nothing beside
+it to hit by mistake. Every way out of it is something other than a button next to the
+confirm one: a tap anywhere else, a scroll (`dismissDeletes()` on Today's, Day's and
+Progress's scrollers), another row's ✕, or **three seconds**. A destructive action should be
+easy to abandon and hard to do by accident.
+
+#### E — A row never repeats itself
+
+`lib/row-facts.ts` is new and pure. Today drew the raw description under the title, so a row
+read **"Lat Pulldown"** over **"4 × 15 lat pulldown at 60 lb"**: the name twice, and the
+numbers about to be drawn again. The sub-line is now structured facts — `4 × 15 · 60 lb` —
+with the raw sentence appended **only when it still carries something they do not** (a machine
+with no column, a note: *"last set was ugly"*). The test for "adds nothing" is word
+accounting, the same shape of rule as `exerciseMatch.ts`: every meaningful word of the
+description must be covered by the name, the equipment or a number already shown. Today, Day
+and the board all read it.
+
+#### F — The Log sheet, from five field reports in one morning
+
+- **The primary action was a chip.** "Log" was a `Chip` the same size and shape as "From
+  library" beside it and greyed until there was something to read; the user could not tell
+  what to press. It is `BigButton` now — 56 pt, full width, `accent` with a `bg` display
+  label, the weight of Today's coach button — and it **keeps that shape in every state**:
+  disabled is the same button at 0.45 opacity, pending is the same button with a spinner and
+  "Reading…". Same for the review step's "Log it" / "Save changes".
+- **The action bar is pinned.** It sits below the scroller and rises with the keyboard
+  (`footerLift()`: the keyboard's height on iOS, where `automaticallyAdjustKeyboardInsets`
+  moves the *content* and not a sibling; zero on Android, where the `KeyboardAvoidingView`
+  already shrank the container). Submitting never requires dismissing the keyboard.
+- **The compose box is capped** at `composeMaxHeight()` — 42 % of the window less the top
+  inset — so a long paragraph scrolls inside the input and iOS keeps the caret visible.
+  Applied to the coach's context box too.
+- **A photo is removed by its badge and by nothing else.** Tapping a thumbnail used to delete
+  it with no affordance at all; a user found out by accident. Each pre-save thumbnail now
+  carries a 24 pt ✕ badge over its corner (40 pt of target with the slop) and the image body
+  opens the photo instead. `components/evidence.tsx` grew `LocalThumbs`, a shared `Thumb` and
+  a `Lightbox` — a `Modal`, no new dependency.
+- **The record shows its photos, under the record.** "This is what was saved" quoted the
+  user's words and showed none of the pictures the record was made from. The screen is
+  reordered: the **as-recorded card first**, then the change affordance, then a quieter
+  **"How this was recorded"** section — a vertical list of provenance entries, the quote first
+  with its photos attached to it. Corrections will append as further entries when the server
+  emits them; the shape is already a list so that costs no redesign. `GET /api/day/:date/log`
+  already carried the evidence ids, so no server change was needed.
+- **The confidence chip says what it is about.** A bare "HIGH" beside a meal was read as
+  "high calories". It is *"High confidence"* / *"Medium confidence"* / *"Low confidence —
+  check me"* now, and only the low one is drawn in `accent`.
+
+**Decisions**
+
+- **`prescribeLoads`, not a copy of it.** The board could have re-derived "next weight" from
+  the same features in twenty lines. It would have been right on the day it was written.
+- **No reference loads on the board.** A stated load ("I bench 165") is a claim; the board is
+  what the user has *done*. The brief is the place that is allowed to plan from a claim.
+- **The board's cardio target is the goal's**, when a goal names weekly minutes, else the
+  WHO's 150 — the same number `cardioFeature` uses, so the bars and the brief agree.
+- **"first time" stays on the delta line**, not in the sub-line: the day already computes it
+  with a sentiment and a colour, and printing it twice is the bug this change is about.
+- **You is a button in the tab bar, not a tab.** The bar reads Today · Days · Progress · You
+  as decided; the screen is a stack route, which is what the avatar on Today already pushed.
+
+**Tests** — backend and app both green. New: `services/training/board.test.ts` (24 — the
+rows, the words, the assistance flip both ways, frequency/cardio/body buckets, and the
+six-history agreement with `buildRules`), `src/app.test.ts` (+4: the route end to end over
+real rows including an assisted machine, an empty account, and a 401), `__tests__/progress.test.tsx`
+(15), `__tests__/you.test.tsx` (7, converted from goals.test.tsx), `__tests__/row-facts.test.ts`
+(9), `__tests__/delete-control.test.tsx` (5), plus additions to `log.test.tsx`, `log-correction.test.tsx`,
+`today.test.tsx`, `progress-sections.test.ts` and `confirm-card.test.tsx`. `safe-area.test.tsx`
+now walks You instead of Goals — the convention is still one assertion per screen.
+
+**Deferred**
+
+- **Corrections in the provenance list.** The section is a list on purpose; the server does
+  not yet emit a row's correction history.
+- **The board is four weeks of lifts.** An exercise last done five weeks ago drops off it.
+  The window is `COACH_WINDOW_DAYS` and moving it moves the coach's too.
+- **No per-lift chart beyond the sparkline.** Tapping a name opens the exercise sheet, which
+  is where a full load history belongs if anyone asks for one.
+
 ### 2026-08-31 — a header under the clock, and a target nobody stated (`fix-safearea-target-label`)
 
 **The reports.** Two, from the same screen. The Goals header was photographed with its

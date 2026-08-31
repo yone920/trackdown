@@ -27,6 +27,14 @@ jest.mock('@/lib/api', () => ({
 const mockSpeech = { available: false, requestPermission: jest.fn(), start: jest.fn(), stop: jest.fn() };
 jest.mock('@/lib/ports/speech', () => ({ getSpeech: () => mockSpeech }));
 
+// The camera and the library are the phone's; what this file is about is what the sheet
+// does with what comes back.
+jest.mock('@/lib/photos', () => ({
+  MAX_PHOTOS: 4,
+  takePhoto: async () => [{ uri: 'file:///a.jpg', filename: 'a.jpg', type: 'image/jpeg' }],
+  pickPhotos: async () => [{ uri: 'file:///b.jpg', filename: 'b.jpg', type: 'image/jpeg' }],
+}));
+
 const meal: FusionResult = {
   kind: 'meal',
   description: 'Chicken, rice and broccoli',
@@ -348,5 +356,78 @@ describe('the keyboard inset', () => {
   it('adds the keyboard height on Android, which has no such inset', () => {
     expect(keyboardPadding(336, 'android')).toBe(336);
     expect(keyboardPadding(0, 'android')).toBe(0);
+  });
+});
+
+// The primary action, reported 2026-08-31: it was a `Chip` the same size and shape as
+// "From library" beside it, and greyed out until there was something to read — the user
+// could not tell what to press. It is a button now, at one size, in every state.
+describe('the primary action is the biggest thing on the sheet', () => {
+  it('is a full-size button, disabled but never shrunk, before anything is said', () => {
+    renderSheet();
+    const button = screen.getByTestId('log-submit');
+    expect(button).toHaveTextContent('Log');
+    expect(button.props.accessibilityState).toMatchObject({ disabled: true });
+    // Still the same 56 pt accent button, at reduced opacity.
+    expect(button.props.style).toMatchObject({ height: 56, opacity: 0.45 });
+
+    fireEvent.changeText(screen.getByTestId('log-text'), 'chicken and rice');
+    expect(screen.getByTestId('log-submit').props.accessibilityState).toMatchObject({ disabled: false });
+    expect(screen.getByTestId('log-submit').props.style).toMatchObject({ height: 56, opacity: 1 });
+  });
+
+  it('keeps its shape while the read is running, and says what it is doing', async () => {
+    let resolve: ((value: unknown) => void) | null = null;
+    mockUpload.mockReturnValue(new Promise((r) => { resolve = r; }));
+    renderSheet();
+    fireEvent.changeText(screen.getByTestId('log-text'), 'chicken and rice');
+    fireEvent.press(screen.getByTestId('log-submit'));
+
+    await waitFor(() => expect(screen.getByTestId('log-submit')).toHaveTextContent('Reading…'));
+    expect(screen.getByTestId('log-submit').props.style).toMatchObject({ height: 56 });
+
+    await waitFor(() => expect(resolve).not.toBeNull());
+    resolve!(analyzed([meal]));
+    await waitFor(() => expect(screen.getByTestId('confirm-card')).toBeTruthy());
+  });
+
+  it('lives in a bar pinned below the scroller, so it is reachable with the keyboard up', async () => {
+    mockUpload.mockResolvedValue(analyzed([meal]));
+    renderSheet();
+    expect(screen.getByTestId('log-actions')).toBeTruthy();
+    // "From library" is beside it and stays a small chip.
+    expect(screen.getByText('From library')).toBeTruthy();
+
+    await logIt('chicken, rice and broccoli');
+    // On the review step the same bar carries "Log it".
+    expect(screen.getByTestId('confirm-save')).toHaveTextContent('Log it');
+    expect(screen.getByTestId('confirm-save').props.style).toMatchObject({ height: 56 });
+  });
+
+  it('caps how tall the compose box can grow', () => {
+    renderSheet();
+    const style = screen.getByTestId('log-text').props.style;
+    const flat = Array.isArray(style) ? Object.assign({}, ...style) : style;
+    expect(flat.maxHeight).toBeGreaterThan(0);
+    expect(flat.maxHeight).toBeLessThan(flat.minHeight * 8);
+  });
+});
+
+// Photo thumbnails: tapping the image used to delete it, with no affordance at all.
+describe('an attached photo is removed by its badge and by nothing else', () => {
+  const attach = async () => {
+    renderSheet();
+    fireEvent.press(screen.getByTestId('control-photo'));
+    await waitFor(() => expect(screen.getByTestId('photo-file:///a.jpg')).toBeTruthy());
+  };
+
+  it('draws a ✕ badge on each thumbnail, and only the badge removes', async () => {
+    await attach();
+    // The image itself is not the delete button any more.
+    fireEvent.press(screen.getByTestId('photo-file:///a.jpg'));
+    expect(screen.getByTestId('photo-file:///a.jpg')).toBeTruthy();
+
+    fireEvent.press(screen.getByTestId('photo-file:///a.jpg-remove'));
+    await waitFor(() => expect(screen.queryByTestId('photo-file:///a.jpg')).toBeNull());
   });
 });

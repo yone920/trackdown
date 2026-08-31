@@ -632,3 +632,79 @@ export type ConfirmResponse = {
   evidence: Record<string, unknown>[];
   replayed: boolean;
 };
+
+// ---------------------------------------------------------------------------
+// The training board (GET /api/training/board — backend/src/services/training/board.ts)
+// ---------------------------------------------------------------------------
+
+export type LoadDirection = 'resistance' | 'assistance';
+
+export type BoardPoint = {
+  date: IsoDate;
+  load_lb: number | null;
+  sets: number | null;
+  reps: number | null;
+};
+
+/** The coach's own prescription for this exercise, in a row's worth of words. */
+export type BoardNextStep = {
+  rule: 'new' | 'hold' | 'step_up' | 'step_down' | 'ease_back' | 'restart' | 'cardio' | 'reference';
+  load_lb: number | null;
+  sets: number | null;
+  reps: number | null;
+  text: string;
+  /** "~1–2 wks"; null means the next session. */
+  eta: string | null;
+  why: string;
+};
+
+export type BoardLift = {
+  exercise: string;
+  exercise_id: string | null;
+  category: ActivityCategory | null;
+  muscle_groups: string[];
+  /** On "assistance" the load is the help the machine gives — less of it is progress. */
+  load_direction: LoadDirection;
+  load_lb: number | null;
+  sets: number | null;
+  reps: number | null;
+  load_text: string;
+  last_date: IsoDate;
+  days_since: number;
+  sessions: number;
+  best_load_lb: number | null;
+  trend: 'new' | 'up' | 'flat' | 'down';
+  trend_lb: number | null;
+  delta_text: string | null;
+  /** Colour by this, never by which way the number went (concept-v2 §Progression rules). */
+  sentiment: 'good' | 'watch' | 'neutral';
+  series: BoardPoint[];
+  next: BoardNextStep;
+};
+
+export type TrainingBoard = {
+  date: IsoDate;
+  lifts: BoardLift[];
+  frequency: {
+    weeks: { start: IsoDate; sessions: number }[];
+    sessions_this_week: number;
+    average_per_week: number;
+    training_days_target: number | null;
+    muscles: { muscle: string; sets_7d: number; sets_28d: number }[];
+  };
+  cardio: {
+    weeks: { start: IsoDate; minutes: number }[];
+    minutes_this_week: number;
+    weekly_target_min: number;
+    short_by_min: number;
+    last: { date: IsoDate; pace_min_mi: number; distance_mi: number } | null;
+    best: { date: IsoDate; pace_min_mi: number; distance_mi: number } | null;
+  };
+  body: {
+    latest: number | null;
+    latest_date: IsoDate | null;
+    avg_7d: number | null;
+    trend_per_week: number | null;
+    series: { date: IsoDate; value: number }[];
+  };
+};

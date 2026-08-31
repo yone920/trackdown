@@ -55,3 +55,30 @@ export function keyboardPadding(keyboardHeight: number, platform: string = Platf
   if (keyboardHeight <= 0) return 0;
   return platform === 'ios' ? 0 : keyboardHeight;
 }
+
+/**
+ * The tallest a compose box may grow before it scrolls inside itself.
+ *
+ * A multiline `TextInput` with no cap grows with its text until the caret is under the
+ * keyboard and nothing can bring it back — reported 2026-08-31 by a user who pasted a long
+ * paragraph into the Log sheet. Capped, iOS scrolls the caret into view inside the input
+ * itself, which is what every other compose box on the phone does.
+ *
+ * 42 % of the window, less the top inset: enough for a long log, never so much that the
+ * box and the keyboard together are the whole screen.
+ */
+export function composeMaxHeight(windowHeight: number, topInset = 0): number {
+  return Math.max(120, Math.round(windowHeight * 0.42) - topInset);
+}
+
+/**
+ * How far the pinned action bar has to rise to sit on top of the keyboard.
+ *
+ * On iOS the scroll view's own inset moves the *content*, not a sibling below it, so the
+ * footer is lifted explicitly. On Android the `KeyboardAvoidingView` has already shrunk the
+ * whole container by the keyboard's height and lifting again would double it.
+ */
+export function footerLift(keyboardHeight: number, platform: string = Platform.OS): number {
+  if (keyboardHeight <= 0) return 0;
+  return platform === 'ios' ? keyboardHeight : 0;
+}
