@@ -7,7 +7,9 @@ import {
 	buildGoalDetailSystemPrompt,
 	buildPartDetailSystemPrompt,
 	buildPlanFieldsSystemPrompt,
+	buildRevisionSystemPrompt,
 } from "./prompt.js";
+import { carryForward, compactPart, segmentKindFor } from "./revise.js";
 import {
 	ACTIVITIES_DETAIL_SCHEMA_NAME,
 	ActivitiesDetailOutputSchema,
@@ -76,8 +78,23 @@ export interface FusionAnalysis {
 	photoParts: number[];
 }
 
+export interface ReviseInput {
+	/** The parts the user is looking at — a pending preview, or a saved row read back. */
+	results: FusionResult[];
+	/** What they said to change, in their own words. */
+	instruction: string;
+	context: FusionContext;
+}
+
 export interface FusionAnalyzer {
 	analyze(input: AnalyzeInput): Promise<FusionAnalysis>;
+	/**
+	 * "Make a change" (docs/concept-v2.md §Principles 7). Each part is re-read by its own
+	 * detail call with the part and the instruction in the prompt; a part the instruction
+	 * does not touch comes back as it went in. Same order, same length, so the review
+	 * screen redraws in place.
+	 */
+	revise(input: ReviseInput): Promise<FusionResult[]>;
 }
 
 /** Room for ~20 activity items. */
@@ -213,13 +230,19 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 		return {};
 	}
 
-	/** One segment kind → the public result it stands for, from its own focused call. */
+	/**
+	 * One segment kind → the public result it stands for, from its own focused call.
+	 *
+	 * `system` is a parameter rather than built here because a revision is this same call
+	 * with a different thing to say in front of it (services/fusion/revise.ts): one shape,
+	 * one schema, two questions asked of it.
+	 */
 	async function fillSegment(
 		kind: SegmentKind,
 		context: FusionContext,
-		messages: { role: "user"; content: LlmContent[] }[]
+		messages: { role: "user"; content: LlmContent[] }[],
+		system: string = buildPartDetailSystemPrompt(context, kind)
 	): Promise<{ result: FusionResult; photos: number[] }> {
-		const system = buildPartDetailSystemPrompt(context, kind);
 		const ask = <Output>(schema: Parameters<typeof llm.parseStructured<Output>>[0]["schema"], schemaName: string) =>
 			llm.parseStructured({ system, schema, schemaName, maxTokens: DETAIL_MAX_TOKENS, messages });
 
@@ -299,6 +322,29 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 				// The first part never claims: it is where an unclaimed photo lands anyway.
 				photoParts: photoPartsFrom(parts.slice(1).map((part) => part.photos), photos.length),
 			};
+		},
+
+		async revise({ results, instruction, context }) {
+			const said = instruction.trim();
+			const messages = [
+				{
+					role: "user" as const,
+					content: [{ type: "text" as const, text: `Change to make: ${said}` }],
+				},
+			];
+
+			// All at once, like the segments: telling three cards one thing should cost one
+			// round trip, not three.
+			return Promise.all(
+				results.map(async (previous) => {
+					const kind = segmentKindFor(previous);
+					// A question has nothing in it to revise; it goes back as it came.
+					if (!kind) return previous;
+					const system = buildRevisionSystemPrompt(context, kind, compactPart(previous), said);
+					const { result } = await fillSegment(kind, context, messages, system);
+					return withRefinements(carryForward(previous, result), context);
+				})
+			);
 		},
 	};
 }

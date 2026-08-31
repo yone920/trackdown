@@ -7,11 +7,16 @@ import type { ActivityItem, FusionResult } from '@/lib/types';
 // The confirm card has to render every kind the classifier can return — that is the whole
 // of "confirm, don't trust" (concept-v2 §Principles 3). A kind it cannot draw is a log the
 // user cannot save.
+//
+// And it has to render every one of them READ-ONLY. NO FORMS is a product law (concept-v2
+// §Principles 7, user decision 2026-08-31): a correction is told through the input, never
+// typed into a field, so the one thing that must never come back to this component is a
+// TextInput.
 
 const noop = () => {};
 
 function show(result: FusionResult, onChange: (next: FusionResult) => void = noop) {
-  return render(<ConfirmCard result={result} onChange={onChange} onSave={noop} onAddMore={noop} />);
+  return render(<ConfirmCard result={result} onChange={onChange} />);
 }
 
 const activities: FusionResult = {
@@ -74,32 +79,39 @@ const goal: FusionResult = {
 };
 
 describe('ConfirmCard', () => {
-  it('renders an exercise with its fields and its sources', () => {
+  it('renders an exercise with its numbers as text and its sources', () => {
     show(activities);
     expect(screen.getByText('Recognized · exercise')).toBeTruthy();
     expect(screen.getByText('Shoulder Press')).toBeTruthy();
-    expect(screen.getByDisplayValue('3')).toBeTruthy();
-    expect(screen.getByDisplayValue('40')).toBeTruthy();
+    expect(screen.getByTestId('activity-sets-0')).toHaveTextContent('3');
+    expect(screen.getByTestId('activity-reps-0')).toHaveTextContent('10');
+    expect(screen.getByTestId('activity-load-0')).toHaveTextContent('40');
     expect(screen.getByText(/from the photo/)).toBeTruthy();
     expect(screen.getByText('high')).toBeTruthy();
   });
 
-  it('renders a meal and reports an edit', () => {
-    const onChange = jest.fn();
-    show(meal, onChange);
+  it('leaves out the facts nobody read, rather than drawing a blank field', () => {
+    show(activities);
+    // Minutes and miles are null on a shoulder press: an empty box invites typing into it.
+    expect(screen.queryByText('MINUTES')).toBeNull();
+    expect(screen.queryByText('MILES')).toBeNull();
+  });
+
+  it('renders a meal with its slot and macros', () => {
+    show(meal);
     expect(screen.getByText('Recognized · meal')).toBeTruthy();
-    fireEvent.changeText(screen.getByTestId('meal-kcal'), '700');
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ kind: 'meal', kcal: 700 }));
+    expect(screen.getByTestId('meal-kcal')).toHaveTextContent('620');
+    expect(screen.getByTestId('meal-slot')).toHaveTextContent('Dinner');
   });
 
   it('renders a weigh-in', () => {
     show(weight);
     expect(screen.getByText('Recognized · weight')).toBeTruthy();
-    expect(screen.getByDisplayValue('181.4')).toBeTruthy();
+    expect(screen.getByTestId('weight-lb')).toHaveTextContent('181.4');
   });
 
   it('renders a goal with its proposed timeline and the date choices', () => {
-    show(goal);
+    render(<ConfirmCard result={goal} onDateChoice={noop} />);
     expect(screen.getByText('Recognized · goal')).toBeTruthy();
     expect(screen.getByText(/about 20 weeks/)).toBeTruthy();
     expect(screen.getByText('Use 2027-01-14')).toBeTruthy();
@@ -132,45 +144,25 @@ describe('ConfirmCard', () => {
     ['constraint', 'A constraint'],
     ['preference', 'A preference'],
     ['coach_context', 'Context for the coach'],
-  ] as const)('renders a %s statement', (kind, heading) => {
+  ] as const)('renders a %s statement in the words that were said', (kind, heading) => {
     show({ kind, text: 'Bad left knee', ...(kind === 'coach_context' ? {} : { fields: null }) } as FusionResult);
     expect(screen.getByText(heading)).toBeTruthy();
-    expect(screen.getByDisplayValue('Bad left knee')).toBeTruthy();
+    // Quoted, because they are the user's words and not a value in a box.
+    expect(screen.getByTestId('statement-text')).toHaveTextContent('“Bad left knee”');
   });
 
-  it('shows the question when the classifier could not tell, and offers no Save', () => {
+  it('shows the question when the classifier could not tell', () => {
     show({ kind: 'unclear', question: 'Was that the machine or free weights?' });
     expect(screen.getByText('Recognized · unclear')).toBeTruthy();
     expect(screen.getByText('Was that the machine or free weights?')).toBeTruthy();
-    expect(screen.queryByTestId('confirm-save')).toBeNull();
   });
 
-  it('saves and adds more through the two buttons', () => {
-    const onSave = jest.fn();
-    const onAddMore = jest.fn();
-    render(<ConfirmCard result={weight} onChange={noop} onSave={onSave} onAddMore={onAddMore} />);
-    fireEvent.press(screen.getByTestId('confirm-save'));
-    fireEvent.press(screen.getByTestId('confirm-add-more'));
-    expect(onSave).toHaveBeenCalled();
-    expect(onAddMore).toHaveBeenCalled();
-  });
-
-  // One card is one part of a log. In a stack the Log sheet draws the single Save below
-  // them, and each card carries its own ✕ instead.
-  it('hides its own buttons when the sheet is drawing one Save for a stack', () => {
-    render(<ConfirmCard result={weight} onChange={noop} onSave={noop} onAddMore={noop} showActions={false} />);
-    expect(screen.queryByTestId('confirm-save')).toBeNull();
-    expect(screen.queryByTestId('confirm-add-more')).toBeNull();
-  });
-
-  it('offers an ✕ only when there is something to drop it from', () => {
+  it('offers an ✕ only when the screen gave it one to offer', () => {
     const onRemove = jest.fn();
-    const { rerender } = render(<ConfirmCard result={weight} onChange={noop} onSave={noop} onAddMore={noop} />);
+    const { rerender } = render(<ConfirmCard result={weight} />);
     expect(screen.queryByTestId('confirm-card-remove')).toBeNull();
 
-    rerender(
-      <ConfirmCard result={weight} onChange={noop} onSave={noop} onAddMore={noop} onRemove={onRemove} />,
-    );
+    rerender(<ConfirmCard result={weight} onRemove={onRemove} />);
     fireEvent.press(screen.getByTestId('confirm-card-remove'));
     expect(onRemove).toHaveBeenCalled();
   });
@@ -187,28 +179,19 @@ describe('sourcesLine', () => {
 });
 
 // The machine is its own fact (migration 0012), and the chip that upgrades a guessed
-// movement is an offer rather than a question.
+// movement is an offer rather than a question — the one tap on this card that changes a
+// value, and the only one, because it is a tap and not a keyboard.
 describe('the machine, and the offer to name the movement', () => {
-  it('shows the machine as the sub-line and lets it be corrected', () => {
-    const onChange = jest.fn();
+  it('shows the machine as the sub-line', () => {
     render(
       <ConfirmCard
         result={{
           ...activities,
           items: [{ ...(activities as { items: ActivityItem[] }).items[0]!, equipment: 'cable stack' }],
         }}
-        onChange={onChange}
-        onSave={() => {}}
-        onAddMore={() => {}}
       />,
     );
     expect(screen.getByTestId('activity-equipment-line-0')).toHaveTextContent('cable stack');
-    fireEvent.changeText(screen.getByTestId('activity-equipment-0'), 'plate-loaded row machine');
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        items: [expect.objectContaining({ equipment: 'plate-loaded row machine' })],
-      }),
-    );
   });
 
   it('offers the catalogue name in one tap, and never blocks the save', () => {
@@ -225,9 +208,7 @@ describe('the machine, and the offer to name the movement', () => {
         },
       ],
     };
-    render(<ConfirmCard result={guessed} onChange={onChange} onSave={() => {}} onAddMore={() => {}} />);
-    // Save is there either way: the chip is ignorable forever.
-    expect(screen.getByTestId('confirm-save')).toBeTruthy();
+    render(<ConfirmCard result={guessed} onChange={onChange} />);
 
     fireEvent.press(screen.getByTestId('activity-refine-0'));
     expect(onChange).toHaveBeenCalledWith(
@@ -248,7 +229,7 @@ describe('the machine, and the offer to name the movement', () => {
         },
       ],
     };
-    render(<ConfirmCard result={named} onChange={() => {}} onSave={() => {}} onAddMore={() => {}} />);
+    render(<ConfirmCard result={named} onChange={noop} />);
     expect(screen.queryByTestId('activity-refine-0')).toBeNull();
   });
 });

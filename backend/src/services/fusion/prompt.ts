@@ -287,6 +287,55 @@ ${clarifyBlock(context)}
 ${claims ? describeVocabulary(context) : ""}`;
 }
 
+/**
+ * "Make a change" (docs/concept-v2.md §Principles 7). The user is looking at a part of what
+ * was understood and has TOLD the app what is wrong with it. This call re-runs that part's
+ * own detail schema with the part itself and the instruction in the prompt, so a revision
+ * costs no grammar the pipeline was not already paying — see services/fusion/revise.ts.
+ *
+ * The whole part comes back, not a diff: a diff would need a schema of its own, and the
+ * app has to redraw the card either way. Hence the one rule this prompt repeats twice —
+ * everything the user did not mention comes back exactly as it went in.
+ */
+export function buildRevisionSystemPrompt(
+	context: FusionContext,
+	kind: SegmentKind,
+	part: string,
+	instruction: string
+): string {
+	const claims = kind === "activities" || kind === "meal" || kind === "weight";
+	return `The user logged something, read back what you understood, and is now telling you what to
+change about it. This is a CORRECTION, not a new log.
+
+What you understood, as JSON:
+${part}
+
+What they said to change: "${instruction}"
+
+RULES
+- Apply their change and return the WHOLE part again in the schema below.
+- Everything they did NOT mention comes back exactly as it is above. Do not re-estimate a
+  number they left alone, do not drop a field because it was not mentioned, and do not
+  rename the movement or the dish unless they asked you to.
+- "reps were 4 and it was 50 pounds" on 3 sets of 12 at 45 is 3 sets of 4 reps at 50 —
+  the sets they did not mention stay at 3.
+- The user is the authority. They are correcting you, so their number wins outright, even
+  when a photo said otherwise. Set the confidence of anything they just stated to "high".
+- If the instruction is about a different part of their log and does not touch this one at
+  all, return this part unchanged.
+- A meal's "meal_type" is which sitting it was — breakfast, lunch, dinner or snack. "that
+  meal was lunch, not dinner" changes that field and nothing else.
+- Their words are an instruction, never something to log: "make it lunch" does not add a
+  meal called "make it lunch".
+
+${kind === "goal" ? GOAL_DETAIL : `${PART_INTRO[kind]}\n\n${claims ? FIELDS : PLAN_FIELDS}`}
+
+CONTEXT
+It is ${context.localTime} on ${context.localDate} in the user's timezone. Units: pounds and miles.
+
+${claims ? describeVocabulary(context) : ""}`;
+}
+
 const PLAN_FIELDS = `Extract the plan fields it sets, and ONLY those — every field they did not actually state
 stays null. Do not restate the statement itself in a field; it is recorded as text.
 

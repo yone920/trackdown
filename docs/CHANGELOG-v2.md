@@ -41,10 +41,12 @@ half-lived today.
 1. **Today** — day number and status in the header, the goal banner (or the "no goal"
    state), the cards the goal chose, the *Right now* paragraph with its chips, the day
    arc, Training and Eating.
-2. **Log by typing** — the `+`, type "chicken and rice, about 700 calories", *Read it*,
-   correct a number on the confirm card, Save. Today updates.
+2. **Log by typing** — the `+`, type "chicken and rice, about 700 calories", *Log*. The
+   review page comes back: *Does this look right?* Press **Make a change** and say what is
+   wrong — "make it 800 calories" — then *Log it*. Today updates. There is no field to type
+   a number into anywhere in this flow, on purpose (concept-v2 principle 7).
 3. **Log by photo** — the `+`, Photo, snap a machine display or a plate, add a line of
-   narration, *Read it*, Save.
+   narration, *Log*, *Log it*.
 4. **Set a goal** — the `+`, "I want to get down to 170 pounds by December". The card
    comes back with the server's projected date and three choices: use the projection,
    keep my date, no date. Confirm — Today's cards change to match the goal.
@@ -54,8 +56,8 @@ half-lived today.
    group with each lift's delta, macros against targets, the meals, the body. Use ‹ › to
    walk back through the week. Tap the export button: the share sheet has the day's JSON.
 7. **The log as recorded** — from the Day footer. Every entry as it arrived, quoted, with
-   what it was understood to be. Tap one → the same confirm card with the saved values in
-   it → *Save changes* → the Day updates.
+   what it was understood to be. Tap one → the saved row read-only → *Make a change* → say
+   what is wrong → *Save changes* → the Day updates.
 8. **Progress** — a section per goal (weight line with its 7-day average and target,
    lifts, weekly bars), then Consistency and Coverage.
 9. **Goals** — the goal card with its ring and pace line, reorder with the arrows if there
@@ -84,6 +86,140 @@ half-lived today.
 ## Field fixes
 
 Real logs, from the phone, that the build plan had not imagined.
+
+### 2026-08-31 — no forms: review it, or tell it what to change (`wp-no-forms`)
+
+Two field reports, one answer. The first: in the Log sheet the keyboard covered the box
+being typed into and nothing would scroll far enough to bring it back. The second is a
+product decision rather than a bug — **NO FORMS is a product law** (concept-v2 principle 7,
+user decision 2026-08-31): the user types it, says it or photographs it; the app shows what
+it understood; the user approves it or **tells** it what to change. Sign-in is the only
+screen in the app with a field on it.
+
+#### A — the keyboard, and why using both fixes is the bug
+
+`automaticallyAdjustKeyboardInsets` on the ScrollView and `KeyboardAvoidingView` with
+`behavior="padding"` each add the keyboard's height to the layout, so together they move
+the content up twice as far as the keyboard is tall. The sheet had the second one, in a
+**modal presentation**, where `keyboardVerticalOffset` is a number JS cannot know — the
+sheet's offset from the window is UIKit's, and the offset that was there (none) is what put
+the input under the keyboard.
+
+So the rule is one function, `lib/keyboard.ts`, and it is that **iOS uses the scroll view's
+own inset and Android uses the padding, never both**. `automaticallyAdjustKeyboardInsets`
+is UIKit measuring the keyboard against the window: it insets the content, scrolls the
+first responder into view, and is correct inside a modal by construction.
+`keyboardPadding()` returns 0 on iOS *because the inset already did it* and the keyboard's
+height on Android, which has no such inset and keeps the `KeyboardAvoidingView`
+(`behavior="height"`). `keyboardDismissMode="interactive"` on both screens. Applied to the
+Log sheet and to the coach's context box, which is the last thing on its screen and was
+covered the same way.
+
+**What could not be verified here:** the VM has no iPhone and no simulator. The logic is
+unit-tested, the app typechecks and `npx expo export --platform ios` builds; that the
+keyboard now behaves on the device is for the morning test.
+
+#### B — Log → review → Log it, and "Make a change"
+
+The Log sheet is two steps and neither has a form in it.
+
+- **Say it.** The box, the photos, Speak — and one button, now called **"Log"** (it said
+  "Read it").
+- **Review.** Its own page: *"Does this look right?"*, the recognised parts as **read-only**
+  cards, each droppable with its ✕, the refinement chip still one tap and still ignorable.
+  **"Log it"** saves through the same confirm as before. **"Make a change"** goes back to
+  the box with the parts kept and the placeholder *"Tell me what to change — 'reps were 3,
+  not 4'…"*.
+- A question (`unclear`) is not a review: it stays on the say-it step, where the answer to
+  it is typed, and the clarify round is unchanged.
+
+**`components/confirm-card.tsx` lost its TextInput grid** — every value is text now, and a
+fact nobody read is simply absent rather than an empty box inviting a keyboard.
+`components/fields.tsx` is deleted; nothing imported it.
+
+#### C — the revision is the same call, not a new grammar
+
+`POST /api/log/analyze` takes `revise: { results | record, instruction }`. Each part is
+re-read by **its own existing detail call** (`ActivitiesDetailOutputSchema`, `meal`,
+`weigh_in`, `goal_spec`, `statement`) with the part as compact JSON and the instruction in
+the system prompt. No new union, no new branch, nothing added to the routing schema — the
+grammar ceiling is a field budget and this change spends none of it.
+
+- One call per part, in parallel, each told to return its part unchanged if the instruction
+  is not about it. "That meal was lunch not dinner" is safe to say at a log holding a meal
+  and a run.
+- The prompt's one repeated rule: everything the user did not mention comes back exactly as
+  it went in. "reps were 4 and it was 50 pounds" against 3 × 12 @ 45 is **3 sets**, 4 reps,
+  50 lb.
+- `carryForward` keeps `category` and `muscle_groups` — which the detail schemas never carry
+  — across a revision, but only while the movement is still the same movement. Without it,
+  correcting the reps on a saved row would have quietly deleted it from coverage.
+- An `unclear` part is never sent: there is nothing in a question to revise.
+- A revised goal is re-projected by `services/goals/proposal.ts` like any other preview.
+
+#### D — the DayLog correction is the same screen again
+
+Tapping a row in "the log, as recorded" opens the saved row **read-only**, with "Make a
+change" as the only thing to press — a PATCH of the values it already has is not a
+correction. Telling it the change sends that one row as `revise.record`, and the revised
+values go out as the PATCH. `lib/edit-record.ts` survives, doing exactly what its name says
+in both directions.
+
+**Decisions**
+
+- **Two revise shapes, not one.** `results` is a pending preview, `record` is one saved row.
+  They are the same public union and the service treats them the same; the two names are so
+  the request says which of the two things is being corrected.
+- **A revision brings no photos.** The evidence belongs to the round that read it, and the
+  round that produced these parts already stored it. A revise with photos attached is a 400.
+- **The refinement chip stays, and it is not a form.** One tap on an offer the reader
+  derived, with no keyboard and nothing to fill in. It is the only thing on the review page
+  that changes a value.
+- **A correction cannot be dropped.** The ✕ is on every card of a fresh log — removing the
+  last one returns to the say-it step with the words still in the box — and on none of a
+  saved row, because dropping a row that exists is a delete and a different verb.
+- **The old `showActions` / `onSave` / `onAddMore` props are gone from the card.** The
+  screen owns the buttons; the card draws what was understood.
+- No new dependencies. No migration.
+
+**Tests** — 422 passing, 2 skipped in `backend` (was 410/2, with the key set so the contract
+tests run); 96 passing in the app (was 89).
+
+- `src/services/fusion/fusion.test.ts` (+6): the kind each result revises through and the
+  silence on a question; the compact part with the provenance and the chip taken out; the
+  muscle groups carried across a change and *not* carried onto a renamed movement; the
+  round trip through the fake, one call, on the analyze pipeline's own schema; and three
+  parts revised at once with the question skipped.
+- `src/app.test.ts` (+4): a told change on the pending parts, confirming afterwards through
+  the unchanged confirm; one saved row as `record`; the four ways a revision is refused;
+  and a revised goal's timeline re-projected.
+- `anthropic.fusion.contract.test.ts` (+2), **run here against the real model, thirteen for
+  thirteen**: "reps were 4 and it was 50 pounds" changing two numbers and leaving the third,
+  the movement, the machine and the muscle groups alone; and "that meal was lunch not
+  dinner" moving the slot and nothing else.
+- `__tests__/log.test.tsx` (rewritten, 13): the button that says Log, the review page as its
+  own page, **no TextInput anywhere on it**, the told change round trip with what goes out
+  on the wire, "never mind", the question that stays on the input step, the stack of parts
+  with one ✕ and one save, the clarify round, and the keyboard rule on both platforms.
+- `__tests__/log-correction.test.tsx` (new, 2): the saved row read-only with nothing to save,
+  then told → `revise.record` → the review again → the PATCH with the revised values and the
+  muscle groups still on it.
+- `__tests__/confirm-card.test.tsx` (rewritten, 13): every kind drawn read-only, the facts
+  nobody read left out rather than drawn as blanks, the meal's slot, the statement in quotes,
+  and the chip still one tap.
+
+**Deferred**
+
+- **A revision is one instruction, not a conversation.** Each one is sent with the parts as
+  they stand and no memory of the last instruction — the same limit the coach's revisions
+  have, for the same reason: nothing has asked for a thread yet.
+- **The keyboard is unverified on hardware.** See A.
+- **`revise` costs one model call per part on screen.** Three cards is three calls, in
+  parallel. Telling the model which part an instruction is about would need a router, which
+  is a call of its own; at one to three parts the parallel calls are cheaper and simpler.
+- **Removing the last part goes back to the box, it does not close the sheet.** The words
+  are still there, which is usually what someone wants after dropping a misreading, but it
+  is a guess and no one has said either way.
 
 ### 2026-08-31 — always log, the machine as its own fact, and a gym that remembers itself (`field-fixes-best-effort-places`)
 

@@ -3,11 +3,13 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import React from 'react';
 
 import LogSheet from '@/app/log';
-import type { FusionResult } from '@/lib/types';
+import { keyboardPadding } from '@/lib/keyboard';
+import type { ActivityItem, FusionResult } from '@/lib/types';
 
-// The log sheet end to end against a fake API: type, analyze, edit, save. And the Expo Go
-// rule — when the speech port reports unavailable the Speak control is not drawn at all
-// (docs/build-plan.md §Morning test).
+// The log sheet end to end against a fake API: say it → review it → log it, and "Make a
+// change" instead of a field (concept-v2 §Principles 7 — NO FORMS, user decision
+// 2026-08-31). And the Expo Go rule — when the speech port reports unavailable the Speak
+// control is not drawn at all (docs/build-plan.md §Morning test).
 
 const mockApi = jest.fn();
 const mockUpload = jest.fn();
@@ -39,6 +41,27 @@ const meal: FusionResult = {
   sources: null,
 };
 
+const workout: FusionResult = {
+  kind: 'activities',
+  items: [
+    {
+      exercise: 'Chest-Supported Row',
+      equipment: 'chest-supported row machine',
+      description: '3 × 12 chest-supported row at 45 lb',
+      category: 'strength',
+      muscle_groups: ['back'],
+      sets: 3,
+      reps: 12,
+      load_lb: 45,
+      duration_min: null,
+      distance_mi: null,
+      kcal: 120,
+      confidence: 'low',
+      sources: null,
+    },
+  ],
+};
+
 function renderSheet() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
@@ -47,6 +70,19 @@ function renderSheet() {
     </QueryClientProvider>,
   );
 }
+
+/** Type something and press Log — the first half of every test below. */
+async function logIt(said: string) {
+  fireEvent.changeText(screen.getByTestId('log-text'), said);
+  fireEvent.press(screen.getByTestId('log-submit'));
+  await waitFor(() => expect(screen.getByTestId('confirm-card')).toBeTruthy());
+}
+
+const analyzed = (results: FusionResult[], evidence: unknown[] = []) => ({
+  results,
+  evidence,
+  context: { local_date: '2026-08-30', tz_offset_min: 0 },
+});
 
 beforeEach(() => {
   mockApi.mockReset();
@@ -69,54 +105,124 @@ describe('the log sheet', () => {
     expect(screen.getByTestId('control-speak')).toBeTruthy();
   });
 
-  it('analyses typed text and saves the confirmed card', async () => {
-    mockUpload.mockResolvedValue({
-      results: [meal],
-      result: meal,
-      evidence: [],
-      context: { local_date: '2026-08-30', tz_offset_min: 0 },
-    });
+  it('calls its primary button Log, and shows a review page when it has read something', async () => {
+    mockUpload.mockResolvedValue(analyzed([meal]));
+    renderSheet();
+    expect(screen.getByTestId('log-submit')).toHaveTextContent('Log');
+
+    await logIt('chicken, rice and broccoli');
+
+    // Its own page: the headline asks, and the box that was typed into is gone.
+    expect(screen.getByText('Does this look right?')).toBeTruthy();
+    expect(screen.queryByTestId('log-text')).toBeNull();
+    expect(screen.getByTestId('confirm-save')).toHaveTextContent('Log it');
+    expect(screen.getByTestId('log-make-change')).toBeTruthy();
+  });
+
+  it('draws the parts read-only — there is no field anywhere on the review page', async () => {
+    mockUpload.mockResolvedValue(analyzed([workout]));
+    renderSheet();
+    await logIt('three sets of twelve at forty-five');
+
+    // The numbers are there, as text.
+    expect(screen.getByTestId('activity-sets-0')).toHaveTextContent('3');
+    expect(screen.getByTestId('activity-reps-0')).toHaveTextContent('12');
+    expect(screen.getByTestId('activity-load-0')).toHaveTextContent('45');
+    expect(screen.getByTestId('activity-equipment-line-0')).toHaveTextContent('chest-supported row machine');
+    // And nothing on the page can be typed into.
+    expect(screen.root.findAllByType('TextInput' as never)).toHaveLength(0);
+  });
+
+  it('saves what the user approved, on one client id', async () => {
+    mockUpload.mockResolvedValue(analyzed([meal]));
     mockApi.mockResolvedValue({ kind: 'meal', kinds: ['meal'], replayed: false });
 
     renderSheet();
-    fireEvent.changeText(screen.getByTestId('log-text'), 'chicken, rice and broccoli');
-    fireEvent.press(screen.getByTestId('log-read'));
-
-    await waitFor(() => expect(screen.getByTestId('confirm-card')).toBeTruthy());
+    await logIt('chicken, rice and broccoli');
     expect(mockUpload).toHaveBeenCalledWith(
       '/api/log/analyze',
       expect.arrayContaining([{ name: 'text', value: 'chicken, rice and broccoli' }]),
     );
 
-    fireEvent.changeText(screen.getByTestId('meal-kcal'), '700');
     fireEvent.press(screen.getByTestId('confirm-save'));
-
     await waitFor(() => expect(mockApi).toHaveBeenCalled());
     const [path, options] = mockApi.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(path).toBe('/api/log/confirm');
     // The uuid is minted once per Save, so a retry replays rather than logging twice.
     expect(options.body.client_id).toBe('00000000-0000-4000-8000-000000000000');
-    expect(options.body.results).toMatchObject([{ kind: 'meal', kcal: 700 }]);
+    expect(options.body.results).toMatchObject([{ kind: 'meal', kcal: 620 }]);
     expect(options.body.tz_offset_min).toBe(0);
   });
 
-  it('offers no Save for an unclear reading, only the question', async () => {
-    mockUpload.mockResolvedValue({
-      results: [{ kind: 'unclear', question: 'Machine or free weights?' }],
-      evidence: [],
-      context: { local_date: '2026-08-30', tz_offset_min: 0 },
-    });
+  // The heart of the work package: a correction is TOLD, and the parts come back revised.
+  it('takes a change in words and redraws the review with the answer', async () => {
+    mockUpload.mockResolvedValueOnce(analyzed([workout]));
     renderSheet();
-    fireEvent.changeText(screen.getByTestId('log-text'), 'did the thing');
-    fireEvent.press(screen.getByTestId('log-read'));
+    await logIt('three sets of twelve at forty-five on the row machine');
+    expect(screen.getByTestId('activity-reps-0')).toHaveTextContent('12');
 
-    await waitFor(() => expect(screen.getByText('Machine or free weights?')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('log-make-change'));
+
+    // Back at the input, with the parts still pending and the box asking for the change.
+    const input = screen.getByTestId('log-text');
+    expect(input.props.placeholder).toBe('Tell me what to change — “reps were 3, not 4”…');
     expect(screen.queryByTestId('confirm-save')).toBeNull();
+
+    const revised: FusionResult = {
+      kind: 'activities',
+      items: [{ ...(workout as { kind: 'activities'; items: ActivityItem[] }).items[0]!, reps: 4, load_lb: 50 }],
+    };
+    mockUpload.mockResolvedValueOnce(analyzed([revised]));
+
+    fireEvent.changeText(input, 'reps were 4 and it was 50 pounds');
+    fireEvent.press(screen.getByTestId('log-submit'));
+
+    await waitFor(() => expect(screen.getByTestId('activity-reps-0')).toHaveTextContent('4'));
+    expect(screen.getByTestId('activity-load-0')).toHaveTextContent('50');
+    // The sets nobody mentioned are still on screen.
+    expect(screen.getByTestId('activity-sets-0')).toHaveTextContent('3');
+    expect(screen.getByText('Does this look right?')).toBeTruthy();
+
+    // What went out: the parts on screen plus the instruction, on the same endpoint.
+    const parts = mockUpload.mock.calls[1]![1] as { name: string; value: string }[];
+    const revise = JSON.parse(parts.find((part) => part.name === 'revise')!.value) as {
+      instruction: string;
+      results: FusionResult[];
+    };
+    expect(revise.instruction).toBe('reps were 4 and it was 50 pounds');
+    expect(revise.results).toHaveLength(1);
+    expect(revise.results[0]).toMatchObject({ kind: 'activities' });
+    // The instruction is not a second log.
+    expect(parts.some((part) => part.name === 'text')).toBe(false);
   });
 
-  // One sentence, several things (backend Field fixes, mixed input): a card per part,
-  // each removable, one Save for all of them.
-  it('stacks a card per part, drops one on ✕, and saves the rest in one call', async () => {
+  it('lets a change be abandoned without losing what was read', async () => {
+    mockUpload.mockResolvedValue(analyzed([meal]));
+    renderSheet();
+    await logIt('chicken and rice');
+
+    fireEvent.press(screen.getByTestId('log-make-change'));
+    fireEvent.press(screen.getByTestId('revise-cancel'));
+    expect(screen.getByText('Does this look right?')).toBeTruthy();
+    expect(screen.getByTestId('confirm-save')).toBeTruthy();
+    expect(mockUpload).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no Log it for an unclear reading, only the question', async () => {
+    mockUpload.mockResolvedValue(analyzed([{ kind: 'unclear', question: 'Machine or free weights?' }]));
+    renderSheet();
+    fireEvent.changeText(screen.getByTestId('log-text'), 'did the thing');
+    fireEvent.press(screen.getByTestId('log-submit'));
+
+    await waitFor(() => expect(screen.getByText('Machine or free weights?')).toBeTruthy());
+    // A question is not a review: the box is still there to answer it in.
+    expect(screen.queryByTestId('confirm-save')).toBeNull();
+    expect(screen.getByTestId('log-text')).toBeTruthy();
+  });
+
+  // One sentence, several things (backend Field fixes, mixed input): a card per part on
+  // the review page, each removable, one Log it for all of them.
+  it('stacks a card per part, drops one on ✕, and logs the rest in one call', async () => {
     const run: FusionResult = {
       kind: 'activities',
       items: [
@@ -138,25 +244,23 @@ describe('the log sheet', () => {
       ],
     };
     const weight: FusionResult = { kind: 'weight', weight_lb: 181, confidence: 'high', sources: null };
-    mockUpload.mockResolvedValue({
-      results: [meal, run, weight],
-      evidence: [
-        { id: 'e1', kind: 'photo', mime: 'image/jpeg', width: 10, height: 10, url: '/x', part: 0 },
-        { id: 'e2', kind: 'photo', mime: 'image/jpeg', width: 10, height: 10, url: '/y', part: 1 },
-      ],
-      context: { local_date: '2026-08-30', tz_offset_min: 0 },
-    });
+    mockUpload.mockResolvedValue(
+      analyzed(
+        [meal, run, weight],
+        [
+          { id: 'e1', kind: 'photo', mime: 'image/jpeg', width: 10, height: 10, url: '/x', part: 0 },
+          { id: 'e2', kind: 'photo', mime: 'image/jpeg', width: 10, height: 10, url: '/y', part: 1 },
+        ],
+      ),
+    );
     mockApi.mockResolvedValue({ kind: 'meal', kinds: ['meal', 'weight'], replayed: false });
 
     renderSheet();
-    fireEvent.changeText(screen.getByTestId('log-text'), 'ate this, ran 5k, weighed 181');
-    fireEvent.press(screen.getByTestId('log-read'));
+    await logIt('ate this, ran 5k, weighed 181');
 
-    // One card per part, and the count is said out loud rather than left to be counted.
-    await waitFor(() => expect(screen.getByTestId('confirm-card')).toBeTruthy());
     expect(screen.getByTestId('confirm-card-1')).toBeTruthy();
     expect(screen.getByTestId('confirm-card-2')).toBeTruthy();
-    expect(screen.getByText(/Read 3 things in that/)).toBeTruthy();
+    expect(screen.getByTestId('confirm-save')).toHaveTextContent('Log all 3');
 
     // The run was not what they meant: drop it, and the photo read for it goes too.
     fireEvent.press(screen.getByTestId('confirm-card-1-remove'));
@@ -175,14 +279,10 @@ describe('the log sheet', () => {
   // The clarify loop (backend Field fixes). A question is not a dead end: the sheet keeps
   // what it asked about and what it asked, so a one-word answer resolves.
   it('remembers the question, asks for the answer, and sends both back', async () => {
-    mockUpload.mockResolvedValueOnce({
-      results: [{ kind: 'unclear', question: 'Was that a bench press?' }],
-      evidence: [],
-      context: { local_date: '2026-08-30', tz_offset_min: 0 },
-    });
+    mockUpload.mockResolvedValueOnce(analyzed([{ kind: 'unclear', question: 'Was that a bench press?' }]));
     renderSheet();
     fireEvent.changeText(screen.getByTestId('log-text'), 'did the thing');
-    fireEvent.press(screen.getByTestId('log-read'));
+    fireEvent.press(screen.getByTestId('log-submit'));
 
     await waitFor(() => expect(screen.getByText('Was that a bench press?')).toBeTruthy());
     // The box is emptied for the answer and says what it now wants.
@@ -190,33 +290,9 @@ describe('the log sheet', () => {
     expect(input.props.value).toBe('');
     expect(input.props.placeholder).toBe('Answer the question…');
 
-    const bench: FusionResult = {
-      kind: 'activities',
-      items: [
-        {
-          exercise: 'Bench Press',
-          equipment: null,
-          description: 'bench press',
-          category: null,
-          muscle_groups: null,
-          sets: null,
-          reps: null,
-          load_lb: null,
-          duration_min: null,
-          distance_mi: null,
-          kcal: 60,
-          confidence: 'medium',
-          sources: null,
-        },
-      ],
-    };
-    mockUpload.mockResolvedValueOnce({
-      results: [bench],
-      evidence: [],
-      context: { local_date: '2026-08-30', tz_offset_min: 0 },
-    });
+    mockUpload.mockResolvedValueOnce(analyzed([workout]));
     fireEvent.changeText(input, 'yes');
-    fireEvent.press(screen.getByTestId('log-read'));
+    fireEvent.press(screen.getByTestId('log-submit'));
 
     await waitFor(() => expect(mockUpload).toHaveBeenCalledTimes(2));
     const parts = mockUpload.mock.calls[1]![1] as { name: string; value?: string }[];
@@ -228,22 +304,29 @@ describe('the log sheet', () => {
       ]),
     );
 
-    // Resolved: the card is a workout and the round is over.
-    await waitFor(() => expect(screen.getByTestId('confirm-card')).toBeTruthy());
-    expect(screen.getByTestId('log-text').props.placeholder).not.toBe('Answer the question…');
+    // Resolved: the review page is drawn and the round is over.
+    await waitFor(() => expect(screen.getByText('Does this look right?')).toBeTruthy());
   });
 
   it('sends no clarify round on an ordinary log', async () => {
-    mockUpload.mockResolvedValue({
-      results: [meal],
-      evidence: [],
-      context: { local_date: '2026-08-30', tz_offset_min: 0 },
-    });
+    mockUpload.mockResolvedValue(analyzed([meal]));
     renderSheet();
-    fireEvent.changeText(screen.getByTestId('log-text'), 'chicken and rice');
-    fireEvent.press(screen.getByTestId('log-read'));
-    await waitFor(() => expect(screen.getByTestId('confirm-card')).toBeTruthy());
+    await logIt('chicken and rice');
     const parts = mockUpload.mock.calls[0]![1] as { name: string }[];
     expect(parts.map((part) => part.name)).not.toContain('clarify_original');
+  });
+});
+
+// The keyboard bug: the input hid behind it and nothing scrolled far enough to bring it
+// back. The rule is one function because using both compensations at once is the bug.
+describe('the keyboard inset', () => {
+  it('adds nothing on iOS, where the scroll view has already been inset', () => {
+    expect(keyboardPadding(336, 'ios')).toBe(0);
+    expect(keyboardPadding(0, 'ios')).toBe(0);
+  });
+
+  it('adds the keyboard height on Android, which has no such inset', () => {
+    expect(keyboardPadding(336, 'android')).toBe(336);
+    expect(keyboardPadding(0, 'android')).toBe(0);
   });
 });

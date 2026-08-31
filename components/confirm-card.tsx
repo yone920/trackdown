@@ -1,10 +1,9 @@
 import { Pressable, View } from 'react-native';
 
-import { Field, FieldGrid, LineField } from '@/components/fields';
 import { IconClose } from '@/components/icons';
 import { Card, Chip, Chips } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
-import { C } from '@/lib/theme';
+import { C, FONT, TABULAR } from '@/lib/theme';
 import type {
   ActivityItem,
   Confidence,
@@ -15,16 +14,26 @@ import type {
 } from '@/lib/types';
 
 // The confirm card (docs/design-system.md §Log). "Confirm, don't trust": every reading is
-// shown before it counts, editable in one tap, with what each fact came from and how sure
-// the model was (concept-v2 §Principles 3).
+// shown before it counts, with what each fact came from and how sure the model was
+// (concept-v2 §Principles 3).
+//
+// **It is read-only, and that is the product law rather than a styling choice.** NO FORMS
+// (concept-v2 §Principles 7, user decision 2026-08-31): the user types it, says it or
+// photographs it, the app shows what it understood, and a correction is TOLD — "reps were
+// 3, not 4" — through the same input that made the log. There is no field to type into
+// here, and there is none anywhere else in the app but the sign-in screen. The card used
+// to carry a grid of TextInputs; the review step (app/log.tsx) and "Make a change"
+// replaced it.
+//
+// The one thing that still changes a value from this card is the refinement chip, and it
+// is one tap on an offer the reader derived ("Was it a Chest-Supported Row?") rather than
+// a field: no keyboard, no cursor, nothing to fill in.
 //
 // It renders *every* kind the classifier can return, including `unclear` — which asks one
 // question instead of guessing (backend/src/services/fusion/schema.ts).
 //
 // One card is one PART of a log. "Ate two eggs, ran 5k, weighed in at 181" is three of
-// these stacked, each editable and each removable with the ✕, and the Log sheet draws the
-// single Save under the stack (`showActions={false}`). On its own — the DayLog correction,
-// and every test that renders this component directly — the card keeps its own buttons.
+// these stacked, each removable with the ✕, under one "Log it".
 
 const KIND_LABEL: Record<FusionResult['kind'], string> = {
   activities: 'exercise',
@@ -43,17 +52,47 @@ const CONFIDENCE_COLOR: Record<Confidence, string> = {
   low: C.accent,
 };
 
-const num = (value: number | null | undefined): string => (value == null ? '' : String(value));
-const toNum = (text: string): number | null => {
-  const trimmed = text.trim();
-  if (trimmed === '') return null;
-  const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : null;
+const MEAL_SLOT: Record<string, string> = {
+  breakfast: 'Breakfast',
+  lunch: 'Lunch',
+  dinner: 'Dinner',
+  snack: 'Snack',
 };
-const toInt = (text: string): number | null => {
-  const parsed = toNum(text);
-  return parsed == null ? null : Math.round(parsed);
-};
+
+/** A fact and its label, as text. Nothing here is editable — see the note above. */
+function Facts({ children }: { children: React.ReactNode }) {
+  return <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 14 }}>{children}</View>;
+}
+
+function Fact({
+  label,
+  value,
+  width = '30%',
+  numeric = false,
+  testID,
+}: {
+  label: string;
+  value: string | number | null | undefined;
+  width?: `${number}%` | number;
+  numeric?: boolean;
+  testID?: string;
+}) {
+  if (value === null || value === undefined || value === '') return null;
+  return (
+    <View style={{ flexGrow: 1, flexBasis: width }}>
+      <Eyebrow>{label}</Eyebrow>
+      <Body
+        testID={testID}
+        style={
+          numeric
+            ? [{ marginTop: 4, fontFamily: FONT.disp, fontSize: 18, color: C.ink }, TABULAR]
+            : { marginTop: 4, fontFamily: FONT.disp, fontSize: 18, color: C.ink }
+        }>
+        {String(value)}
+      </Body>
+    </View>
+  );
+}
 
 function ConfidenceChip({ level }: { level: Confidence }) {
   return (
@@ -116,38 +155,25 @@ export function ConfirmCard({
   onRemove,
   dateChoice = 'proposed',
   onDateChoice,
-  onSave,
-  onAddMore,
-  saving = false,
-  error,
-  saveLabel = 'Save',
-  showAddMore = true,
-  showActions = true,
   eyebrow,
   testID = 'confirm-card',
 }: {
   result: FusionResult;
-  onChange: (next: FusionResult) => void;
-  /** Drops this part from the batch. Absent when there is only one thing to save. */
+  /**
+   * The refinement chip's one tap, and nothing else. There is no field on this card, so
+   * every other change to a result is told through the input (app/log.tsx).
+   */
+  onChange?: (next: FusionResult) => void;
+  /** Drops this part from the log. */
   onRemove?: () => void;
   dateChoice?: DateChoice;
   onDateChoice?: (choice: DateChoice) => void;
-  onSave: () => void;
-  onAddMore: () => void;
-  saving?: boolean;
-  error?: string | null;
-  /** "Save changes" when the card is correcting a row that already exists (DayLog). */
-  saveLabel?: string;
-  /** A correction has nothing to add more of. */
-  showAddMore?: boolean;
-  /** False when the Log sheet draws one Save under a stack of these. */
-  showActions?: boolean;
   /** Overrides "Recognized · <kind>" — a correction was recognized a while ago. */
   eyebrow?: string;
   testID?: string;
 }) {
   const patchActivity = (index: number, patch: Partial<ActivityItem>) => {
-    if (result.kind !== 'activities') return;
+    if (result.kind !== 'activities' || !onChange) return;
     const items = result.items.map((item, i) => (i === index ? { ...item, ...patch } : item));
     onChange({ ...result, items });
   };
@@ -191,9 +217,9 @@ export function ConfirmCard({
               {sourcesLine(item.sources) ? (
                 <Sub style={{ marginTop: 4 }}>{sourcesLine(item.sources)}</Sub>
               ) : null}
-              {/* An offer, never a question: the card saves with or without it, and it can
-                  be ignored forever (concept-v2 §Principles 3 — confirm, don't interrogate). */}
-              {item.refine && item.refine.exercise !== item.exercise ? (
+              {/* An offer, never a question, and the one tap on this card that changes a
+                  value: no field, no keyboard. It can be ignored forever. */}
+              {onChange && item.refine && item.refine.exercise !== item.exercise ? (
                 <View style={{ marginTop: 10 }}>
                   <Chips>
                     <Chip
@@ -204,58 +230,14 @@ export function ConfirmCard({
                   </Chips>
                 </View>
               ) : null}
-              <FieldGrid>
-                <Field
-                  label="Exercise"
-                  width="100%"
-                  value={item.exercise ?? ''}
-                  onChangeText={(text) => patchActivity(index, { exercise: text || null })}
-                  testID={`activity-exercise-${index}`}
-                />
-                <Field
-                  label="Machine"
-                  width="100%"
-                  value={item.equipment ?? ''}
-                  onChangeText={(text) => patchActivity(index, { equipment: text || null })}
-                  testID={`activity-equipment-${index}`}
-                />
-                <Field
-                  label="Sets"
-                  numeric
-                  value={num(item.sets)}
-                  onChangeText={(text) => patchActivity(index, { sets: toInt(text) })}
-                />
-                <Field
-                  label="Reps"
-                  numeric
-                  value={num(item.reps)}
-                  onChangeText={(text) => patchActivity(index, { reps: toInt(text) })}
-                />
-                <Field
-                  label="Load lb"
-                  numeric
-                  value={num(item.load_lb)}
-                  onChangeText={(text) => patchActivity(index, { load_lb: toNum(text) })}
-                />
-                <Field
-                  label="Minutes"
-                  numeric
-                  value={num(item.duration_min)}
-                  onChangeText={(text) => patchActivity(index, { duration_min: toInt(text) })}
-                />
-                <Field
-                  label="Miles"
-                  numeric
-                  value={num(item.distance_mi)}
-                  onChangeText={(text) => patchActivity(index, { distance_mi: toNum(text) })}
-                />
-                <Field
-                  label="Kcal"
-                  numeric
-                  value={num(item.kcal)}
-                  onChangeText={(text) => patchActivity(index, { kcal: toInt(text) })}
-                />
-              </FieldGrid>
+              <Facts>
+                <Fact label="Sets" numeric value={item.sets} testID={`activity-sets-${index}`} />
+                <Fact label="Reps" numeric value={item.reps} testID={`activity-reps-${index}`} />
+                <Fact label="Load lb" numeric value={item.load_lb} testID={`activity-load-${index}`} />
+                <Fact label="Minutes" numeric value={item.duration_min} />
+                <Fact label="Miles" numeric value={item.distance_mi} />
+                <Fact label="Kcal" numeric value={item.kcal} />
+              </Facts>
             </View>
           ))}
         </View>
@@ -264,46 +246,19 @@ export function ConfirmCard({
       {result.kind === 'meal' ? (
         <View style={{ marginTop: 12 }}>
           <Disp size={22}>{result.description}</Disp>
+          {result.meal_type ? (
+            <Sub testID="meal-slot" style={{ marginTop: 4 }}>
+              {MEAL_SLOT[result.meal_type] ?? result.meal_type}
+            </Sub>
+          ) : null}
           {sourcesLine(result.sources) ? <Sub style={{ marginTop: 4 }}>{sourcesLine(result.sources)}</Sub> : null}
-          <FieldGrid>
-            <LineField
-              label="What it was"
-              value={result.description}
-              onChangeText={(text) => onChange({ ...result, description: text })}
-              testID="meal-description"
-            />
-            <Field
-              label="Kcal"
-              numeric
-              value={num(result.kcal)}
-              onChangeText={(text) => onChange({ ...result, kcal: toInt(text) })}
-              testID="meal-kcal"
-            />
-            <Field
-              label="Protein g"
-              numeric
-              value={num(result.protein_g)}
-              onChangeText={(text) => onChange({ ...result, protein_g: toNum(text) })}
-            />
-            <Field
-              label="Carbs g"
-              numeric
-              value={num(result.carbs_g)}
-              onChangeText={(text) => onChange({ ...result, carbs_g: toNum(text) })}
-            />
-            <Field
-              label="Fat g"
-              numeric
-              value={num(result.fat_g)}
-              onChangeText={(text) => onChange({ ...result, fat_g: toNum(text) })}
-            />
-            <Field
-              label="Fibre g"
-              numeric
-              value={num(result.fiber_g)}
-              onChangeText={(text) => onChange({ ...result, fiber_g: toNum(text) })}
-            />
-          </FieldGrid>
+          <Facts>
+            <Fact label="Kcal" numeric value={result.kcal} testID="meal-kcal" />
+            <Fact label="Protein g" numeric value={result.protein_g} />
+            <Fact label="Carbs g" numeric value={result.carbs_g} />
+            <Fact label="Fat g" numeric value={result.fat_g} />
+            <Fact label="Fibre g" numeric value={result.fiber_g} />
+          </Facts>
           {result.items.length > 0 ? (
             <Sub style={{ marginTop: 12 }}>{result.items.map((item) => item.name).join(' · ')}</Sub>
           ) : null}
@@ -314,19 +269,9 @@ export function ConfirmCard({
         <View style={{ marginTop: 12 }}>
           <Disp size={22}>Weigh-in</Disp>
           {sourcesLine(result.sources) ? <Sub style={{ marginTop: 4 }}>{sourcesLine(result.sources)}</Sub> : null}
-          <FieldGrid>
-            <Field
-              label="Weight lb"
-              numeric
-              width="46%"
-              value={num(result.weight_lb)}
-              onChangeText={(text) => {
-                const parsed = toNum(text);
-                if (parsed !== null) onChange({ ...result, weight_lb: parsed });
-              }}
-              testID="weight-lb"
-            />
-          </FieldGrid>
+          <Facts>
+            <Fact label="Weight lb" numeric width="46%" value={result.weight_lb} testID="weight-lb" />
+          </Facts>
         </View>
       ) : null}
 
@@ -351,34 +296,29 @@ export function ConfirmCard({
               {notedFactsLine(result.facts)}
             </Sub>
           ) : null}
-          <FieldGrid>
-            <LineField
-              label="Goal"
-              value={result.spec.title}
-              onChangeText={(text) => onChange({ ...result, spec: { ...result.spec, title: text } })}
-              testID="goal-title"
-            />
-          </FieldGrid>
-          {/* The proposal is an offer, not a correction (concept-v2 §Goals). */}
-          <View style={{ marginTop: 14 }}>
-            <Chips>
-              <Chip
-                label={result.proposed_timeline?.by ? `Use ${result.proposed_timeline.by}` : 'Use the projection'}
-                variant={dateChoice === 'proposed' ? 'primary' : 'secondary'}
-                onPress={() => onDateChoice?.('proposed')}
-              />
-              <Chip
-                label="Keep my date"
-                variant={dateChoice === 'confirm_date' ? 'primary' : 'secondary'}
-                onPress={() => onDateChoice?.('confirm_date')}
-              />
-              <Chip
-                label="No date"
-                variant={dateChoice === 'no_date' ? 'primary' : 'secondary'}
-                onPress={() => onDateChoice?.('no_date')}
-              />
-            </Chips>
-          </View>
+          {/* The proposal is an offer, not a correction (concept-v2 §Goals) — three
+              alternatives to pick between, not a date to type. */}
+          {onDateChoice ? (
+            <View style={{ marginTop: 14 }}>
+              <Chips>
+                <Chip
+                  label={result.proposed_timeline?.by ? `Use ${result.proposed_timeline.by}` : 'Use the projection'}
+                  variant={dateChoice === 'proposed' ? 'primary' : 'secondary'}
+                  onPress={() => onDateChoice('proposed')}
+                />
+                <Chip
+                  label="Keep my date"
+                  variant={dateChoice === 'confirm_date' ? 'primary' : 'secondary'}
+                  onPress={() => onDateChoice('confirm_date')}
+                />
+                <Chip
+                  label="No date"
+                  variant={dateChoice === 'no_date' ? 'primary' : 'secondary'}
+                  onPress={() => onDateChoice('no_date')}
+                />
+              </Chips>
+            </View>
+          ) : null}
         </View>
       ) : null}
 
@@ -394,14 +334,9 @@ export function ConfirmCard({
           {result.kind === 'coach_context' ? (
             <Sub style={{ marginTop: 4 }}>Used the next time you ask, then gone.</Sub>
           ) : null}
-          <FieldGrid>
-            <LineField
-              label="In your words"
-              value={result.text}
-              onChangeText={(text) => onChange({ ...result, text })}
-              testID="statement-text"
-            />
-          </FieldGrid>
+          <Body testID="statement-text" style={{ marginTop: 12, lineHeight: 15 * 1.55 }}>
+            {`“${result.text}”`}
+          </Body>
         </View>
       ) : null}
 
@@ -412,31 +347,6 @@ export function ConfirmCard({
           <Sub style={{ marginTop: 8 }}>Answer it above and send again.</Sub>
         </View>
       ) : null}
-
-      {error ? <Sub style={{ marginTop: 12, color: C.accent }}>{error}</Sub> : null}
-
-      {!showActions ? null : result.kind === 'unclear' ? (
-        <View style={{ marginTop: 18 }}>
-          <Chips>
-            <Chip label="Add more" onPress={onAddMore} />
-          </Chips>
-        </View>
-      ) : (
-        <View style={{ marginTop: 18 }}>
-          <Chips>
-            <Chip
-              testID="confirm-save"
-              label={saving ? 'Saving…' : saveLabel}
-              variant="primary"
-              onPress={onSave}
-              disabled={saving}
-            />
-            {showAddMore ? (
-              <Chip testID="confirm-add-more" label="Add more" onPress={onAddMore} disabled={saving} />
-            ) : null}
-          </Chips>
-        </View>
-      )}
     </Card>
   );
 }
