@@ -122,6 +122,7 @@ describe('the log sheet', () => {
       items: [
         {
           exercise: 'Treadmill Run',
+          equipment: null,
           description: '5 km run',
           category: null,
           muscle_groups: null,
@@ -169,5 +170,80 @@ describe('the log sheet', () => {
     expect(options.body.results).toMatchObject([{ kind: 'meal' }, { kind: 'weight' }]);
     expect(options.body.evidence_ids).toEqual(['e1']);
     expect(options.body.evidence_parts).toEqual([0]);
+  });
+
+  // The clarify loop (backend Field fixes). A question is not a dead end: the sheet keeps
+  // what it asked about and what it asked, so a one-word answer resolves.
+  it('remembers the question, asks for the answer, and sends both back', async () => {
+    mockUpload.mockResolvedValueOnce({
+      results: [{ kind: 'unclear', question: 'Was that a bench press?' }],
+      evidence: [],
+      context: { local_date: '2026-08-30', tz_offset_min: 0 },
+    });
+    renderSheet();
+    fireEvent.changeText(screen.getByTestId('log-text'), 'did the thing');
+    fireEvent.press(screen.getByTestId('log-read'));
+
+    await waitFor(() => expect(screen.getByText('Was that a bench press?')).toBeTruthy());
+    // The box is emptied for the answer and says what it now wants.
+    const input = screen.getByTestId('log-text');
+    expect(input.props.value).toBe('');
+    expect(input.props.placeholder).toBe('Answer the question…');
+
+    const bench: FusionResult = {
+      kind: 'activities',
+      items: [
+        {
+          exercise: 'Bench Press',
+          equipment: null,
+          description: 'bench press',
+          category: null,
+          muscle_groups: null,
+          sets: null,
+          reps: null,
+          load_lb: null,
+          duration_min: null,
+          distance_mi: null,
+          kcal: 60,
+          confidence: 'medium',
+          sources: null,
+        },
+      ],
+    };
+    mockUpload.mockResolvedValueOnce({
+      results: [bench],
+      evidence: [],
+      context: { local_date: '2026-08-30', tz_offset_min: 0 },
+    });
+    fireEvent.changeText(input, 'yes');
+    fireEvent.press(screen.getByTestId('log-read'));
+
+    await waitFor(() => expect(mockUpload).toHaveBeenCalledTimes(2));
+    const parts = mockUpload.mock.calls[1]![1] as { name: string; value?: string }[];
+    expect(parts).toEqual(
+      expect.arrayContaining([
+        { name: 'text', value: 'yes' },
+        { name: 'clarify_original', value: 'did the thing' },
+        { name: 'clarify_question', value: 'Was that a bench press?' },
+      ]),
+    );
+
+    // Resolved: the card is a workout and the round is over.
+    await waitFor(() => expect(screen.getByTestId('confirm-card')).toBeTruthy());
+    expect(screen.getByTestId('log-text').props.placeholder).not.toBe('Answer the question…');
+  });
+
+  it('sends no clarify round on an ordinary log', async () => {
+    mockUpload.mockResolvedValue({
+      results: [meal],
+      evidence: [],
+      context: { local_date: '2026-08-30', tz_offset_min: 0 },
+    });
+    renderSheet();
+    fireEvent.changeText(screen.getByTestId('log-text'), 'chicken and rice');
+    fireEvent.press(screen.getByTestId('log-read'));
+    await waitFor(() => expect(screen.getByTestId('confirm-card')).toBeTruthy());
+    const parts = mockUpload.mock.calls[0]![1] as { name: string }[];
+    expect(parts.map((part) => part.name)).not.toContain('clarify_original');
   });
 });

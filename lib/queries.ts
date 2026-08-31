@@ -192,15 +192,27 @@ export type AnalyzeInput = {
   /** Local file URIs, already downscaled (lib/photos.ts). At most four. */
   photos?: { uri: string; filename: string; type: string }[];
   kindHint?: string | null;
+  /**
+   * The unanswered question this text is the answer to. "Yes" on its own is not a log —
+   * sent back with the words it is about and the question it answers, it is. Both halves
+   * or neither (backend/src/services/fusion/context.ts §ClarifyRound).
+   */
+  clarify?: { originalText: string; question: string } | null;
 };
 
 /** POST /api/log/analyze — a preview. Nothing is saved until the user confirms. */
 export function useAnalyze() {
   return useMutation({
-    mutationFn: ({ text, photos = [], kindHint }: AnalyzeInput) => {
+    mutationFn: ({ text, photos = [], kindHint, clarify }: AnalyzeInput) => {
       const parts = [
         ...(text ? [{ name: 'text', value: text }] : []),
         ...(kindHint ? [{ name: 'kind_hint', value: kindHint }] : []),
+        ...(clarify
+          ? [
+              { name: 'clarify_original', value: clarify.originalText },
+              { name: 'clarify_question', value: clarify.question },
+            ]
+          : []),
         { name: 'client_time', value: new Date().toISOString() },
         { name: 'tz_offset_min', value: String(tzOffsetMin()) },
         ...photos.map((photo) => ({

@@ -19,6 +19,7 @@ export function recordToResult(record: DayLogRecord): FusionResult | null {
         items: [
           {
             exercise: record.exercise,
+            equipment: record.equipment,
             description: record.description,
             category: record.category,
             muscle_groups: record.muscle_groups,
@@ -78,6 +79,7 @@ export function resultToPatch(kind: EditKind, result: FusionResult): Record<stri
       description: item.description || item.exercise || 'Exercise',
       kcal: Math.max(0, Math.round(item.kcal ?? 0)),
       exercise: item.exercise,
+      equipment: item.equipment,
       category: item.category,
       muscle_groups: item.muscle_groups,
       sets: item.sets,

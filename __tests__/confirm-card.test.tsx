@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react-native';
 import React from 'react';
 
 import { ConfirmCard, notedFactsLine, sourcesLine } from '@/components/confirm-card';
-import type { FusionResult } from '@/lib/types';
+import type { ActivityItem, FusionResult } from '@/lib/types';
 
 // The confirm card has to render every kind the classifier can return — that is the whole
 // of "confirm, don't trust" (concept-v2 §Principles 3). A kind it cannot draw is a log the
@@ -19,6 +19,7 @@ const activities: FusionResult = {
   items: [
     {
       exercise: 'Shoulder Press',
+      equipment: null,
       description: '3 × 10 shoulder press at 40 lb',
       category: null,
       muscle_groups: null,
@@ -182,5 +183,72 @@ describe('sourcesLine', () => {
     );
     expect(sourcesLine({ kcal: null })).toBeNull();
     expect(sourcesLine(null)).toBeNull();
+  });
+});
+
+// The machine is its own fact (migration 0012), and the chip that upgrades a guessed
+// movement is an offer rather than a question.
+describe('the machine, and the offer to name the movement', () => {
+  it('shows the machine as the sub-line and lets it be corrected', () => {
+    const onChange = jest.fn();
+    render(
+      <ConfirmCard
+        result={{
+          ...activities,
+          items: [{ ...(activities as { items: ActivityItem[] }).items[0]!, equipment: 'cable stack' }],
+        }}
+        onChange={onChange}
+        onSave={() => {}}
+        onAddMore={() => {}}
+      />,
+    );
+    expect(screen.getByTestId('activity-equipment-line-0')).toHaveTextContent('cable stack');
+    fireEvent.changeText(screen.getByTestId('activity-equipment-0'), 'plate-loaded row machine');
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [expect.objectContaining({ equipment: 'plate-loaded row machine' })],
+      }),
+    );
+  });
+
+  it('offers the catalogue name in one tap, and never blocks the save', () => {
+    const onChange = jest.fn();
+    const guessed: FusionResult = {
+      kind: 'activities',
+      items: [
+        {
+          ...(activities as { items: ActivityItem[] }).items[0]!,
+          exercise: 'inclined machine chest pull',
+          equipment: 'incline bench row machine',
+          confidence: 'low',
+          refine: { question: 'Was it a Chest-Supported Row?', exercise: 'Chest-Supported Row' },
+        },
+      ],
+    };
+    render(<ConfirmCard result={guessed} onChange={onChange} onSave={() => {}} onAddMore={() => {}} />);
+    // Save is there either way: the chip is ignorable forever.
+    expect(screen.getByTestId('confirm-save')).toBeTruthy();
+
+    fireEvent.press(screen.getByTestId('activity-refine-0'));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [expect.objectContaining({ exercise: 'Chest-Supported Row', refine: null })],
+      }),
+    );
+  });
+
+  it('draws no chip when the movement is already the one it would suggest', () => {
+    const named: FusionResult = {
+      kind: 'activities',
+      items: [
+        {
+          ...(activities as { items: ActivityItem[] }).items[0]!,
+          exercise: 'Chest-Supported Row',
+          refine: { question: 'Was it a Chest-Supported Row?', exercise: 'Chest-Supported Row' },
+        },
+      ],
+    };
+    render(<ConfirmCard result={named} onChange={() => {}} onSave={() => {}} onAddMore={() => {}} />);
+    expect(screen.queryByTestId('activity-refine-0')).toBeNull();
   });
 });

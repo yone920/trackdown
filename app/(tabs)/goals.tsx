@@ -336,7 +336,15 @@ function PlanSections({ profile, onTell }: { profile: Profile | null; onTell: ()
           />
           <Row
             title="Where"
-            sub={dated('environment')}
+            // The gym they named, and how much has been seen there — accrued from their own
+            // logs, never a list anyone filled in (migration 0012).
+            sub={
+              profile?.place
+                ? `${profile.place.name} · ${profile.place.equipment_count} ${
+                    profile.place.equipment_count === 1 ? 'machine' : 'machines'
+                  } seen`
+                : dated('environment')
+            }
             right={typeof profile?.environment === 'string' ? profile.environment : '—'}
           />
           <Row
