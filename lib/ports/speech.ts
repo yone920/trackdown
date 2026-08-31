@@ -43,6 +43,20 @@ let cached: SpeechPort | null = null;
  */
 export function getSpeech(): SpeechPort {
   if (cached) return cached;
+  // Ask the native registry BEFORE evaluating the adapter file: in Expo Go the module is
+  // absent and merely importing 'expo-speech-recognition' throws during module evaluation —
+  // caught or not, the dev overlay turns that into a full-screen redbox.
+  try {
+    const core = require('expo-modules-core') as {
+      requireOptionalNativeModule?: (name: string) => unknown;
+    };
+    if (core.requireOptionalNativeModule && !core.requireOptionalNativeModule('ExpoSpeechRecognition')) {
+      cached = nullSpeech;
+      return cached;
+    }
+  } catch {
+    // fall through to the guarded require below
+  }
   try {
      
     const adapter = require('./speech.expo') as { createSpeech: () => SpeechPort };
