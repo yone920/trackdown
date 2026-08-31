@@ -1,7 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Control } from '@/components/control';
 import { IconCamera, IconChevronLeft, IconKeyboard, IconMic } from '@/components/icons';
@@ -12,6 +11,7 @@ import { clock } from '@/lib/format';
 import { keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
 import { getSpeech } from '@/lib/ports/speech';
 import { localDateKey, useAskCoach, useCoachNext, useUpdateGoal } from '@/lib/queries';
+import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
 import type { CoachBrief } from '@/lib/types';
 
@@ -37,7 +37,7 @@ import type { CoachBrief } from '@/lib/types';
 
 export default function Coach() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const insets = useScreenInsets();
   const inputRef = useRef<TextInput>(null);
   const speech = useMemo(() => getSpeech(), []);
 

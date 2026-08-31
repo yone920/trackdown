@@ -1,7 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useMemo } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DayArc } from '@/components/day-arc';
 import { EvidenceThumbs } from '@/components/evidence';
@@ -14,6 +13,7 @@ import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { openExercise } from '@/lib/exercise';
 import { clock, dateEyebrow, dateLabel, grams, kcal, slotLabel } from '@/lib/format';
 import { localDateKey, useDay, useDeleteRecord, useGoals, useProfile, useWeek } from '@/lib/queries';
+import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
 import { todayCards } from '@/lib/today-cards';
 import type { ActionKind, DayView, DeltaVsLast, MealSlot } from '@/lib/types';
@@ -37,7 +37,7 @@ const SLOT_ORDER: MealSlot[] = ['breakfast', 'lunch', 'dinner', 'snack'];
 
 export default function Today() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const insets = useScreenInsets();
   // Recomputed on every render, so an app left open overnight asks for the new day.
   const date = localDateKey();
 

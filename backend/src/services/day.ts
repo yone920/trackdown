@@ -405,7 +405,7 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 		await db.query<TdeeProfile & { eatback: Eatback; training_days: number | null }>(
 			`SELECT sex, birth_year, height_cm, activity_level, goal_pace, goal_weight_lb,
 			        pregnant_or_lactating, health_concern, daily_calorie_target, protein_g,
-			        carbs_max_g, eatback, training_days
+			        carbs_max_g, eatback, training_days, stated_at
 			   FROM profiles WHERE id = $1`,
 			[userId]
 		)

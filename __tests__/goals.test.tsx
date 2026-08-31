@@ -43,7 +43,7 @@ const PROFILE = {
   constraints: ['bad left knee'],
   preferences: [],
   stated_at: { training_days: '2026-08-01T00:00:00.000Z' },
-  targets: { source: 'computed', eat_target: 2254, eatback: 'half' },
+  targets: { source: 'derived', eat_target: 2254, eatback: 'half' },
 };
 
 function serve(goals: unknown, profile: Record<string, unknown> = PROFILE) {
@@ -184,5 +184,41 @@ describe('Goals — the place they train', () => {
     renderGoals();
     await waitFor(() => expect(screen.getAllByText('How you train').length).toBeGreaterThan(0));
     expect(screen.queryByText(/machines seen/)).toBeNull();
+  });
+});
+
+// "Daily target 2100 · From stated", on an account that had stated nothing (field report
+// 2026-08-31). 2100 is the `daily_calorie_target` column's DEFAULT; the server now says
+// where the number came from and this row says it in words.
+describe('Goals — where the daily target came from', () => {
+  const targets = (source: string, eat_target: number | null = 2100) => ({
+    ...PROFILE,
+    targets: { source, eat_target, eatback: 'half' },
+  });
+
+  it('says the stats worked it out', async () => {
+    serve({ active: [], history: [], no_goal: true }, targets('derived', 2254));
+    renderGoals();
+    await waitFor(() => expect(screen.getByText('From your stats')).toBeTruthy());
+    expect(screen.getByText('2254')).toBeTruthy();
+  });
+
+  it('says a default is a default, not something the user stated', async () => {
+    serve({ active: [], history: [], no_goal: true }, targets('default'));
+    renderGoals();
+    await waitFor(() => expect(screen.getByText('Default until you tell me more')).toBeTruthy());
+    expect(screen.queryByText('From stated')).toBeNull();
+  });
+
+  it('still credits a number the user did state', async () => {
+    serve({ active: [], history: [], no_goal: true }, targets('stated'));
+    renderGoals();
+    await waitFor(() => expect(screen.getByText('From stated')).toBeTruthy());
+  });
+
+  it('asks for the missing facts when there is no target at all', async () => {
+    serve({ active: [], history: [], no_goal: true }, targets('none', null));
+    renderGoals();
+    await waitFor(() => expect(screen.getByText('Tell me your height, age and weight')).toBeTruthy());
   });
 });

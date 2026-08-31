@@ -1,6 +1,5 @@
 import { useCallback, useMemo } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Bar, Columns, TrendLine } from '@/components/charts';
 import { Card } from '@/components/kit';
@@ -12,6 +11,7 @@ import {
   type ProgressSection,
 } from '@/lib/progress-sections';
 import { useDays, useGoalProgress, useGoals } from '@/lib/queries';
+import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, SPACE, TABULAR } from '@/lib/theme';
 import type { DayRow, GoalWithProgress } from '@/lib/types';
 
@@ -30,7 +30,7 @@ import type { DayRow, GoalWithProgress } from '@/lib/types';
 const HISTORY_DAYS = 60;
 
 export default function Progress() {
-  const insets = useSafeAreaInsets();
+  const insets = useScreenInsets();
   const goals = useGoals();
   const days = useDays(undefined, HISTORY_DAYS);
 

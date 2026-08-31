@@ -179,11 +179,16 @@ describe("computeDayTargets", () => {
 		daily_calorie_target: 2100,
 		protein_g: null,
 		carbs_max_g: null,
+		// Nothing said out loud: 2100 is the column's DEFAULT, not a number anyone chose.
+		stated_at: {},
 	};
+
+	/** The same profile, but the 2100 is one the user actually gave. */
+	const said: TdeeProfile = { ...full, stated_at: { daily_calorie_target: "2026-08-01T00:00:00.000Z" } };
 
 	it("computes the target from the day's weight, not the profile's stated number", () => {
 		const targets = computeDayTargets(full, 195, TODAY);
-		expect(targets).toMatchObject({ tdee: 2828, target: 2262, deficit: -566, source: "computed" });
+		expect(targets).toMatchObject({ tdee: 2828, target: 2262, deficit: -566, source: "derived" });
 		expect(targets.macros).toMatchObject({ protein_g: 159 });
 	});
 
@@ -198,14 +203,29 @@ describe("computeDayTargets", () => {
 		expect(targets.macros).toMatchObject({ protein_g: 200, carbs_g: 100, fat_g: 63 });
 	});
 
-	it("falls back to the profile's stated target when the TDEE inputs are incomplete", () => {
-		expect(computeDayTargets({ ...full, height_cm: null }, 195, TODAY)).toMatchObject({
+	it("falls back to daily_calorie_target when the TDEE inputs are incomplete", () => {
+		expect(computeDayTargets({ ...said, height_cm: null }, 195, TODAY)).toMatchObject({
 			tdee: null,
 			target: 2100,
 			source: "stated",
 		});
 		// No weight is the common case on a brand-new account.
-		expect(computeDayTargets(full, null, TODAY)).toMatchObject({ target: 2100, source: "stated" });
+		expect(computeDayTargets(said, null, TODAY)).toMatchObject({ target: 2100, source: "stated" });
+	});
+
+	// The field report of 2026-08-31: a profile that had been reset showed "Daily target
+	// 2100 · From stated" when nothing had been stated. 2100 is the column's DEFAULT, and
+	// `stated_at` is the only evidence either way.
+	it("calls the column's own default a default, not something the user stated", () => {
+		expect(computeDayTargets({ ...full, height_cm: null }, 195, TODAY)).toMatchObject({
+			target: 2100,
+			source: "default",
+		});
+		expect(computeDayTargets(full, null, TODAY)).toMatchObject({ target: 2100, source: "default" });
+		// A profile from before the column existed, or one read without `stated_at`.
+		expect(computeDayTargets({ ...full, stated_at: null }, null, TODAY).source).toBe("default");
+		// And a target the user did state stays stated even when it equals the default.
+		expect(computeDayTargets(said, null, TODAY).source).toBe("stated");
 	});
 
 	it("has no target at all rather than an invented one", () => {
