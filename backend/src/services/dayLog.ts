@@ -37,6 +37,8 @@ export type DayLogRecord =
 			kind: "activity";
 			description: string;
 			exercise: string | null;
+			/** The catalogue row it resolved to — what makes the name tappable in the DayLog. */
+			exercise_id: string | null;
 			category: string | null;
 			muscle_groups: string[];
 			sets: number | null;
@@ -147,6 +149,7 @@ interface ActivityRow {
 	logged_at: string;
 	description: string;
 	exercise: string | null;
+	exercise_id: string | null;
 	category: string | null;
 	muscle_groups: string[] | null;
 	sets: number | null;
@@ -197,8 +200,8 @@ export async function dayLog(db: Queryable, { userId, date, tzOffsetMin }: DayLo
 	const window = [userId, startUtc.toISOString(), endUtc.toISOString()];
 
 	const activities = await db.query<ActivityRow>(
-		`SELECT id, logged_at, description, exercise, category, muscle_groups, sets, reps, load_lb,
-		        duration_min, distance_mi, kcal, source, confidence
+		`SELECT id, logged_at, description, exercise, exercise_id, category, muscle_groups, sets, reps,
+		        load_lb, duration_min, distance_mi, kcal, source, confidence
 		   FROM activities WHERE user_id = $1 AND logged_at >= $2 AND logged_at < $3`,
 		window
 	);
@@ -263,6 +266,7 @@ export async function dayLog(db: Queryable, { userId, date, tzOffsetMin }: DayLo
 			kind: "activity",
 			description: row.description,
 			exercise: row.exercise,
+			exercise_id: row.exercise_id,
 			category: row.category,
 			muscle_groups: row.muscle_groups ?? [],
 			sets: row.sets,

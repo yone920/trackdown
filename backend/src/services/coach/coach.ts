@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type pg from "pg";
 import type { Brief, CoachBriefInputs, CoachPlan, CoachPort, CoachToday } from "../../ports/coach.js";
 import { computeDay, type DayView } from "../day.js";
+import { lookupExercises } from "../entries.js";
 import { listGoals } from "../goals/store.js";
 import { formatClock, localDay, localMinutesOf, type IsoDate } from "../localTime.js";
 import { loadTargets } from "../profile.js";
@@ -27,6 +28,16 @@ import { buildRules, type CoachGoal, type NudgeAction } from "./rules.js";
 
 type Queryable = pg.Pool | pg.PoolClient;
 
+/**
+ * One line of the Do list, plus the catalogue row its name resolves to. The id is
+ * resolved when the brief is *returned*, not when it is stored: the model writes a name,
+ * and a name that was not in the catalogue last week may be in it today. The app never
+ * matches exercise strings — it opens the sheet by this id, or by nothing.
+ */
+export type BriefExercise = Brief["workout"]["exercises"][number] & { exercise_id: string | null };
+
+export type BriefWorkout = Omit<Brief["workout"], "exercises"> & { exercises: BriefExercise[] };
+
 /** The brief as the API returns it and `coach_briefs` stores it. */
 export interface CoachBriefRecord {
 	id: string;
@@ -36,7 +47,7 @@ export interface CoachBriefRecord {
 	context: string | null;
 	headline: string;
 	why: string;
-	workout: Brief["workout"];
+	workout: BriefWorkout;
 	nutrition: Brief["nutrition"];
 	nudge: string;
 	/** What the app can do about the nudge; null when there is nothing to act on. */
@@ -67,6 +78,36 @@ interface BriefRow {
 const BRIEF_COLUMNS = `id, date, asked_at, context, headline, rationale, workout, nutrition,
 	nudge, nudge_action, model, inputs_hash, created_at`;
 
+/** Stored jsonb has no ids in it; `withExerciseIds` fills them in on the way out. */
+function toWorkout(workout: Brief["workout"] | null): BriefWorkout {
+	if (!workout) return { type: "rest", targets: [], exercises: [] };
+	return { ...workout, exercises: workout.exercises.map((exercise) => ({ ...exercise, exercise_id: null })) };
+}
+
+/**
+ * Resolves each Do-list name to its `exercise_catalog` id, by name or alias — the same
+ * lookup that gives a logged activity its `exercise_id`, so the sheet the coach links to
+ * is the sheet the Day screen links to.
+ */
+export async function withExerciseIds(db: Queryable, brief: CoachBriefRecord): Promise<CoachBriefRecord> {
+	const exercises = brief.workout.exercises;
+	if (exercises.length === 0) return brief;
+	const matches = await lookupExercises(
+		db,
+		exercises.map((exercise) => exercise.name)
+	);
+	return {
+		...brief,
+		workout: {
+			...brief.workout,
+			exercises: exercises.map((exercise) => ({
+				...exercise,
+				exercise_id: matches.get(exercise.name.trim().toLowerCase())?.id ?? null,
+			})),
+		},
+	};
+}
+
 function toRecord(row: BriefRow, cached: boolean): CoachBriefRecord {
 	return {
 		id: row.id,
@@ -76,7 +117,7 @@ function toRecord(row: BriefRow, cached: boolean): CoachBriefRecord {
 		headline: row.headline ?? "",
 		// `rationale` is 0004's name for the brief's `why`; 0008's note explains the pairing.
 		why: row.rationale ?? "",
-		workout: row.workout ?? { type: "rest", targets: [], exercises: [] },
+		workout: toWorkout(row.workout),
 		nutrition: row.nutrition ?? { kcal: 0, protein_g: 0, carbs_max_g: null, ideas: [], why: "" },
 		nudge: row.nudge ?? "",
 		nudge_action: row.nudge_action,
@@ -383,6 +424,18 @@ export class CoachUnavailableError extends Error {
  * the exact-inputs cache).
  */
 export async function nextBrief(
+	db: Queryable,
+	coach: CoachPort,
+	userId: string,
+	options: NextBriefOptions
+): Promise<NextBriefResult> {
+	const result = await chooseBrief(db, coach, userId, options);
+	// Whichever way the brief was arrived at — cache, model, or the previous one after an
+	// outage — the Do list leaves here with its catalogue ids on it.
+	return { ...result, brief: await withExerciseIds(db, result.brief) };
+}
+
+async function chooseBrief(
 	db: Queryable,
 	coach: CoachPort,
 	userId: string,

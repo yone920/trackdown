@@ -3,11 +3,13 @@ import { createSmtpEmailer } from "./adapters/email/smtp.js";
 import { createAnthropicLlm } from "./adapters/llm/anthropic.js";
 import { createOpenAiLlm } from "./adapters/llm/openai.js";
 import { createUnavailableLlm } from "./adapters/llm/unavailable.js";
+import { createLocalExerciseMediaStore, exerciseMediaRoot } from "./adapters/storage/exerciseMedia.js";
 import { createLocalEvidenceStore } from "./adapters/storage/local.js";
 import type { Config, EvidenceProvider, LlmProvider } from "./config/index.js";
 import type { CoachPort } from "./ports/coach.js";
 import type { EmailPort } from "./ports/email.js";
 import type { LlmPort } from "./ports/llm.js";
+import type { ExerciseMediaStore } from "./ports/exerciseMedia.js";
 import type { EvidenceStore } from "./ports/storage.js";
 
 // The composition root: the only place that knows which adapter implements which port.
@@ -27,6 +29,8 @@ export interface Container {
 	email: EmailPort;
 	/** The bytes behind an evidence row (WP2). */
 	evidence: EvidenceStore;
+	/** The exercise illustrations, imported by scripts/import-exercise-media.ts. */
+	exerciseMedia: ExerciseMediaStore;
 }
 
 export function createContainer(config: Config): Container {
@@ -37,6 +41,9 @@ export function createContainer(config: Config): Container {
 		coach: createLlmCoach(coachLlm),
 		email: createSmtpEmailer(config.smtp),
 		evidence: createEvidenceStore(config.evidence.provider, config.evidence.dir),
+		// Same volume, its own directory: the illustrations are shared and addressable,
+		// evidence is private and unguessable (src/ports/exerciseMedia.ts).
+		exerciseMedia: createLocalExerciseMediaStore({ root: exerciseMediaRoot(config.evidence.dir) }),
 	};
 }
 

@@ -34,5 +34,11 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD node -e "require('http').get('http://127.0.0.1:8000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
 
-# Apply pending migrations, then serve. Both are idempotent, so a restart is safe.
-CMD ["sh", "-c", "node dist/db/migrate.js && node dist/server.js"]
+# Apply pending migrations, import the exercise illustrations, then serve. All three are
+# idempotent, so a restart is safe.
+#
+# The import is deliberately NOT allowed to stop the boot: it is the only step here that
+# needs the internet, and an exercise sheet without pictures is a working screen while a
+# container that will not start is an outage. With the uploads volume already populated it
+# short-circuits before it even fetches the dataset, so a restart costs nothing.
+CMD ["sh", "-c", "node dist/db/migrate.js && { node dist/scripts/import-exercise-media.js || echo '⚠️  Exercise illustrations were not imported — sheets will show names only. Re-run: npm run import-exercise-media'; } && node dist/server.js"]
