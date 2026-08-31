@@ -173,17 +173,20 @@ Both halves of that were real bugs.
 **Measured, through `https://trackdown-api.yonelab.net` from the Omarchy VM** (five runs
 each, seconds):
 
-| | before (dd37f1f) | after |
-|---|---|---|
-| `/api/exercises/:id` TTFB | 0.106 – 0.173 | see the table in the branch report |
-| `/api/exercises/:id/media/0` total (54 KB) | 0.119 – 0.171 | |
-| `/health` (no auth, no route work) | 0.099 – 0.151 | |
+| | before (`dd37f1f`) | after (`25e0834`) | `Server-Timing` |
+|---|---|---|---|
+| `/api/exercises/:id` TTFB | 0.106 – 0.173 | 0.095 – 0.155 | `auth 2.1–2.2 · db 0.3–0.7 · total 2.9–3.3` |
+| `/api/exercises/:id/media/0` total, 54 KB | 0.119 – 0.171 | 0.107 – 0.156 | `auth 1.7–2.5 · db 0.3–0.5 · open 0.1 · total 2.5–3.5` |
+| `/health` — no auth, no route work | 0.099 – 0.151 | 0.094 – 0.112 | — |
 
-The answer the measurement gave: **the server is not the slow part.** An unauthenticated
-`/health` costs the same 100–150 ms as either exercise route, so effectively all of it is
-the cloudflared tunnel round trip from this VM; the `Server-Timing` header now says so per
-request instead of leaving it to be guessed. Nothing was "fixed" server-side because there
-was nothing to fix there — the win is the disk cache, which removes the request entirely on
+The answer the measurement gave: **the server is not the slow part, and it is not close.**
+Either exercise route does about **3 ms** of work — 2 ms of it the Better Auth session
+lookup, well under a millisecond for the catalogue row, a tenth of a millisecond to open
+the file — against 95–155 ms on the wire. An unauthenticated `/health`, which does none of
+that work, costs the same 95–112 ms, so effectively all of the wait is the cloudflared
+tunnel round trip from this VM. The header now says that per request instead of leaving it
+to be guessed. Nothing was "fixed" server-side because there was nothing to fix there — the
+per-request auth query is 2 ms and stays — the win is the disk cache, which removes the request entirely on
 every look after the first, and the skeletons, which remove the wait from the part the user
 sees.
 
@@ -260,9 +263,10 @@ sees.
 - **`Server-Timing` is on two routes.** The coach and the day are the other two the phone
   waits on, and both are dominated by a model call that is already logged. Add it when
   there is a question it would answer.
-- **The tunnel is the latency.** 100–150 ms of round trip from this VM on every request,
-  including `/health`. Nothing in this branch addresses it; a serious answer is a closer
-  edge or a shorter path, and it is a network decision, not a code one.
+- **The tunnel is the latency.** ~100 ms of round trip from this VM on every request,
+  including `/health`, against 3 ms of server. Nothing in this branch addresses it; a
+  serious answer is a closer edge or a shorter path, and it is a network decision, not a
+  code one.
 
 ---
 
