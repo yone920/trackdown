@@ -211,7 +211,8 @@ function hasMuscle(activity: FactActivity, muscle: string): boolean {
 	return activity.muscle_groups.some((group) => group.trim().toLowerCase() === muscle);
 }
 
-function isCardio(activity: FactActivity): boolean {
+/** Cardio, for every reader of this window — the coach's features and the training board. */
+export function isCardio(activity: FactActivity): boolean {
 	if (activity.category) return activity.category === "cardio";
 	// Nothing said: minutes with no sets is cardio-shaped, which is the only honest guess.
 	return activity.sets == null && (activity.duration_min ?? 0) > 0;
