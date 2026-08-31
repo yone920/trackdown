@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import React from 'react';
 
 import Progress from '@/app/(tabs)/progress';
-import type { TrainingBoard } from '@/lib/types';
+import type { BoardCardioRow, TrainingBoard } from '@/lib/types';
 import { makeGoal, makeMetric, makeWeek } from './fixtures';
 
 // The merged Progress tab (user decision 2026-08-31): "what am I chasing and where do I
@@ -90,6 +90,34 @@ const CHIN = {
   },
 };
 
+/** The field report's own row: it used to be drawn between BENCH and CHIN. */
+const WALK: BoardCardioRow = {
+  exercise: 'Incline Treadmill Walk',
+  exercise_id: 'ex-walk',
+  category: 'cardio',
+  last_date: '2026-08-30',
+  days_since: 1,
+  sessions: 4,
+  duration_min: 20,
+  distance_mi: 1.2,
+  pace_min_mi: 16.67,
+  best_pace_min_mi: 15.5,
+  summary_text: '20 min · 1.2 mi · 16.7 min/mi',
+  delta_text: '+5 min in four weeks',
+  sentiment: 'neutral',
+  series: [
+    { date: '2026-08-23', duration_min: 15, distance_mi: 0.9, pace_min_mi: 16.67 },
+    { date: '2026-08-30', duration_min: 20, distance_mi: 1.2, pace_min_mi: 16.67 },
+  ],
+  next: {
+    rule: 'cardio',
+    minutes: 22,
+    text: '22 min next',
+    eta: null,
+    why: '30 of 150 min this week, 120 short.',
+  },
+};
+
 function makeBoard(overrides: Partial<TrainingBoard> = {}): TrainingBoard {
   return {
     date: '2026-08-31',
@@ -118,6 +146,8 @@ function makeBoard(overrides: Partial<TrainingBoard> = {}): TrainingBoard {
       short_by_min: 120,
       last: { date: '2026-08-29', pace_min_mi: 10.2, distance_mi: 3 },
       best: { date: '2026-08-20', pace_min_mi: 9.4, distance_mi: 2 },
+      activities: [WALK],
+      target_stated: false,
     },
     body: {
       latest: 210.4,
@@ -136,7 +166,16 @@ function makeBoard(overrides: Partial<TrainingBoard> = {}): TrainingBoard {
 const EMPTY_BOARD = makeBoard({
   lifts: [],
   frequency: { weeks: [{ start: '2026-08-24', sessions: 0 }], sessions_this_week: 0, average_per_week: 0, training_days_target: null, muscles: [] },
-  cardio: { weeks: [{ start: '2026-08-24', minutes: 0 }], minutes_this_week: 0, weekly_target_min: 150, short_by_min: 150, last: null, best: null },
+  cardio: {
+    weeks: [{ start: '2026-08-24', minutes: 0 }],
+    minutes_this_week: 0,
+    weekly_target_min: 150,
+    short_by_min: 150,
+    last: null,
+    best: null,
+    activities: [],
+    target_stated: false,
+  },
   body: { latest: null, latest_date: null, avg_7d: null, trend_per_week: null, series: [] },
 });
 
@@ -201,6 +240,64 @@ describe('Progress — the goal card', () => {
     expect(screen.getByTestId('goal-standing-goal-1').props.children).toContain('10.4 lb to go');
     expect(screen.getByTestId('goal-pace-goal-1')).toBeTruthy();
     expect(screen.getByTestId('goal-week-goal-1').props.children).toContain('4 of 7 served');
+  });
+
+  // The field report (2026-08-31): one weigh-in drew a tall empty box with a dashed line
+  // across it and the words "No movement yet" under it. Nothing had moved because nothing
+  // can move with one point.
+  const weighInsGoal = (series: { date: string; value: number }[]) => ({
+    ...makeGoal('lose_fat', [
+      makeMetric({
+        measure: 'body_weight',
+        unit: 'lb',
+        direction: 'decrease',
+        target: 200,
+        current: series[series.length - 1]?.value ?? null,
+        baseline: series[0]?.value ?? null,
+        percent: series.length > 0 ? 0.13 : null,
+        series,
+      }),
+    ]),
+    title: 'Get to 200 lb',
+    metrics: [{ measure: 'body_weight', target: 200, unit: 'lb', by: '2027-03-01' }],
+  });
+
+  it('names the one weigh-in and what would make it a line, on a short strip', async () => {
+    serve({
+      goals: { active: [weighInsGoal([{ date: '2026-08-31', value: 212 }])], history: [], no_goal: false },
+    });
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('goal-pace-goal-1')).toBeTruthy());
+
+    const said = screen.getByTestId('goal-pace-goal-1').props.children as string;
+    expect(said).toContain('One weigh-in so far (212.0 lb');
+    expect(said).toContain('Weigh in a few mornings and your trend appears.');
+    expect(said).not.toContain('No movement yet');
+    // No 110 px of empty box under it.
+    expect(screen.getByTestId('goal-chart-goal-1').props.style).toMatchObject({ height: 44 });
+  });
+
+  it('asks for the first reading when there is none, and draws no chart at all', async () => {
+    serve({ goals: { active: [weighInsGoal([])], history: [], no_goal: false } });
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('goal-pace-goal-1')).toBeTruthy());
+    expect(screen.getByTestId('goal-standing-goal-1').props.children).toContain('Nothing measured yet');
+    expect(screen.getByTestId('goal-pace-goal-1').props.children).toBe('Log a weigh-in to start the line.');
+    expect(screen.queryByTestId('goal-chart-goal-1')).toBeNull();
+  });
+
+  it('leaves two readings and up exactly as they were', async () => {
+    serve({
+      goals: {
+        active: [weighInsGoal([{ date: '2026-08-03', value: 212 }, { date: '2026-08-31', value: 210.4 }])],
+        history: [],
+        no_goal: false,
+      },
+    });
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('goal-chart-goal-1')).toBeTruthy());
+    expect(screen.getByTestId('goal-chart-goal-1').props.style).toMatchObject({ height: 110 });
+    expect(screen.getByTestId('goal-pace-goal-1').props.children).not.toContain('so far');
   });
 
   it('draws no weight section of its own when a weight goal already owns that line', async () => {
@@ -337,6 +434,51 @@ describe('Progress — frequency, cardio and body', () => {
     expect(screen.getByTestId('cardio-pace').props.children.join('')).toContain('10.2 min/mi');
   });
 
+  // The field report (2026-08-31): "Incline Treadmill Walk · 20 min next" was a row in the
+  // Lifts section, between two barbell rows.
+  it('gives each cardio activity its own row, in minutes and miles, out of the lifts', async () => {
+    serve();
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('cardio-board')).toBeTruthy());
+
+    expect(screen.getByText('Incline Treadmill Walk')).toBeTruthy();
+    expect(screen.getByTestId('cardio-sub-Incline Treadmill Walk').props.children).toContain(
+      '20 min · 1.2 mi · 16.7 min/mi · 1d ago',
+    );
+    // Minutes, not a repeat of the last session, and never a load.
+    expect(screen.getByTestId('cardio-next-Incline Treadmill Walk').props.children).toBe('22 min next');
+    expect(screen.queryByTestId('lift-Incline Treadmill Walk')).toBeNull();
+  });
+
+  it('never prints a pound on a cardio row', async () => {
+    serve();
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('cardio-board')).toBeTruthy());
+    const row = within(screen.getByTestId('cardio-Incline Treadmill Walk'));
+    expect(row.queryByText(/lb/)).toBeNull();
+    expect(row.getAllByText(/min/).length).toBeGreaterThan(0);
+  });
+
+  it('hides the cardio section entirely when there is none and nobody asked for any', async () => {
+    serve({ board: EMPTY_BOARD });
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('frequency-empty')).toBeTruthy());
+    expect(screen.queryByText('Cardio')).toBeNull();
+    expect(screen.queryByTestId('cardio')).toBeNull();
+    expect(screen.queryByTestId('cardio-empty')).toBeNull();
+  });
+
+  it('says so quietly when a goal asked for cardio and nothing has been logged', async () => {
+    serve({
+      board: makeBoard({
+        cardio: { ...EMPTY_BOARD.cardio, weekly_target_min: 120, target_stated: true },
+      }),
+    });
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('cardio-empty')).toBeTruthy());
+    expect(screen.getByText(/120 min a week is what the goal asks for/)).toBeTruthy();
+  });
+
   it('shows the weight line when no goal owns it', async () => {
     serve();
     renderProgress();
@@ -348,7 +490,6 @@ describe('Progress — frequency, cardio and body', () => {
     serve({ board: EMPTY_BOARD });
     renderProgress();
     await waitFor(() => expect(screen.getByTestId('frequency-empty')).toBeTruthy());
-    expect(screen.getByTestId('cardio-empty')).toBeTruthy();
     expect(screen.getByTestId('body-empty')).toBeTruthy();
   });
 });

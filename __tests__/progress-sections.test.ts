@@ -174,6 +174,68 @@ describe('the goal card — where I stand, and whether the rate gets me there', 
     expect(card.rate).toBeNull();
   });
 
+  // The field report (2026-08-31): one weigh-in drew a tall empty box and "No movement yet".
+  describe('fewer than two readings', () => {
+    const withSeries = (points: { date: string; value: number }[]) => {
+      const goal = makeGoal('lose_fat', [
+        makeMetric({
+          measure: 'body_weight',
+          unit: 'lb',
+          target: 200,
+          current: points[points.length - 1]?.value ?? null,
+          baseline: points[0]?.value ?? null,
+          percent: points.length > 0 ? 0.1 : null,
+          series: points,
+        }),
+      ]);
+      return { ...goal, metrics: [{ measure: 'body_weight', target: 200, unit: 'lb', by: '2027-03-01' }] };
+    };
+
+    it('names the one reading and what would make it a line', () => {
+      const card = goalCard(withSeries([{ date: '2026-08-31', value: 212 }]), { today: TODAY });
+      expect(card.pace).toEqual({
+        text: 'One weigh-in so far (212.0 lb · Mon, Aug 31). Weigh in a few mornings and your trend appears.',
+        tone: 'mute',
+      });
+      // A strip: the dot against its target, with no room reserved for a projection.
+      expect(card.chart?.sparse).toBe(true);
+      expect(card.chart?.values).toEqual([212]);
+      expect(card.chart?.projection).toEqual([null]);
+      expect(card.rate).toBeNull();
+    });
+
+    it('asks for the first reading when there is none', () => {
+      const card = goalCard(withSeries([]), { today: TODAY });
+      expect(card.standing).toBe('Nothing measured yet');
+      expect(card.pace?.text).toBe('Log a weigh-in to start the line.');
+      expect(card.chart).toBeNull();
+    });
+
+    it('speaks each measure’s own language', () => {
+      const strength = makeGoal('build_strength', [
+        makeMetric({
+          measure: 'exercise_load',
+          label: 'Best load',
+          scope: 'Bench Press',
+          unit: 'lb',
+          target: 185,
+          current: 135,
+          baseline: 135,
+          series: [{ date: '2026-08-31', value: 135 }],
+        }),
+      ]);
+      const said = goalCard(strength, { today: TODAY }).pace?.text ?? '';
+      expect(said).toContain('One session so far (135.0 lb');
+      expect(said).toContain('Log a few more sessions');
+    });
+
+    it('leaves two readings and up exactly as they were', () => {
+      const card = goalCard(losing(200, '2027-03-01'), { today: TODAY });
+      expect(card.chart?.sparse).toBe(false);
+      expect(card.pace?.text).toBe('On pace for Mon, Mar 1');
+    });
+  });
+
   it('refuses to call two days a trend', () => {
     expect(ratePerWeek([{ date: '2026-08-30', value: 212 }, { date: '2026-08-31', value: 210 }])).toBeNull();
   });

@@ -771,8 +771,50 @@ export type BoardLift = {
   next: BoardNextStep;
 };
 
+export type BoardCardioPoint = {
+  date: IsoDate;
+  duration_min: number | null;
+  distance_mi: number | null;
+  pace_min_mi: number | null;
+};
+
+/** Minutes, never a load: cardio steps by the week's total, not by the last session. */
+export type BoardCardioNext = {
+  rule: 'cardio';
+  minutes: number | null;
+  /** "22 min next", "Hold 20 min". */
+  text: string;
+  eta: string | null;
+  why: string;
+};
+
+/**
+ * One row per cardio activity (field report 2026-08-31: a treadmill walk was drawn in the
+ * Lifts section). Deliberately not a `BoardLift` with the pounds left blank — there is no
+ * load, set or rep on it, so nothing here can print "lb".
+ */
+export type BoardCardioRow = {
+  exercise: string;
+  exercise_id: string | null;
+  category: ActivityCategory | null;
+  last_date: IsoDate;
+  days_since: number;
+  sessions: number;
+  duration_min: number | null;
+  distance_mi: number | null;
+  pace_min_mi: number | null;
+  best_pace_min_mi: number | null;
+  /** "20 min · 1.2 mi · 16.7 min/mi" — as much of it as the session measured. */
+  summary_text: string;
+  delta_text: string | null;
+  sentiment: 'good' | 'watch' | 'neutral';
+  series: BoardCardioPoint[];
+  next: BoardCardioNext;
+};
+
 export type TrainingBoard = {
   date: IsoDate;
+  /** Strength only since the split; an older server also put the cardio rows in here. */
   lifts: BoardLift[];
   frequency: {
     weeks: { start: IsoDate; sessions: number }[];
@@ -802,6 +844,13 @@ export type TrainingBoard = {
     short_by_min: number;
     last: { date: IsoDate; pace_min_mi: number; distance_mi: number } | null;
     best: { date: IsoDate; pace_min_mi: number; distance_mi: number } | null;
+    /**
+     * The rows, when the server sends them. Optional for one release: an older server does
+     * not know about them, which is not the same as sending an empty list.
+     */
+    activities?: BoardCardioRow[];
+    /** True when a goal named the weekly minutes rather than the WHO's 150 standing in. */
+    target_stated?: boolean;
   };
   body: {
     latest: number | null;

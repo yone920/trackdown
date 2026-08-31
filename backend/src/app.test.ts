@@ -4358,6 +4358,21 @@ describe("the training board", () => {
 		expect(chin.next.text).toContain("of assistance");
 	});
 
+	// The field report (2026-08-31): a treadmill walk was a row in the Lifts section.
+	it("puts the run in cardio and keeps it out of the lifts", async () => {
+		const res = await request(app).get(`/api/training/board?tz=${tz}`).set(headers);
+		expect(res.body.lifts.map((lift: { exercise: string }) => lift.exercise)).not.toContain("Running");
+
+		const running = res.body.cardio.activities.find((row: { exercise: string }) => row.exercise === "Running");
+		expect(running).toMatchObject({ duration_min: 30, distance_mi: 3, pace_min_mi: 10, sessions: 1 });
+		expect(running.summary_text).toBe("30 min · 3 mi · 10 min/mi");
+		expect(running.summary_text).not.toContain("lb");
+		// 30 min against a 150 min week, so the shortfall capped at +10 % on the last session.
+		expect(running.next).toMatchObject({ rule: "cardio", minutes: 33, text: "33 min next" });
+		// Nobody stated a weekly figure, so the target is the WHO's and the tab may say so.
+		expect(res.body.cardio.target_stated).toBe(false);
+	});
+
 	it("counts sessions a week, sets per muscle group, cardio minutes and the weigh-ins", async () => {
 		const res = await request(app).get(`/api/training/board?tz=${tz}`).set(headers);
 		expect(res.body.frequency.weeks).toHaveLength(8);
@@ -4378,6 +4393,7 @@ describe("the training board", () => {
 		const res = await request(app).get("/api/training/board?tz=0").set({ Authorization: `Bearer ${token}` });
 		expect(res.status).toBe(200);
 		expect(res.body.lifts).toEqual([]);
+		expect(res.body.cardio.activities).toEqual([]);
 		expect(res.body.frequency.sessions_this_week).toBe(0);
 		expect(res.body.cardio.last).toBeNull();
 		expect(res.body.body.latest).toBeNull();

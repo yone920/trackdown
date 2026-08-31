@@ -43,13 +43,33 @@ const run = (date: string, minutes: number, miles: number | null = null) =>
 		kcal: 240,
 	});
 
-function board(input: Partial<DayFacts>, extra: Partial<Parameters<typeof buildBoard>[0]> = {}): TrainingBoard {
+/** The field report's own row: the treadmill walk that was sitting between two lifts. */
+const walk = (date: string, minutes: number, miles: number | null = null) =>
+	activity(date, {
+		exercise: "Incline Treadmill Walk",
+		category: "cardio",
+		duration_min: minutes,
+		distance_mi: miles,
+		kcal: 120,
+	});
+
+const yoga = (date: string, minutes = 30) =>
+	activity(date, { exercise: "Yoga", category: "mobility", duration_min: minutes });
+
+function board(
+	input: Partial<DayFacts>,
+	extra: Partial<Parameters<typeof buildBoard>[0]> = {},
+	featureInput: { cardioTargetMin?: number | null } = {}
+): TrainingBoard {
 	const day = facts(input);
-	return buildBoard({ features: computeFeatures({ facts: day }), facts: day, ...extra });
+	return buildBoard({ features: computeFeatures({ facts: day, ...featureInput }), facts: day, ...extra });
 }
 
 const liftNamed = (result: TrainingBoard, name: string) =>
 	result.lifts.find((lift) => lift.exercise === name);
+
+const cardioNamed = (result: TrainingBoard, name: string) =>
+	result.cardio.activities.find((row) => row.exercise === name);
 
 describe("one row per regularly-logged exercise", () => {
 	it("carries the working load, the sessions and a series to draw", () => {
@@ -140,12 +160,6 @@ describe("the next step, and when", () => {
 		expect(next?.text).toBe("Repeat 135 lb to set a baseline");
 	});
 
-	it("prescribes cardio by the week", () => {
-		const next = liftNamed(board({ activities: [run(daysAgo(2), 30, 3)] }), "Running")?.next;
-		expect(next?.rule).toBe("cardio");
-		expect(next?.text).toBe("30 min next");
-	});
-
 	it("turns sessions still to go into weeks", () => {
 		expect(etaFor(0, 7)).toBeNull();
 		expect(etaFor(1, 7)).toBe("~1 wk");
@@ -170,7 +184,141 @@ describe("the next step, and when", () => {
 	});
 });
 
+// The field report (2026-08-31): "Incline Treadmill Walk · 20 min next" was a row in the
+// Lifts section, between two barbell rows. Two sections, split by the activity's category.
+describe("lifts and cardio are two sections", () => {
+	const mixed = [
+		bench(daysAgo(2), 135),
+		assistedChin(daysAgo(2), 55),
+		walk(daysAgo(1), 20, 1.2),
+		run(daysAgo(4), 30, 3),
+		yoga(daysAgo(3)),
+	];
+
+	it("keeps lifts — assisted ones included — in lifts, and walks and runs out of them", () => {
+		const result = board({ activities: mixed });
+		expect(result.lifts.map((lift) => lift.exercise).sort()).toEqual(["Assisted Chin-Up", "Bench Press"]);
+		expect(result.cardio.activities.map((row) => row.exercise).sort()).toEqual([
+			"Incline Treadmill Walk",
+			"Running",
+		]);
+	});
+
+	it("puts mobility in neither — the coverage ledger is where a stretch is counted", () => {
+		const result = board({ activities: mixed });
+		expect(liftNamed(result, "Yoga")).toBeUndefined();
+		expect(cardioNamed(result, "Yoga")).toBeUndefined();
+		expect(result.frequency.coverage.find((entry) => entry.key === "stretching")).toMatchObject({
+			days_since: 3,
+			overdue: false,
+		});
+	});
+
+	it("reads an uncategorised row by its shape: minutes with no sets is cardio, a load is not", () => {
+		const result = board({
+			activities: [
+				activity(daysAgo(1), { exercise: "Elliptical", duration_min: 25 }),
+				activity(daysAgo(1), { exercise: "Farmer Carry", load_lb: 50, duration_min: 10 }),
+			],
+		});
+		expect(cardioNamed(result, "Elliptical")).toBeTruthy();
+		expect(liftNamed(result, "Farmer Carry")).toBeTruthy();
+		expect(liftNamed(result, "Elliptical")).toBeUndefined();
+	});
+
+	it("says minutes, distance and pace on a cardio row, and never a pound", () => {
+		const result = board({ activities: [walk(daysAgo(9), 20, 1.1), walk(daysAgo(1), 20, 1.2)] });
+		const row = cardioNamed(result, "Incline Treadmill Walk");
+		expect(row).toMatchObject({ duration_min: 20, distance_mi: 1.2, pace_min_mi: 16.67, sessions: 2 });
+		expect(row?.summary_text).toBe("20 min · 1.2 mi · 16.7 min/mi");
+		expect(row?.summary_text).not.toContain("lb");
+		expect(row?.best_pace_min_mi).toBe(16.67);
+		// Oldest first, like every other series on the board.
+		expect(row?.series.map((point) => point.duration_min)).toEqual([20, 20]);
+	});
+
+	it("has no distance and no pace when nobody measured one", () => {
+		const row = cardioNamed(board({ activities: [walk(daysAgo(1), 20)] }), "Incline Treadmill Walk");
+		expect(row).toMatchObject({ duration_min: 20, distance_mi: null, pace_min_mi: null, best_pace_min_mi: null });
+		expect(row?.summary_text).toBe("20 min");
+	});
+
+	it("judges the pace and reports the minutes", () => {
+		const faster = cardioNamed(board({ activities: [run(daysAgo(9), 40, 4), run(daysAgo(1), 27, 3)] }), "Running");
+		expect(faster?.delta_text).toBe("1 min/mi faster");
+		expect(faster?.sentiment).toBe("good");
+
+		// Minutes move without a verdict: a shorter walk on a Tuesday is not a step back,
+		// and the weekly bars are where a short week is actually said.
+		const longer = cardioNamed(board({ activities: [walk(daysAgo(9), 20), walk(daysAgo(1), 25)] }), "Incline Treadmill Walk");
+		expect(longer?.delta_text).toBe("+5 min in four weeks");
+		expect(longer?.sentiment).toBe("neutral");
+
+		expect(cardioNamed(board({ activities: [walk(daysAgo(1), 20)] }), "Incline Treadmill Walk")?.delta_text).toBe(
+			"First session"
+		);
+	});
+});
+
+describe("the cardio next step — the week, not the last session", () => {
+	const next = (activities: Parameters<typeof facts>[0]["activities"], targetMin?: number) =>
+		cardioNamed(board({ activities }, {}, { cardioTargetMin: targetMin ?? null }), "Incline Treadmill Walk")?.next;
+
+	it("steps the last session by 10 %, which is the whole point of not repeating it", () => {
+		// The field row: 20 min logged, 150 min a week the standing target, 130 short.
+		const step = next([walk(daysAgo(1), 20, 1.2)]);
+		expect(step?.rule).toBe("cardio");
+		expect(step?.minutes).toBe(22);
+		expect(step?.text).toBe("22 min next");
+		expect(step?.why).toContain("130 short");
+	});
+
+	it("holds once the week is already there", () => {
+		const step = next([walk(daysAgo(1), 20)], 20);
+		expect(step?.minutes).toBeNull();
+		expect(step?.text).toBe("Hold 20 min");
+		expect(step?.why).toContain("the week is already there");
+	});
+
+	it("never asks for more than the week is short", () => {
+		expect(next([walk(daysAgo(1), 20)], 35)?.text).toBe("15 min next");
+	});
+
+	it("floors at ten minutes, because five is not a session", () => {
+		expect(next([walk(daysAgo(1), 20)], 25)?.minutes).toBe(10);
+	});
+
+	it("starts at half an hour when nothing has been timed", () => {
+		const row = cardioNamed(
+			board({ activities: [activity(daysAgo(1), { exercise: "Rowing", category: "cardio", distance_mi: 2 })] }),
+			"Rowing"
+		);
+		expect(row?.next.minutes).toBe(30);
+		expect(row?.next.why).toContain("Nothing timed yet");
+		expect(row?.summary_text).toBe("2 mi");
+	});
+
+	// The same guarantee the lifts have: one function, quoted twice.
+	it("grows no faster than the brief's own cardio line allows", () => {
+		const day = facts({ activities: [walk(daysAgo(1), 30)] });
+		const features = computeFeatures({ facts: day });
+		const rules = buildRules({ features, goals: [] });
+		const row = cardioNamed(buildBoard({ features, facts: day }), "Incline Treadmill Walk");
+		// The brief rounds a session plan to the nearest five; the row says the step itself.
+		expect(rules.cardio.minutes_today).toBe(35);
+		expect(row?.next.minutes).toBe(33);
+	});
+});
+
 describe("frequency, cardio and body", () => {
+	it("says whether the weekly target was asked for or assumed", () => {
+		expect(board({ activities: [walk(daysAgo(1), 20)] }).cardio.target_stated).toBe(false);
+		expect(
+			board({ activities: [walk(daysAgo(1), 20)] }, { cardioTargetStated: true }).cardio.target_stated
+		).toBe(true);
+	});
+
+
 	it("buckets sessions into whole weeks ending today", () => {
 		const result = board({
 			activities: [bench(daysAgo(1), 135), bench(daysAgo(3), 135), bench(daysAgo(9), 130), bench(daysAgo(30), 125)],
@@ -218,6 +366,7 @@ describe("frequency, cardio and body", () => {
 	it("is quiet rather than wrong with nothing logged", () => {
 		const result = board({});
 		expect(result.lifts).toEqual([]);
+		expect(result.cardio.activities).toEqual([]);
 		expect(result.frequency.sessions_this_week).toBe(0);
 		expect(result.frequency.muscles).toEqual([]);
 		expect(result.body.latest).toBeNull();

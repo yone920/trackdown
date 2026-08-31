@@ -182,6 +182,12 @@ export type GoalCardChart = {
   /** The dotted continuation: null everywhere but today's point and the projected end. */
   projection: (number | null)[];
   target: number | null;
+  /**
+   * One reading and no trend (field report 2026-08-31: one weigh-in drew a tall empty box
+   * with a dashed line across it). The screen collapses this to a short strip — the point
+   * against its target — because 110 px of nothing is a chart pretending to be a chart.
+   */
+  sparse: boolean;
 };
 
 export type GoalCardView = {
@@ -204,6 +210,48 @@ export type GoalCardView = {
 
 /** Measures whose series is already smoothed on the server, so the card can say so. */
 const SMOOTHED_MEASURES = new Set(['body_weight']);
+
+/**
+ * What one of this measure's readings is called, and what the user would do to get another
+ * (field report 2026-08-31). "No movement yet" under a single weigh-in is true and useless:
+ * nothing has moved because nothing can move with one point, and the sentence a person needs
+ * is the one that names what they have and what would make the line appear.
+ */
+const MEASURE_WORDS: Record<string, { one: string; ask: string; start: string }> = {
+  body_weight: { one: 'weigh-in', ask: 'Weigh in a few mornings and your trend appears.', start: 'Log a weigh-in' },
+  calorie_balance: { one: 'day', ask: 'Log a few more days and your trend appears.', start: 'Log a day of eating' },
+  protein_g: { one: 'day', ask: 'Log a few more days and your trend appears.', start: 'Log a day of eating' },
+  carbs_g: { one: 'day', ask: 'Log a few more days and your trend appears.', start: 'Log a day of eating' },
+  weekly_sets: { one: 'session', ask: 'Log a few more sessions and your trend appears.', start: 'Log a session' },
+  exercise_load: { one: 'session', ask: 'Log a few more sessions and your trend appears.', start: 'Log a session' },
+  weekly_cardio_min: { one: 'session', ask: 'Log a few more sessions and your trend appears.', start: 'Log a session' },
+  distance_mi: { one: 'session', ask: 'Log a few more sessions and your trend appears.', start: 'Log a session' },
+  steps: { one: 'day', ask: 'Log a few more days and your trend appears.', start: 'Log a day' },
+  pace: { one: 'run', ask: 'Log a few more runs and your trend appears.', start: 'Log a run' },
+  resting_hr: { one: 'reading', ask: 'A few more readings and your trend appears.', start: 'Take a reading' },
+  vo2: { one: 'reading', ask: 'A few more readings and your trend appears.', start: 'Take a reading' },
+};
+
+const DEFAULT_WORDS = { one: 'log', ask: 'Log a few more and your trend appears.', start: 'Log one' };
+
+/**
+ * The line a card shows instead of a pace verdict when there is no trend to verdict on:
+ * what has been measured so far, and what would make it a line.
+ */
+export function startingLine(
+  measure: string,
+  series: { date: IsoDate; value: number }[],
+  unit: string | null,
+): string {
+  const words = MEASURE_WORDS[measure] ?? DEFAULT_WORDS;
+  const only = series[0];
+  // The standing line two rows up already says "Nothing measured yet", so this one carries
+  // only the half that is news: what to do about it.
+  if (!only) return `${words.start} to start the line.`;
+  const said = `${pretty(only.value, unit)}${unit ? ` ${unit}` : ''} · ${dateLabel(only.date)}`;
+  return `One ${words.one} so far (${said}). ${words.ask}`;
+}
+
 /** Inside this many days of the stated date, "on pace" rather than early or late. */
 const ON_PACE_DAYS = 4;
 /** A rate measured over fewer days than this is noise, not a trend. */
@@ -273,16 +321,25 @@ export function goalCard(
 
   const rateValue = ratePerWeek(series);
   const rate = rateValue == null || Math.abs(rateValue) < 0.05 ? null : `${signed(rateValue, unit)}/wk`;
+  const measure = metric?.measure ?? spec?.measure ?? '';
+
+  // Fewer than two points is not a pace, and saying "no movement yet" about it blames the
+  // user for arithmetic (field report 2026-08-31). A goal the measure already says is
+  // reached keeps its own verdict: that one is news even from a single reading.
+  const pace =
+    series.length < 2 && !met
+      ? { text: startingLine(measure, series, unit), tone: 'mute' as const }
+      : paceVerdict({ current, target, rateValue, by, today, met, judge });
 
   return {
     key: goal.id,
     title: goal.title,
-    measure: metric?.measure ?? spec?.measure ?? '',
+    measure,
     standing,
     to_go,
     rate,
     percent: metric?.percent ?? goal.progress.percent ?? null,
-    pace: paceVerdict({ current, target, rateValue, by, today, met, judge }),
+    pace,
     week: weekLine(week, series, today, unit),
     chart: goalChart(series, target, current, rateValue, by, today),
     judge,
@@ -371,17 +428,20 @@ function goalChart(
 ): GoalCardChart | null {
   if (series.length === 0) return null;
   const values: (number | null)[] = series.map((point) => point.value);
+  // One point: the dot and its target, drawn short. Nothing is projected from a single
+  // reading, and the tall box the projection needs is the whole complaint.
+  const sparse = series.length < 2;
 
   const last = series[series.length - 1];
-  if (!last || current == null || rateValue == null || target == null) {
-    return { values, projection: values.map(() => null), target };
+  if (sparse || !last || current == null || rateValue == null || target == null) {
+    return { values, projection: values.map(() => null), target, sparse };
   }
 
   // How far ahead to draw: to the stated date when there is one, else to the target.
   const daysAhead = by
     ? Math.max(0, daysBetween(today, by))
     : Math.max(0, Math.round(((target - current) / rateValue) * 7));
-  if (daysAhead <= 0) return { values, projection: values.map(() => null), target };
+  if (daysAhead <= 0) return { values, projection: values.map(() => null), target, sparse };
 
   const span = Math.max(1, daysBetween(series[0]!.date, last.date));
   const steps = Math.min(
@@ -395,7 +455,7 @@ function goalChart(
   projection[values.length - 1] = current;
   projection[padded.length - 1] = projectedEnd;
 
-  return { values: padded, projection, target };
+  return { values: padded, projection, target, sparse };
 }
 
 // ---------------------------------------------------------------------------
