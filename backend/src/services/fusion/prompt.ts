@@ -96,7 +96,19 @@ const EVIDENCE_RULES = `EVIDENCE
   scale to the weigh-in. Read "result" off the photos that are about "result" and leave the
   others to the parts they belong to — each of those is asked which photos it used.
 - confidence: "high" when the evidence states it outright; "medium" when you assumed a
-  portion, an intensity or a unit; "low" when it is a guess.`;
+  portion, an intensity or a unit; "low" when it is a guess.
+
+WHAT A PHOTO IS EVIDENCE *ABOUT*
+- A photo is evidence about something the user already mentioned. It NEVER adds an item of
+  its own — a label, a packet, a machine in the frame is there to price what they said, not
+  to log itself. Add something a photo shows only when nothing they said matches it at all.
+- A NUTRITION LABEL is a table of PER-SERVING numbers. Take the quantity the user stated and
+  multiply the per-serving values by it: "four slices" × the per-slice row. NEVER use the
+  per-container or whole-package column unless they say they ate the whole thing. A loaf's
+  carbohydrate total is not four slices of bread, and a can's is not the half they ate.
+- Confidence is the weakest link, and the weakest link is the NUMBERS. Reading the label
+  correctly is not the same as knowing what was eaten: recognising the food is the easy half
+  and it does not make the portion, the serving count or the macros "high".`;
 
 const GROUPING = `GROUPING — inside one result, strongly bias toward ONE record.
 - All food and drink in a single log is ONE meal. Sum calories and macros across everything;
@@ -236,6 +248,24 @@ It is ${context.localTime} on ${context.localDate} in the user's timezone. Units
 ${describeGoals(context)}`;
 }
 
+/**
+ * The meal's own numbers rule, said where the meal is read. Two halves of one field report
+ * (docs/CHANGELOG-v2.md §Field fixes — a lunch that read 398 g of carbs): the label was read
+ * per loaf instead of per slice, and the answer was marked HIGH.
+ *
+ * The arithmetic is checked in code afterwards either way (services/fusion/arithmetic.ts) —
+ * this is the cheap half, said once, so the common case never needs the second call.
+ */
+const MEAL_NUMBERS = `THE NUMBERS HAVE TO ADD UP.
+- Before you answer, multiply: 4 × protein + 4 × carbs + 9 × fat should land within about a
+  quarter of the kcal you are about to give. If it does not, one of the four is wrong — and
+  it is nearly always a serving size read off a label. Fix it, do not report both.
+- A nutrition label is PER SERVING. Multiply by the servings the user said they had. The
+  per-container column is what the whole packet holds, and nobody ate the packet unless they
+  said so.
+- "confidence" is about the NUMBERS, not about recognising the food. A portion you assumed,
+  a label you scaled, a serving count you inferred: that is "medium" at best.`;
+
 const PART_INTRO: Record<SegmentKind, string> = {
 	activities: `Pull out the PHYSICAL ACTIVITY they described — exercises, a walk, a run, a machine
 display — and nothing else. One item per distinct exercise; several sets of the same exercise
@@ -244,7 +274,9 @@ best guess anyway (or a short phrase in their own words) and mark the confidence
 machine in "equipment". Their numbers are facts whatever the movement turns out to be.`,
 	meal: `Pull out what they ATE OR DRANK and nothing else. All of it is ONE meal: sum the calories
 and macros, and let "description" briefly list what was had ("eggs, sourdough toast, coffee").
-Break it into "items" only when the evidence actually shows the parts.`,
+Break it into "items" only when the evidence actually shows the parts.
+
+${MEAL_NUMBERS}`,
 	weight: `Pull out the BODY-WEIGHT READING they gave and nothing else. Body weight only — a dumbbell
 is not a body weight, and a weight they want to reach is a goal, not a reading.`,
 	goal: "",
@@ -339,6 +371,46 @@ CONTEXT
 It is ${context.localTime} on ${context.localDate} in the user's timezone. Units: pounds and miles.
 
 ${claims ? describeVocabulary(context) : ""}`;
+}
+
+/**
+ * The one automatic re-ask, when a meal's macros and its calories cannot both be true
+ * (services/fusion/arithmetic.ts). Not a revision — the user has not said anything; the
+ * *app* noticed, and it says exactly what it noticed rather than asking for a second guess.
+ *
+ * It is the meal detail call again, with the same message and the same schema, so it costs
+ * no grammar and nothing new has to compile.
+ */
+export function buildMealReconcilePrompt(
+	context: FusionContext,
+	previous: string,
+	discrepancy: string
+): string {
+	return `You read this meal out of the user's log and the numbers do not add up.
+
+What you answered, as JSON:
+${previous}
+
+${discrepancy}
+
+Read it again and return the whole meal, reconciled.
+- Start from the SERVING SIZES. This is nearly always a nutrition label read per container
+  when the user ate a few servings of it: "four slices" is four × the per-slice row, not the
+  loaf. Check every quantity they actually stated against the numbers you gave.
+- Change the number that is wrong, not the one that is easiest to move. Do not simply scale
+  the kcal up to match a macro you have not checked.
+- Keep everything you are confident in — the description, the sitting, the foods.
+- Answer with "confidence" no higher than "medium" unless the corrected numbers now add up
+  AND every serving size came from something the user said or a label states outright.
+
+${PART_INTRO.meal}
+
+${EVIDENCE_RULES}
+
+${FIELDS}
+
+CONTEXT
+It is ${context.localTime} on ${context.localDate} in the user's timezone. Units: pounds and miles.`;
 }
 
 const PLAN_FIELDS = `Extract the plan fields it sets, and ONLY those — every field they did not actually state

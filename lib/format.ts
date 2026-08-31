@@ -49,3 +49,56 @@ const SLOT_LABEL: Record<string, string> = {
 export function slotLabel(slot: string): string {
   return SLOT_LABEL[slot] ?? 'Snacks';
 }
+
+// ---------------------------------------------------------------------------
+// Corrections (migration 0015) — the record's own history, in one line.
+// ---------------------------------------------------------------------------
+
+/**
+ * How a corrected field is named to a reader. The wire names are columns; nobody says
+ * "carbs_g". A field with no entry here is printed with its suffix and underscores taken
+ * off, which is the same rule the confirm card's sources line uses.
+ */
+const FIELD_LABEL: Record<string, string> = {
+  meal_type: 'meal',
+  muscle_groups: 'muscles',
+  duration_min: 'minutes',
+  distance_mi: 'miles',
+  load_lb: 'load',
+  weight_lb: 'weight',
+};
+
+export function fieldLabel(field: string): string {
+  return FIELD_LABEL[field] ?? field.replace(/_lb$|_g$|_min$|_mi$/, '').replace(/_/g, ' ');
+}
+
+/** A corrected value as the line prints it. A field that was cleared reads as an em dash. */
+export function fieldValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (Array.isArray(value)) return value.length === 0 ? '—' : value.join(', ');
+  if (typeof value === 'number') return String(Math.round(value * 10) / 10);
+  return String(value);
+}
+
+/** "carbs 398 → 89" — one field that moved. */
+export function changeLine(change: { field: string; from: unknown; to: unknown }): string {
+  return `${fieldLabel(change.field)} ${fieldValue(change.from)} → ${fieldValue(change.to)}`;
+}
+
+/**
+ * The correction as the provenance list reads it:
+ *
+ *   Corrected 1:45p: "the carbs look wrong" · carbs 398 → 89
+ *
+ * The instruction is quoted because it is the user's own sentence and the whole point is
+ * that it is theirs — the changes beside it are what the app did about it.
+ */
+export function correctionLine(correction: {
+  instruction: string;
+  changes: { field: string; from: unknown; to: unknown }[];
+  created_at: string;
+}): string {
+  const changes = correction.changes.map(changeLine).join(' · ');
+  const said = `Corrected ${clock(correction.created_at)}: “${correction.instruction}”`;
+  return changes ? `${said} · ${changes}` : said;
+}

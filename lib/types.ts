@@ -328,6 +328,20 @@ export type DayLogRecord =
   | { kind: 'goal'; title: string; goal_kind: GoalKind; metrics: GoalMetric[] }
   | { kind: 'statement'; text: string };
 
+/**
+ * One told change, kept beside the record it changed (migration 0015). `changes` is the
+ * field-level diff the server computed between what it had understood and what it
+ * understood after being told — never something the app worked out for itself.
+ */
+export type FieldChange = { field: string; from: unknown; to: unknown };
+
+export type DayLogCorrection = {
+  id: string;
+  instruction: string;
+  changes: FieldChange[];
+  created_at: string;
+};
+
 export type DayLogEntry = {
   /** The saved row's id — what a correction PATCHes. A statement carries its evidence id. */
   id: string;
@@ -340,6 +354,11 @@ export type DayLogEntry = {
   confidence: Confidence | null;
   understood: string;
   editable: boolean;
+  /**
+   * Oldest first. Empty for a record nobody has corrected, which is most of them, and
+   * absent altogether from a server written before migration 0015.
+   */
+  corrections?: DayLogCorrection[];
   record: DayLogRecord;
 };
 
@@ -579,6 +598,20 @@ export type ProfileFields = {
   place_kind?: 'gym' | 'home' | 'travel' | 'other' | null;
 } | null;
 
+/**
+ * What the server's arithmetic gate made of a meal's numbers (backend
+ * services/fusion/arithmetic.ts). Present only when the FIRST reading did not add up —
+ * 4 × protein + 4 × carbs + 9 × fat against the kcal beside them.
+ *
+ *   "adjusted" — one automatic re-ask reconciled it.
+ *   "flagged"  — it still does not add up; the confidence was forced to low.
+ */
+export type MealConsistency = {
+  outcome: 'adjusted' | 'flagged';
+  stated_kcal: number | null;
+  implied_kcal: number | null;
+};
+
 export type FusionResult =
   | { kind: 'activities'; items: ActivityItem[] }
   | {
@@ -593,6 +626,8 @@ export type FusionResult =
       items: MealItem[];
       confidence: Confidence;
       sources: Record<string, FieldSource> | null;
+      /** Null unless the server's arithmetic gate had something to say. */
+      consistency?: MealConsistency | null;
     }
   | { kind: 'weight'; weight_lb: number; confidence: Confidence; sources: Record<string, FieldSource> | null }
   | { kind: 'goal'; spec: GoalSpec; proposed_timeline: ProposedTimeline | null; facts?: GoalFacts | null }
@@ -625,9 +660,24 @@ export type EvidenceRef = {
  * thing for a single-part log and is absent when there are several — it is there for one
  * release, for a client written before mixed input existed.
  */
+/**
+ * What a told change moved, as the server measured it. Handed back with the revised parts
+ * and handed in again on the confirm, which writes it against the rows the parts become —
+ * the only way a change made before anything is saved can end up in the record's history.
+ */
+export type PartCorrection = {
+  part: number;
+  /** Which item of an activities part; null for a meal or a weigh-in. */
+  item: number | null;
+  instruction: string;
+  changes: FieldChange[];
+};
+
 export type AnalyzeResponse = {
   results: FusionResult[];
   result?: FusionResult;
+  /** Empty for a fresh log; one entry per record a revision moved. */
+  corrections?: PartCorrection[];
   proposal?: {
     projected_date: IsoDate | null;
     weeks: number | null;

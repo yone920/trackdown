@@ -18,14 +18,20 @@ import { IconCamera, IconClose, IconKeyboard, IconMic } from '@/components/icons
 import { BigButton, Card, Chip, Chips, Skeleton, SkeletonLines } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { ApiError } from '@/lib/api';
-import { recordToResult, resultToPatch, type EditKind } from '@/lib/edit-record';
+import {
+  recordToResult,
+  resultToPatch,
+  savableCorrections,
+  type EditKind,
+} from '@/lib/edit-record';
+import { correctionLine } from '@/lib/format';
 import { composeMaxHeight, footerLift, keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
 import { MAX_PHOTOS, pickPhotos, takePhoto, type LocalPhoto } from '@/lib/photos';
 import { getSpeech } from '@/lib/ports/speech';
 import { useAnalyze, useConfirm, useDayLog, usePatchRecord } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
-import type { FusionResult } from '@/lib/types';
+import type { FusionResult, PartCorrection } from '@/lib/types';
 
 // The log sheet (docs/design-system.md §Log). One screen for everything you can tell the
 // app — an exercise, a plate, a weigh-in, a goal, a constraint, or a sentence for the
@@ -98,6 +104,13 @@ export default function LogSheet() {
   const [revising, setRevising] = useState(false);
   // A correction has something to save only once something has actually been changed.
   const [changed, setChanged] = useState(false);
+  // Every told change this preview has been through, as the server measured it. They ride
+  // along to the confirm, which writes them against the rows the parts turn into
+  // (migration 0015) — a pending part has no id to file a correction against yet.
+  const [corrections, setCorrections] = useState<PartCorrection[]>([]);
+  // The last thing the user told a SAVED row to change. Sent with the PATCH so the server
+  // can file the correction with its own diff of the row before and after.
+  const [told, setTold] = useState<string | null>(null);
   const [listening, setListening] = useState(false);
   const [transcribed, setTranscribed] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -136,6 +149,8 @@ export default function LogSheet() {
     setSaid(null);
     setRevising(false);
     setChanged(false);
+    setCorrections([]);
+    setTold(null);
     setError(null);
     setStep('say');
   };
@@ -196,6 +211,10 @@ export default function LogSheet() {
       });
       const read = response.results ?? (response.result ? [response.result] : []);
       if (read.length > 0) setResults(read);
+      // The record's own history, appended in the order the changes were told. A change
+      // that moved nothing comes back as nothing, and nothing is what gets recorded.
+      setCorrections((current) => [...current, ...(response.corrections ?? [])]);
+      setTold(said);
       setText('');
       setTranscribed(false);
       setRevising(false);
@@ -220,6 +239,14 @@ export default function LogSheet() {
     setEvidenceParts((current) =>
       current.filter((part) => part !== index).map((part) => (part > index ? part - 1 : part)),
     );
+    // A dropped part takes its history with it, and everything after it moves up one.
+    setCorrections((current) =>
+      current
+        .filter((correction) => correction.part !== index)
+        .map((correction) =>
+          correction.part > index ? { ...correction, part: correction.part - 1 } : correction,
+        ),
+    );
     // Nothing left to review is the say-it step again, with the words still in the box.
     if (remaining === 0) setStep('say');
   };
@@ -231,7 +258,7 @@ export default function LogSheet() {
     if (!body) return;
     setError(null);
     try {
-      await patch.mutateAsync({ kind: editKind, id: editId!, patch: body });
+      await patch.mutateAsync({ kind: editKind, id: editId!, patch: body, instruction: told });
       router.back();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not save that change.');
@@ -254,6 +281,9 @@ export default function LogSheet() {
         text: said?.text || text.trim() || null,
         textKind: (said ? said.transcribed : transcribed) ? 'transcript' : 'text',
         source: evidenceIds.length > 0 ? 'fused' : 'manual',
+        // Only the corrections to parts that are still on screen: a part dropped with its
+        // ✕ takes its history with it, and the ones after it have moved up an index.
+        corrections: savableCorrections(corrections, results),
         ...(toSave.some((result) => result.kind === 'goal')
           ? { confirmDate: dateChoice === 'confirm_date', noDate: dateChoice === 'no_date' }
           : {}),
@@ -591,7 +621,7 @@ export default function LogSheet() {
                     borderLeftColor: C.track,
                     paddingLeft: 12,
                   }}>
-                  <Sub style={{ lineHeight: 19 }}>
+                  <Sub testID="provenance-said" style={{ lineHeight: 19 }}>
                     {editEntry.raw_text
                       ? `You said: “${editEntry.raw_text}”`
                       : 'Logged without words — from a photo, or from Health.'}
@@ -601,6 +631,18 @@ export default function LogSheet() {
                       2026-08-31). Tap one to see it full size. Nothing here removes
                       anything — a saved photo is part of a saved record. */}
                   <EvidenceThumbs testID="record-photos" photos={editEntry.evidence} zoomable />
+                  {/* And every told change since, in the order it was told (migration
+                      0015). This is the list the component was built to take: the words
+                      first, then what was corrected about them — so a number nobody
+                      recognises can say when it changed and what it used to be. */}
+                  {editEntry.corrections?.map((correction) => (
+                    <Sub
+                      key={correction.id}
+                      testID="provenance-correction"
+                      style={{ marginTop: 10, lineHeight: 19 }}>
+                      {correctionLine(correction)}
+                    </Sub>
+                  ))}
                 </View>
               </View>
             ) : null}

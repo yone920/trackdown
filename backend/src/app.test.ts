@@ -639,6 +639,7 @@ describe("fusion — confirm", () => {
 			],
 			confidence: "medium",
 			sources: null,
+			consistency: null,
 		});
 
 		expect(res.status).toBe(201);
@@ -976,6 +977,7 @@ describe("fusion — one input, several things", () => {
 			items: [],
 			confidence: "medium",
 			sources: null,
+			consistency: null,
 		};
 		const res = await request(app)
 			.post("/api/log/confirm")
@@ -4383,5 +4385,242 @@ describe("the training board", () => {
 
 	it("needs a session", async () => {
 		expect((await request(app).get("/api/training/board?tz=0")).status).toBe(401);
+	});
+});
+
+// ── The corrections, kept (migration 0015) ────────────────────────────────────────────
+// The field report: a lunch read 398 g of carbohydrate, the user said "the carbs look
+// wrong", the app read it again and wrote 89 — and the record showed 89 as if it had always
+// said so. A correction is a thing that happened; it belongs in the log beside the record
+// it changed, both when the change is told to a pending preview and when it is told to a
+// row that is already saved.
+
+describe("the corrections, kept", () => {
+	const tz = tzForLocalHour(14);
+	const today = localDay(new Date(), tz).date;
+	let auth: { Authorization: string };
+
+	beforeAll(async () => {
+		auth = { Authorization: `Bearer ${await signUp("corrections@example.com")}` };
+	}, 60_000);
+
+	const lunch = {
+		kind: "meal" as const,
+		description: "tuna, eggs, vegetables and four slices of bread",
+		meal_type: "lunch" as const,
+		kcal: 918,
+		protein_g: 67,
+		carbs_g: 398,
+		fat_g: 35,
+		fiber_g: 12,
+		items: [],
+		confidence: "high" as const,
+		sources: null,
+		consistency: null,
+	};
+
+	/** What the meal detail call answers with, on `MealDetailOutputSchema`. */
+	const mealAnswer = (over: Record<string, unknown>) => ({
+		description: lunch.description,
+		meal_type: "lunch",
+		kcal: 918,
+		protein_g: 67,
+		carbs_g: 398,
+		fat_g: 35,
+		fiber_g: 12,
+		items: [],
+		confidence: "medium",
+		photo_fields: [],
+		photo_indexes: [],
+		...over,
+	});
+
+	async function logEntries() {
+		const res = await request(app).get(`/api/day/${today}/log?tz=${tz}`).set(auth);
+		expect(res.status).toBe(200);
+		return res.body.entries as {
+			id: string;
+			kind: string;
+			corrections: { instruction: string; changes: { field: string; from: unknown; to: unknown }[] }[];
+		}[];
+	}
+
+	it("carries a told change from a pending preview all the way into the record's history", async () => {
+		// The told change. The gate passes on the way back (939 against 918), so this is the
+		// one call the revision costs.
+		llm.outputs.push(mealAnswer({ carbs_g: 89 }));
+		const revised = await request(app)
+			.post("/api/log/analyze")
+			.set(auth)
+			.field("tz_offset_min", String(tz))
+			.field("revise", JSON.stringify({ results: [lunch], instruction: "the carbs look wrong" }));
+
+		expect(revised.status).toBe(200);
+		expect(revised.body.results[0]).toMatchObject({ carbs_g: 89 });
+		// The diff is the SERVER's, taken between what it was handed and what it answered.
+		expect(revised.body.corrections).toEqual([
+			{
+				part: 0,
+				item: null,
+				instruction: "the carbs look wrong",
+				changes: [{ field: "carbs_g", from: 398, to: 89 }],
+			},
+		]);
+
+		// Nothing has been written yet: a preview is a preview.
+		expect(await logEntries()).toHaveLength(0);
+
+		const saved = await request(app)
+			.post("/api/log/confirm")
+			.set(auth)
+			.send({
+				client_id: randomUUID(),
+				results: revised.body.results,
+				corrections: revised.body.corrections,
+				text: "tuna, two eggs, quarter onion, a chilli, two cups of vegetables, four slices of this bread",
+				text_kind: "transcript",
+				tz_offset_min: tz,
+				logged_at: localInstant(today, "13:45", tz),
+			});
+		expect(saved.status).toBe(201);
+
+		const [meal] = await logEntries();
+		expect(meal!.kind).toBe("meal");
+		expect(meal!.corrections).toHaveLength(1);
+		expect(meal!.corrections[0]).toMatchObject({
+			instruction: "the carbs look wrong",
+			changes: [{ field: "carbs_g", from: 398, to: 89 }],
+		});
+		// It is written against the record, so it survives the read the screen actually does.
+		const row = await db.pool.query(`SELECT * FROM record_corrections WHERE meal_id = $1`, [meal!.id]);
+		expect(row.rows).toHaveLength(1);
+		expect(row.rows[0]!.activity_id).toBeNull();
+	});
+
+	it("records a change told to a row that is ALREADY saved, with the server's own diff", async () => {
+		const [meal] = await logEntries();
+		const patched = await request(app)
+			.patch(`/api/entries/meals/${meal!.id}`)
+			.set(auth)
+			.send({ kcal: 880, correction_instruction: "it was closer to 880 calories" });
+		expect(patched.status).toBe(200);
+		expect(patched.body.kcal).toBe(880);
+
+		const [after] = await logEntries();
+		// Chronological: the pending correction first, then this one.
+		expect(after!.corrections.map((c) => c.instruction)).toEqual([
+			"the carbs look wrong",
+			"it was closer to 880 calories",
+		]);
+		expect(after!.corrections[1]!.changes).toEqual([{ field: "kcal", from: 918, to: 880 }]);
+	});
+
+	it("writes nothing for an instruction that moved nothing", async () => {
+		const [meal] = await logEntries();
+		const before = meal!.corrections.length;
+		const patched = await request(app)
+			.patch(`/api/entries/meals/${meal!.id}`)
+			.set(auth)
+			.send({ kcal: 880, correction_instruction: "make it 880" });
+		expect(patched.status).toBe(200);
+		const [after] = await logEntries();
+		expect(after!.corrections).toHaveLength(before);
+	});
+
+	it("records a corrected weigh-in, and a corrected lift against its own row", async () => {
+		await request(app)
+			.post("/api/log/confirm")
+			.set(auth)
+			.send({
+				client_id: randomUUID(),
+				results: [
+					{ kind: "weight", weight_lb: 181.4, confidence: "high", sources: null },
+					{
+						kind: "activities",
+						items: [
+							{
+								exercise: "Bench Press",
+								equipment: null,
+								description: "3 × 8 bench at 135 lb",
+								category: "strength",
+								muscle_groups: ["chest"],
+								sets: 3,
+								reps: 8,
+								load_lb: 135,
+								duration_min: null,
+								distance_mi: null,
+								kcal: 120,
+								confidence: "high",
+								sources: null,
+								refine: null,
+							},
+						],
+					},
+				],
+				tz_offset_min: tz,
+				logged_at: localInstant(today, "07:00", tz),
+			});
+
+		const entries = await logEntries();
+		const weight = entries.find((entry) => entry.kind === "weight")!;
+		const activity = entries.find((entry) => entry.kind === "activity")!;
+
+		await request(app)
+			.patch(`/api/weight/${weight.id}`)
+			.set(auth)
+			.send({ weight_lb: 180.2, correction_instruction: "the scale said 180.2" });
+		await request(app)
+			.patch(`/api/entries/movement/${activity.id}`)
+			.set(auth)
+			.send({ reps: 5, correction_instruction: "it was five reps, not eight" });
+
+		const after = await logEntries();
+		expect(after.find((entry) => entry.kind === "weight")!.corrections[0]).toMatchObject({
+			instruction: "the scale said 180.2",
+			changes: [{ field: "weight_lb", from: 181.4, to: 180.2 }],
+		});
+		expect(after.find((entry) => entry.kind === "activity")!.corrections[0]).toMatchObject({
+			instruction: "it was five reps, not eight",
+			changes: [{ field: "reps", from: 8, to: 5 }],
+		});
+		// Each correction is filed against its own record, never against the log.
+		const rows = await db.pool.query(
+			`SELECT activity_id, meal_id, weight_id FROM record_corrections
+			  WHERE user_id = (SELECT id FROM "user" WHERE email = 'corrections@example.com')`
+		);
+		for (const row of rows.rows) {
+			expect([row.activity_id, row.meal_id, row.weight_id].filter(Boolean)).toHaveLength(1);
+		}
+	});
+
+	it("takes its history with it when the record is deleted", async () => {
+		const entries = await logEntries();
+		const meal = entries.find((entry) => entry.kind === "meal")!;
+		expect(meal.corrections.length).toBeGreaterThan(0);
+		const gone = await request(app).delete(`/api/entries/meals/${meal.id}`).set(auth);
+		expect(gone.status).toBe(204);
+		// The FK cascade does it; nothing in application code goes looking.
+		const rows = await db.pool.query(`SELECT id FROM record_corrections WHERE meal_id = $1`, [meal.id]);
+		expect(rows.rows).toHaveLength(0);
+	});
+
+	it("drops a correction whose part is no longer being saved, rather than filing it elsewhere", async () => {
+		const saved = await request(app)
+			.post("/api/log/confirm")
+			.set(auth)
+			.send({
+				client_id: randomUUID(),
+				results: [{ kind: "weight", weight_lb: 179.9, confidence: "high", sources: null }],
+				// Part 1 is not there: the user dropped it with its ✕ before saving.
+				corrections: [
+					{ part: 1, item: null, instruction: "the carbs look wrong", changes: [{ field: "carbs_g", from: 398, to: 89 }] },
+				],
+				tz_offset_min: tz,
+				logged_at: localInstant(today, "06:00", tz),
+			});
+		expect(saved.status).toBe(201);
+		const weightId = saved.body.weight.id;
+		const rows = await db.pool.query(`SELECT id FROM record_corrections WHERE weight_id = $1`, [weightId]);
+		expect(rows.rows).toHaveLength(0);
 	});
 });

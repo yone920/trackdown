@@ -40,11 +40,18 @@ export function segmentKindFor(result: FusionResult): SegmentKind | null {
 /**
  * The part as the model is shown it: compact JSON, with the bookkeeping the user never
  * sees taken out. `sources` is provenance for the card, `refine` is an offer this call
- * knows nothing about, and neither is a fact to be revised.
+ * knows nothing about, `consistency` is our own arithmetic verdict on the last reading —
+ * none of the three is a fact to be revised, and showing the model its own last verdict
+ * would only invite it to copy the verdict instead of fixing the numbers.
  */
 export function compactPart(result: FusionResult): string {
 	const strip = <T extends Record<string, unknown>>(value: T): Record<string, unknown> => {
-		const { sources: _sources, refine: _refine, ...rest } = value as Record<string, unknown>;
+		const {
+			sources: _sources,
+			refine: _refine,
+			consistency: _consistency,
+			...rest
+		} = value as Record<string, unknown>;
 		return rest;
 	};
 	if (result.kind === "activities") {

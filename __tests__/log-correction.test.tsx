@@ -222,3 +222,97 @@ describe('the record, and how it came to be recorded', () => {
     expect(screen.getByText(/Logged without words/)).toBeTruthy();
   });
 });
+
+// Reported 2026-08-31, the other half of the same screen: the user told a lunch "the carbs
+// look wrong", the app read it again and wrote 89 — and nothing anywhere said so. The
+// provenance list was built to take appended entries; migration 0015 supplies them.
+describe('the corrections, in the provenance list', () => {
+  const CORRECTED: DayLogEntry = {
+    ...ENTRY,
+    raw_text: 'tuna, two eggs, quarter onion, a chilli, two cups of vegetables, four slices of this bread',
+    corrections: [
+      {
+        id: 'c1',
+        instruction: 'the carbs look wrong',
+        changes: [{ field: 'carbs_g', from: 398, to: 89 }],
+        created_at: '2026-08-29T13:45:00.000Z',
+      },
+      {
+        id: 'c2',
+        instruction: 'it was closer to 880 calories',
+        changes: [
+          { field: 'kcal', from: 918, to: 880 },
+          { field: 'meal_type', from: 'dinner', to: 'lunch' },
+        ],
+        created_at: '2026-08-29T14:10:00.000Z',
+      },
+    ],
+  };
+
+  const serveEntry = (entry: DayLogEntry) =>
+    mockApi.mockImplementation(async (path: string) =>
+      path.startsWith('/api/day/') ? { date: '2026-08-29', entries: [entry] } : {},
+    );
+
+  it('appends every told change under the words, oldest first, with what it moved', async () => {
+    serveEntry(CORRECTED);
+    renderSheet();
+    await waitFor(() => expect(screen.getByTestId('record-provenance')).toBeTruthy());
+
+    const lines = screen
+      .getAllByTestId('provenance-correction')
+      .map((node: { props: { children?: unknown } }) => String(node.props.children));
+    expect(lines).toHaveLength(2);
+    // The user's own sentence, quoted, and the field-level diff beside it.
+    expect(lines[0]).toContain('the carbs look wrong');
+    expect(lines[0]).toContain('carbs 398 → 89');
+    // Chronological, and a column name is never printed at anybody.
+    expect(lines[1]).toContain('kcal 918 → 880');
+    expect(lines[1]).toContain('meal dinner → lunch');
+    expect(lines.join(' ')).not.toContain('carbs_g');
+  });
+
+  it('draws nothing at all for a record nobody has corrected', async () => {
+    serveEntry({ ...ENTRY, corrections: [] });
+    renderSheet();
+    await waitFor(() => expect(screen.getByTestId('record-provenance')).toBeTruthy());
+    expect(screen.queryAllByTestId('provenance-correction')).toHaveLength(0);
+  });
+
+  it('survives a server that has never heard of corrections', async () => {
+    // One release of compatibility: the field is simply absent, not empty.
+    serveEntry(ENTRY);
+    renderSheet();
+    await waitFor(() => expect(screen.getByTestId('provenance-said')).toBeTruthy());
+    expect(screen.queryAllByTestId('provenance-correction')).toHaveLength(0);
+  });
+
+  it('sends what the user SAID with the PATCH, so the server can file the correction', async () => {
+    serveEntry(ENTRY);
+    renderSheet();
+    await waitFor(() => expect(screen.getByTestId('confirm-card')).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId('log-make-change'));
+    mockUpload.mockResolvedValueOnce({
+      results: [REVISED],
+      corrections: [
+        { part: 0, item: 0, instruction: 'reps were 4', changes: [{ field: 'reps', from: 12, to: 4 }] },
+      ],
+      evidence: [],
+      context: { local_date: '2026-08-29', tz_offset_min: 0 },
+    });
+    fireEvent.changeText(screen.getByTestId('log-text'), 'reps were 4 and it was 50 pounds');
+    fireEvent.press(screen.getByTestId('log-submit'));
+
+    await waitFor(() => expect(screen.getByTestId('confirm-save')).toHaveTextContent('Save changes'));
+    fireEvent.press(screen.getByTestId('confirm-save'));
+    await waitFor(() => expect(mockBack).toHaveBeenCalled());
+
+    const patch = mockApi.mock.calls.find(
+      (call) => (call[1] as { method?: string } | undefined)?.method === 'PATCH',
+    ) as [string, { body: Record<string, unknown> }];
+    // The instruction, not the diff: a saved row's diff is the server's own, taken between
+    // the row before and the row after.
+    expect(patch[1].body.correction_instruction).toBe('reps were 4 and it was 50 pounds');
+  });
+});

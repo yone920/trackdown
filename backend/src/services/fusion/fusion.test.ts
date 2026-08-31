@@ -1098,6 +1098,7 @@ describe("revising what was understood", () => {
 			items: [],
 			confidence: "medium",
 			sources: null,
+			consistency: null,
 		};
 		llm.outputs.push(
 			{
@@ -1126,5 +1127,200 @@ describe("revising what was understood", () => {
 		expect(revised[0]).toMatchObject({ meal_type: "lunch" });
 		// The weigh-in was asked and came back as it was; the question was never asked at all.
 		expect(llm.requests.map((request) => request.schemaName)).toEqual(["meal", "weigh_in"]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The arithmetic gate, in the pipeline (services/fusion/arithmetic.ts).
+// ---------------------------------------------------------------------------
+
+/** The field case as the routing call answered it: 918 kcal against 2,175 of macros. */
+const FIELD_MEAL_ANSWER = {
+	kind: "meal" as const,
+	description: "tuna, eggs, vegetables and four slices of bread",
+	meal_type: "lunch" as const,
+	kcal: 918,
+	protein_g: 67,
+	carbs_g: 398,
+	fat_g: 35,
+	fiber_g: 12,
+	items: [],
+	confidence: "high" as const,
+};
+
+const routedMeal = (result: unknown) => ({ result, more_kinds: [], photo_fields: [] });
+const mealDetail = (over: Record<string, unknown>) => ({
+	description: FIELD_MEAL_ANSWER.description,
+	meal_type: "lunch",
+	kcal: 918,
+	protein_g: 67,
+	carbs_g: 398,
+	fat_g: 35,
+	fiber_g: 12,
+	items: [],
+	confidence: "high",
+	photo_fields: [],
+	photo_indexes: [],
+	...over,
+});
+
+describe("the arithmetic gate", () => {
+	it("says nothing about a meal that adds up, and costs no second call", async () => {
+		const llm = createFakeLlm();
+		llm.outputs.push(routedMeal({ ...FIELD_MEAL_ANSWER, kcal: 620, protein_g: 45, carbs_g: 60, fat_g: 18 }));
+
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "chicken and rice", context });
+
+		expect(llm.requests).toHaveLength(1);
+		expect(results[0]).toMatchObject({ kind: "meal", confidence: "high", consistency: null });
+	});
+
+	it("re-asks once, with the discrepancy spelled out, and keeps the answer that adds up", async () => {
+		const llm = createFakeLlm();
+		llm.outputs.push(
+			routedMeal(FIELD_MEAL_ANSWER),
+			// The loaf read as four slices this time: 4×67 + 4×89 + 9×35 = 939 against 918.
+			mealDetail({ carbs_g: 89, confidence: "medium" })
+		);
+
+		const { results } = await createFusionAnalyzer(llm).analyze({
+			text: "tuna, two eggs, quarter onion, a chilli, two cups of vegetables, two tbsp olive oil, four slices of this bread",
+			context,
+		});
+
+		// Exactly two calls: the route, and the ONE automatic re-ask.
+		expect(llm.requests.map((request) => request.schemaName)).toEqual(["fusion_result", "meal"]);
+		const system = llm.requests[1]!.system;
+		// It is told what we noticed, in numbers, not asked to think again.
+		expect(system).toContain("2175");
+		expect(system).toContain("918");
+		expect(String(system).toLowerCase()).toContain("serving");
+		// And it is shown its own answer, without our verdict on it.
+		expect(system).toContain('"carbs_g":398');
+		expect(system).not.toContain("consistency");
+
+		expect(results[0]).toMatchObject({
+			kind: "meal",
+			carbs_g: 89,
+			confidence: "medium",
+			consistency: { outcome: "adjusted", stated_kcal: 918, implied_kcal: 939 },
+		});
+	});
+
+	it("presents the meal anyway and FORCES low when the re-ask does not fix it", async () => {
+		const llm = createFakeLlm();
+		llm.outputs.push(
+			routedMeal(FIELD_MEAL_ANSWER),
+			// Same numbers back, and still claiming high.
+			mealDetail({ confidence: "high" })
+		);
+
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "lunch", context });
+
+		expect(llm.requests).toHaveLength(2);
+		// The log is saved-able: refusing to log what the user ate is the failure "always
+		// log" exists to prevent. What we stop doing is calling it certain.
+		expect(results[0]).toMatchObject({
+			kind: "meal",
+			kcal: 918,
+			carbs_g: 398,
+			confidence: "low",
+			consistency: { outcome: "flagged", stated_kcal: 918, implied_kcal: 2175 },
+		});
+		expect(FusionResultSchema.safeParse(results[0]).success).toBe(true);
+	});
+
+	it("keeps the first reading, flagged, when the re-ask itself fails", async () => {
+		const llm = createFakeLlm();
+		llm.outputs.push(routedMeal(FIELD_MEAL_ANSWER), { nonsense: true });
+
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "lunch", context });
+
+		expect(results[0]).toMatchObject({
+			kind: "meal",
+			carbs_g: 398,
+			confidence: "low",
+			consistency: { outcome: "flagged" },
+		});
+	});
+
+	it("flags a re-ask that escapes the check by dropping the macros", async () => {
+		const llm = createFakeLlm();
+		llm.outputs.push(
+			routedMeal(FIELD_MEAL_ANSWER),
+			mealDetail({ protein_g: null, carbs_g: null, fat_g: null, confidence: "high" })
+		);
+
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "lunch", context });
+
+		// Nothing left to check is not the same as checked and fine.
+		expect(results[0]).toMatchObject({ kind: "meal", confidence: "low", consistency: { outcome: "flagged" } });
+	});
+
+	it("runs on a meal that arrived as a second part, not only on the routed one", async () => {
+		const llm = createFakeLlm();
+		llm.outputs.push(
+			{ result: { kind: "weight", weight_lb: 181, confidence: "high" }, more_kinds: ["meal"], photo_fields: [] },
+			mealDetail({}),
+			mealDetail({ carbs_g: 89, confidence: "medium" })
+		);
+
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "181 on the scale, then lunch", context });
+
+		expect(llm.requests.map((request) => request.schemaName)).toEqual(["fusion_result", "meal", "meal"]);
+		expect(results.map((result) => result.kind)).toEqual(["weight", "meal"]);
+		expect(results[1]).toMatchObject({ carbs_g: 89, consistency: { outcome: "adjusted" } });
+	});
+
+	it("runs at revise too — a told change can make the numbers stop adding up", async () => {
+		const llm = createFakeLlm();
+		const pending: FusionResult = {
+			kind: "meal",
+			description: "tuna, eggs, vegetables and four slices of bread",
+			meal_type: "lunch",
+			kcal: 918,
+			protein_g: 67,
+			carbs_g: 89,
+			fat_g: 35,
+			fiber_g: 12,
+			items: [],
+			confidence: "medium",
+			sources: null,
+			consistency: null,
+		};
+		llm.outputs.push(mealDetail({ carbs_g: 398 }), mealDetail({ carbs_g: 89, confidence: "medium" }));
+
+		const [revised] = await createFusionAnalyzer(llm).revise({
+			results: [pending],
+			instruction: "it was the whole loaf",
+			context,
+		});
+
+		expect(llm.requests.map((request) => request.schemaName)).toEqual(["meal", "meal"]);
+		expect(revised).toMatchObject({ carbs_g: 89, consistency: { outcome: "adjusted" } });
+	});
+});
+
+describe("the photo-binding rules", () => {
+	it("tells the router a photo is evidence about something they said, never a new item", () => {
+		const prompt = buildFusionSystemPrompt(context);
+		expect(prompt).toContain("NEVER adds an item");
+		expect(prompt).toContain("PER-SERVING");
+		expect(prompt).toContain("per-container");
+		expect(prompt).toContain("weakest link");
+	});
+
+	it("says the same three things on the meal's own detail call", () => {
+		const prompt = buildPartDetailSystemPrompt(context, "meal");
+		// The arithmetic, said cheaply once, so the common case never needs a second call.
+		expect(prompt).toContain("4 × protein + 4 × carbs + 9 × fat");
+		expect(prompt).toContain("PER SERVING");
+		expect(prompt).toContain("per-container column");
+		expect(prompt).toContain("about the NUMBERS");
+	});
+
+	it("does not put any of it on the activities call, which has no label to read", () => {
+		const prompt = buildPartDetailSystemPrompt(context, "activities");
+		expect(prompt).not.toContain("4 × protein + 4 × carbs + 9 × fat");
 	});
 });

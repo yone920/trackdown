@@ -431,3 +431,79 @@ describe('an attached photo is removed by its badge and by nothing else', () => 
     await waitFor(() => expect(screen.queryByTestId('photo-file:///a.jpg')).toBeNull());
   });
 });
+
+// The history of a change told BEFORE anything was saved (migration 0015). The parts have
+// no ids yet, so the server measures the diff, hands it back with the revised parts, and
+// the sheet gives it straight back on the confirm — which writes it against the rows the
+// parts turn into.
+describe('a change told to a pending log ends up in the record', () => {
+  const carbsFixed = { part: 0, item: null, instruction: 'the carbs look wrong', changes: [{ field: 'carbs_g', from: 398, to: 89 }] };
+
+  it('relays every correction the server measured, in the order they were told', async () => {
+    mockUpload.mockResolvedValueOnce(analyzed([meal]));
+    mockApi.mockResolvedValue({ kind: 'meal', kinds: ['meal'], replayed: false });
+    renderSheet();
+    await logIt('tuna, eggs and four slices of this bread');
+
+    fireEvent.press(screen.getByTestId('log-make-change'));
+    mockUpload.mockResolvedValueOnce({ ...analyzed([{ ...meal, carbs_g: 89 }]), corrections: [carbsFixed] });
+    fireEvent.changeText(screen.getByTestId('log-text'), 'the carbs look wrong');
+    fireEvent.press(screen.getByTestId('log-submit'));
+    await waitFor(() => expect(screen.getByTestId('confirm-save')).toBeTruthy());
+
+    // A second told change, on the same preview.
+    fireEvent.press(screen.getByTestId('log-make-change'));
+    mockUpload.mockResolvedValueOnce({
+      ...analyzed([{ ...meal, carbs_g: 89, kcal: 880 }]),
+      corrections: [{ part: 0, item: null, instruction: 'about 880 calories', changes: [{ field: 'kcal', from: 620, to: 880 }] }],
+    });
+    fireEvent.changeText(screen.getByTestId('log-text'), 'about 880 calories');
+    fireEvent.press(screen.getByTestId('log-submit'));
+    await waitFor(() => expect(screen.getByTestId('meal-kcal')).toHaveTextContent('880'));
+
+    fireEvent.press(screen.getByTestId('confirm-save'));
+    await waitFor(() => expect(mockApi).toHaveBeenCalled());
+    const [, options] = mockApi.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    expect(options.body.corrections).toEqual([
+      carbsFixed,
+      { part: 0, item: null, instruction: 'about 880 calories', changes: [{ field: 'kcal', from: 620, to: 880 }] },
+    ]);
+  });
+
+  it('sends none at all for a log nobody corrected', async () => {
+    mockUpload.mockResolvedValue(analyzed([meal]));
+    mockApi.mockResolvedValue({ kind: 'meal', kinds: ['meal'], replayed: false });
+    renderSheet();
+    await logIt('chicken and rice');
+    fireEvent.press(screen.getByTestId('confirm-save'));
+
+    await waitFor(() => expect(mockApi).toHaveBeenCalled());
+    const [, options] = mockApi.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    expect(options.body.corrections).toEqual([]);
+  });
+
+  it('drops the history of a part the user then removed with its ✕', async () => {
+    mockUpload.mockResolvedValueOnce(analyzed([workout, meal]));
+    mockApi.mockResolvedValue({ kind: 'meal', kinds: ['meal'], replayed: false });
+    renderSheet();
+    await logIt('rows, then dinner');
+
+    fireEvent.press(screen.getByTestId('log-make-change'));
+    mockUpload.mockResolvedValueOnce({
+      ...analyzed([workout, { ...meal, carbs_g: 89 }]),
+      // The meal is part 1 here.
+      corrections: [{ ...carbsFixed, part: 1 }],
+    });
+    fireEvent.changeText(screen.getByTestId('log-text'), 'the carbs look wrong');
+    fireEvent.press(screen.getByTestId('log-submit'));
+    await waitFor(() => expect(screen.getByTestId('confirm-card-1')).toBeTruthy());
+
+    // Drop the meal. Its history goes with it rather than sliding onto the workout.
+    fireEvent.press(screen.getByTestId('confirm-card-1-remove'));
+    fireEvent.press(screen.getByTestId('confirm-save'));
+
+    await waitFor(() => expect(mockApi).toHaveBeenCalled());
+    const [, options] = mockApi.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    expect(options.body.corrections).toEqual([]);
+  });
+});

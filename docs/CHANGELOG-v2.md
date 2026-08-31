@@ -87,6 +87,191 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-08-31 — 398 g of carbohydrate, and a correction nobody kept (`wp-meal-accuracy`)
+
+Photographed and spoken into the Log sheet: tuna, two eggs, a quarter of an onion, one
+chilli, two cups of vegetables, two tablespoons of olive oil and **"four slices of this
+bread"**, with photos of the bread bag's nutrition label and the tuna can's. It came back
+
+    918 kcal · 67 g protein · 398 g carbs · 35 g fat        — HIGH confidence
+
+4 × 67 + 4 × 398 + 9 × 35 ≈ **2,175 kcal**, which is not 918 by a factor of two. The 398 is
+the label's whole-loaf figure taken for four slices of it, and the reading contradicted
+itself in the same four numbers it was asserting with confidence. The user corrected it by
+telling — "the carbs look wrong" → 89 — and **that correction appeared nowhere**: the record
+showed 89 as if it had always said so.
+
+Three things, and the third is the one with a migration under it.
+
+#### A — the arithmetic gate
+
+`services/fusion/arithmetic.ts` is one pure module, applied to **every meal this analyzer
+produces** — the routed part and a segment, at analyze and at revise:
+
+    implied = 4·protein + 4·carbs + 9·fat        against the kcal stated beside them
+
+- **Generous on purpose:** ±25 % or ±150 kcal, whichever is *larger*. The Atwater factors
+  are round numbers, fibre yields about 2 kcal/g rather than 4 (so `implied` runs high on a
+  high-fibre plate), alcohol yields 7 and is in none of the three (so it runs low on a night
+  out), and a portion estimate is an estimate. This is not a nutritionist; it is looking for
+  the reading that is wrong by a *factor*, and 918 against 2,175 clears any honest tolerance
+  several times over. A difference exactly **at** the tolerance passes — a gate that fires on
+  its own boundary is one nobody can reason about.
+- **A missing macro is not a zero.** All three or nothing is checked: failing a plate whose
+  fat figure nobody read would be the gate inventing a disagreement out of a blank.
+- **On failure, one automatic re-ask** — the meal detail call again, same message, same
+  schema, with the discrepancy spelled out in numbers (*"your macros imply about 2,175 kcal
+  but you said 918"*) and the hypothesis named, because "these do not add up" with no
+  hypothesis is an instruction to guess again rather than to check something. On the routed
+  path this re-ask is the meal detail call that path otherwise never makes.
+- **If it still does not add up, the meal is presented ANYWAY and the confidence is forced to
+  `low`**, whatever the model claimed. Refusing to log what somebody ate is the failure
+  "always log" exists to prevent; what we can honestly stop doing is calling it certain. A
+  re-ask that throws, or that escapes the check by quietly dropping the macros, is flagged
+  the same way — nothing left to check is not the same as checked and fine.
+- **`consistency` is a new PUBLIC field on the meal branch** — `{ outcome: "adjusted" |
+  "flagged", stated_kcal, implied_kcal }`, null when the first reading was fine, which is
+  nearly always. Derived, never asked for, so **no model-facing schema pays a byte for it**
+  and the grammar ceiling is untouched. It is stripped from `compactPart`, so a revision
+  never shows the model our verdict on its last answer instead of its answer.
+
+#### B — what a photo is evidence *about*
+
+Three rules, in the routing prompt's `EVIDENCE` block and again on the meal's own detail
+call. Prompt text only: no field, no schema change, no grammar spent.
+
+- **A photo never adds an item.** It is evidence about something the user already mentioned
+  — a label, a packet, a machine in frame is there to *price* what they said. Something a
+  photo shows is added only when nothing they said matches it at all.
+- **A nutrition label is a PER-SERVING table.** Stated quantity × the per-serving row. The
+  per-container column is what the whole packet holds and nobody ate the packet unless they
+  said so. A loaf's carbohydrate total is not four slices of bread.
+- **Confidence is the weakest link, and the weakest link is the numbers.** Recognising the
+  food is the easy half and it does not make the portion, the serving count or the macros
+  "high".
+
+The meal detail call also carries the arithmetic as a *cheap* rule — *multiply before you
+answer; if 4P+4C+9F is not within about a quarter of your kcal, one of the four is wrong and
+it is nearly always a serving size* — so the common case never needs the second call. The
+gate still runs regardless, because a rule that lives only in a prompt is a suggestion.
+
+#### C — correction history (`0015_corrections.sql`)
+
+`record_corrections`: one row per told change, per record it changed — the user's own
+instruction and the field-level diff, with exactly one owner (`activity_id` / `meal_id` /
+`weight_id`), `ON DELETE CASCADE` throughout. Both ways a correction can be made write
+through `services/corrections.ts`:
+
+- **A pending preview**, corrected before it was ever saved. The diff is computed by the
+  server during `POST /api/log/analyze`'s revise — the only place both sides exist — and
+  returned as `corrections: [{ part, item, instruction, changes }]`. The app relays it back
+  on the confirm, which writes it **inside the same transaction** as the rows it points at:
+  a correction whose record failed to save is not a correction that happened. The client
+  relays rather than computes, because a client that could write its own history could write
+  one that never happened.
+- **A saved row**, corrected in place. `PATCH /api/entries/:kind/:id` and `PATCH
+  /api/weight/:id` take `correction_instruction` — not a column, the sentence behind the
+  change — and the service diffs the row **before against after** itself.
+
+`GET /api/day/:date/log` carries each entry's `corrections`, oldest first, from one query per
+day. The record view's provenance list — built to take appended entries — now reads:
+
+> **How this was recorded**
+> You said: "…four slices of this bread"  [two photos]
+> Corrected 1:45p: "the carbs look wrong" · carbs 398 → 89
+
+#### D — and the chip says why
+
+The chip already read **"Low confidence — check me"**. What was missing was the reason, and
+it is a reason the user cannot see because it is a multiplication nothing on the card
+performs. A flagged meal now carries one line under the plate: *"The numbers didn't add up —
+918 kcal against 2,175 from the macros; flagged, not adjusted."* An adjusted one says it was
+read again and put right. A meal that added up first time draws nothing at all.
+
+**Decisions**
+
+- **The gate is deterministic and it is in code.** The prompt asks the model to multiply;
+  the code checks. The whole field report is a model that had already decided it was sure.
+- **Present, never refuse.** The gate downgrades confidence; it never blocks a save.
+- **An activities part's items are diffed and filed separately** — each item is its own
+  `activities` row and its own line in the log, so each correction points at the row it is
+  actually about. A revision that changed how many exercises there are is not a field-level
+  correction and returns no diff rather than a fictional one.
+- **A correction that moved nothing is not written.** "Make it 880" said at a meal that is
+  already 880 is not history, and an empty changes row under a record reads as a change the
+  user cannot see.
+- **`confidence` is not a correctable field.** It moves on every revision by design (the user
+  is the authority), and "confidence: medium → high" under every correction is noise on top of
+  the one line anybody wanted.
+- **Goals and statements keep no history here.** A goal's spec IS its record and it is edited
+  on its own screen; a statement lives in an array on the profile. The confirm files a
+  correction by the part's own *kind*, never by whichever id it happens to carry — a goal
+  part carries the weigh-in its stated facts produced, and correcting the goal is not
+  correcting that weight.
+- **`corrections` is optional on the app's `DayLogEntry`.** One release of compatibility: an
+  older server simply does not send it, which is not the same as sending an empty list.
+- No new dependencies. One migration.
+
+**Tests** — 600 passing, 2 skipped in `backend` (was 563/2, with the key set so the contract
+tests run); 195 passing in the app (was 185).
+
+- `src/services/fusion/arithmetic.test.ts` (new, 10): the Atwater sum and its null when a
+  macro is missing; the tolerance as the larger of 25 % and 150 kcal; the **918/398 field
+  case as a fixture**, with its implied 2,175 and its 230-kcal tolerance; a reading exactly
+  at the tolerance passing and one calorie past it failing; the alcohol shape failing in the
+  other direction while a beer on a small plate stays inside the floor; nothing checked when
+  there is nothing to check; and the discrepancy line naming both numbers.
+- `src/services/corrections.test.ts` (new, 9): the diff of the field case; a cleared field as
+  a change to null; arrays compared structurally and `45` against NUMERIC's `45.0`; a field
+  the patch never named ignored; an activities part's items kept apart with their indexes; no
+  fictional diff when the shape changed under it; and silence on a goal, a statement and a
+  question.
+- `src/services/fusion/fusion.test.ts` (+10): a meal that adds up costing no second call; the
+  **one** re-ask with 2,175 and 918 in its prompt and the model's own answer beside them (and
+  our verdict NOT beside them), keeping the reconciled numbers as `adjusted`; the re-ask that
+  fails, the re-ask that throws and the re-ask that drops the macros all landing on
+  `flagged` + forced `low` with the meal still saveable; the gate on a meal that arrived as a
+  second part; the gate at revise; and the three photo-binding rules present on the router and
+  on the meal call and absent from the activities call.
+- `src/app.test.ts` (+6): the field case end to end — revise → `corrections` on the wire →
+  confirm → the correction on `GET /api/day/:date/log`, written against the meal and nothing
+  else; a saved row PATCHed with `correction_instruction` and the server's own diff appended
+  chronologically; an instruction that moved nothing writing no row; a corrected weigh-in and
+  a corrected lift each filed against their own record; the history cascading away with a
+  deleted meal; and a correction for a part that is no longer being saved dropped rather than
+  filed elsewhere.
+- `anthropic.fusion.contract.test.ts` (+2, **all fifteen run here against the real model,
+  fifteen for fifteen**): the field transcript, asserting the honesty guarantee rather than a
+  number — whatever comes back either adds up or says it does not and is not called high; and
+  a **generated nutrition label** (15 g of carbohydrate a slice, 300 g a package) with "I ate
+  four slices of this bread", asserting the answer is priced per serving, that the label added
+  no item of its own, and that the photo belongs to the meal.
+- `__tests__/log-correction.test.tsx` (+4): both corrections drawn in the provenance list under
+  the words and the photos, oldest first, with `carbs 398 → 89` and no column name printed at
+  anybody; nothing drawn for an uncorrected record; a server that has never heard of
+  corrections; and the PATCH carrying `correction_instruction`.
+- `__tests__/log.test.tsx` (+3): two told changes on one pending preview relayed to the confirm
+  in order; nothing sent for a log nobody corrected; and a dropped part taking its history with
+  it rather than sliding onto the part beside it.
+- `__tests__/confirm-card.test.tsx` (+3): the flagged line with both figures beside the
+  forced-low chip, the adjusted line, and nothing at all for the meal that added up.
+
+**Deferred**
+
+- **The gate only knows meals.** An activity's kcal has no arithmetic to check it against —
+  the MET estimate is already ours (`fix-strength-kcal`) — and a weigh-in is one number.
+- **`meal_items` are not checked against the meal.** The parts could be summed and compared
+  with the total, which would catch a different bug (a plate whose items do not add to it).
+  The field case is the totals contradicting themselves, and one gate that fires is worth
+  more than two that argue.
+- **One re-ask, never two.** A model that cannot reconcile it in one look is not going to on
+  the third, and the honest answer is a low confidence rather than a third round trip on the
+  hot path.
+- **A correction cannot be undone.** It is a record of what happened, and un-correcting is a
+  new correction — which the log will show, because that is also what happened.
+- **Nothing surfaces corrections outside the record view.** The Day screen and the DayLog list
+  show the row as it now stands; the history is one tap away, where the row is.
+
 ### 2026-08-31 — the brief is a plan, not a verdict (`wp-coach-living-plan`)
 
 Photographed mid-workout: the user asked the coach at eleven, having lifted at eight, and
