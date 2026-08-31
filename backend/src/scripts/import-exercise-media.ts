@@ -170,7 +170,11 @@ export async function importExerciseMedia({
 		}
 		try {
 			const bytes = await fetchImage(imagePath);
-			bytesDownloaded += await media.put(exerciseId, index, bytes);
+			// Not `bytesDownloaded += await media.put(...)`: that reads the counter, then
+			// suspends, then writes back what it read — so with CONCURRENCY workers running
+			// it loses every update that landed in between.
+			const written = await media.put(exerciseId, index, bytes);
+			bytesDownloaded += written;
 			downloaded += 1;
 			frames.set(exerciseId, (frames.get(exerciseId) ?? 0) + 1);
 		} catch (error) {

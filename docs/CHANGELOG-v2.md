@@ -292,6 +292,10 @@ Warm-Up, Hip Mobility Drill, Shoulder Dislocates) — plus Landmine Press, Bulga
 Squat, Bicycle Crunch, Hollow Hold, Burpee, Neck Curl and the catch-all Other Activity. All of
 those still open, in **name-only mode**, and their form video still works.
 
+On the Docker host the import took one pass at first boot: **196 frames, 11.9 MB** in the
+`trackdown_uploads` volume under `exercise-media/`. Every restart since short-circuits before
+it even fetches the dataset.
+
 **Added**
 
 - `migrations/0010_exercise_media.sql` — `instructions text[]`, `media_count int`,

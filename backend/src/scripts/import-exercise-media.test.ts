@@ -130,6 +130,10 @@ describe("importing", () => {
 		]);
 		expect(media.frames.get(`${bench.id}/0`)).toEqual(fakeFrame("Barbell_Bench_Press_-_Medium_Grip/0.jpg"));
 		expect(media.frames.size).toBe(4);
+
+		// Every downloaded byte is counted. The workers run concurrently, so a counter
+		// updated across an `await` silently loses most of this.
+		expect(report.bytesDownloaded).toBe((await media.usage()).bytes);
 	});
 
 	it("does not match a dataset name that collides with an alias for a different movement", async () => {
