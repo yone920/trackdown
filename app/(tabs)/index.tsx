@@ -11,6 +11,7 @@ import { Card, Chip, Chips, GroupHeading, Row, Section } from '@/components/kit'
 import { MetricCard } from '@/components/metric-card';
 import { ReadingCard } from '@/components/reading-card';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
+import { openExercise } from '@/lib/exercise';
 import { clock, dateEyebrow, dateLabel, grams, kcal, slotLabel } from '@/lib/format';
 import { localDateKey, useDay, useGoals, useProfile, useWeek } from '@/lib/queries';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
@@ -235,6 +236,15 @@ export default function Today() {
                       key={activity.id ?? `${block.id}-${index}`}
                       time={clock(activity.logged_at)}
                       title={activity.exercise ?? activity.description}
+                      onTitlePress={
+                        activity.exercise
+                          ? () =>
+                              openExercise(router, {
+                                id: activity.exercise_id,
+                                name: activity.exercise,
+                              })
+                          : undefined
+                      }
                       sub={activity.exercise ? activity.description : null}
                       right={activity.kcal > 0 ? kcal(activity.kcal) : null}
                       divider={index < members.length - 1}>
@@ -257,6 +267,12 @@ export default function Today() {
                     key={activity.id ?? `standalone-${index}`}
                     time={clock(activity.logged_at)}
                     title={activity.exercise ?? activity.description}
+                    onTitlePress={
+                      activity.exercise
+                        ? () =>
+                            openExercise(router, { id: activity.exercise_id, name: activity.exercise })
+                        : undefined
+                    }
                     sub={activity.source === 'health' ? 'From Health' : null}
                     right={activity.kcal > 0 ? kcal(activity.kcal) : null}
                     divider={index < standalone.length - 1}

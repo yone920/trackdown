@@ -64,6 +64,8 @@ export default function RootLayout() {
             {/* A day and, one tap further in, the rows it was built from. */}
             <Stack.Screen name="day/[date]" />
             <Stack.Screen name="day/[date]/log" />
+            {/* Any exercise name, anywhere, opens this. */}
+            <Stack.Screen name="exercise/[id]" />
           </Stack.Protected>
           <Stack.Protected guard={!session}>
             <Stack.Screen name="(auth)" />

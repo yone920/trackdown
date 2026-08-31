@@ -94,6 +94,7 @@ export function Row({
   right,
   rightColor,
   onPress,
+  onTitlePress,
   divider = true,
   dashed = false,
   children,
@@ -104,6 +105,11 @@ export function Row({
   right?: string | null;
   rightColor?: string;
   onPress?: () => void;
+  /**
+   * The title alone is tappable — an exercise name opening its sheet. Underlined, because
+   * a row that is a link in some rows and not in others has to say which it is.
+   */
+  onTitlePress?: () => void;
   divider?: boolean;
   /** The expected-but-missing placeholder: the same row, drawn as an outline. */
   dashed?: boolean;
@@ -124,7 +130,19 @@ export function Row({
         {time ? <Sub style={[{ paddingTop: 2 }, TABULAR]}>{time}</Sub> : null}
       </View>
       <View style={{ flex: 1, paddingRight: 10 }}>
-        <Body>{title}</Body>
+        {onTitlePress ? (
+          <Pressable
+            onPress={onTitlePress}
+            accessibilityRole="button"
+            accessibilityLabel={`${title} — how it is done`}
+            style={({ alignSelf: 'flex-start' })}>
+            <Body style={{ textDecorationLine: 'underline', textDecorationColor: C.track }}>
+              {title}
+            </Body>
+          </Pressable>
+        ) : (
+          <Body>{title}</Body>
+        )}
         {sub ? <Sub style={{ marginTop: 2 }}>{sub}</Sub> : null}
         {children}
       </View>

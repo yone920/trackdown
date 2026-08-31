@@ -7,6 +7,7 @@ import { Control } from '@/components/control';
 import { IconCamera, IconChevronLeft, IconKeyboard, IconMic } from '@/components/icons';
 import { Card, Chip, Chips, GroupHeading, Row, Section } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
+import { openExercise } from '@/lib/exercise';
 import { clock } from '@/lib/format';
 import { getSpeech } from '@/lib/ports/speech';
 import { localDateKey, useCoachNext, useRegenerateCoach, useUpdateGoal } from '@/lib/queries';
@@ -127,6 +128,9 @@ export default function Coach() {
               <Row
                 key={`${exercise.name}-${index}`}
                 title={exercise.name}
+                onTitlePress={() =>
+                  openExercise(router, { id: exercise.exercise_id, name: exercise.name })
+                }
                 sub={[
                   exercise.load_lb != null ? `${exercise.load_lb} lb` : null,
                   exercise.sets != null && exercise.reps != null
