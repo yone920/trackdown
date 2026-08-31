@@ -39,6 +39,8 @@ export type DayLogRecord =
 			exercise: string | null;
 			/** The catalogue row it resolved to — what makes the name tappable in the DayLog. */
 			exercise_id: string | null;
+			/** What it was done on, when they named one; the sub-line under the movement. */
+			equipment: string | null;
 			category: string | null;
 			muscle_groups: string[];
 			sets: number | null;
@@ -129,6 +131,9 @@ const round1 = (value: number): number => Math.round(value * 10) / 10;
 
 function activityUnderstood(record: Extract<DayLogRecord, { kind: "activity" }>): string {
 	const parts: string[] = [record.exercise ?? record.description];
+	// The machine, when it was named — for a movement the reader could only guess at, this
+	// is often the part the user is certain of and the part they recognise the row by.
+	if (record.equipment) parts.push(record.equipment);
 	if (record.sets != null && record.reps != null) parts.push(`${record.sets} × ${record.reps}`);
 	else if (record.sets != null) parts.push(`${record.sets} sets`);
 	if (record.load_lb != null) parts.push(`${round1(record.load_lb)} lb`);
@@ -150,6 +155,7 @@ interface ActivityRow {
 	description: string;
 	exercise: string | null;
 	exercise_id: string | null;
+	equipment: string | null;
 	category: string | null;
 	muscle_groups: string[] | null;
 	sets: number | null;
@@ -200,8 +206,8 @@ export async function dayLog(db: Queryable, { userId, date, tzOffsetMin }: DayLo
 	const window = [userId, startUtc.toISOString(), endUtc.toISOString()];
 
 	const activities = await db.query<ActivityRow>(
-		`SELECT id, logged_at, description, exercise, exercise_id, category, muscle_groups, sets, reps,
-		        load_lb, duration_min, distance_mi, kcal, source, confidence
+		`SELECT id, logged_at, description, exercise, exercise_id, equipment, category, muscle_groups,
+		        sets, reps, load_lb, duration_min, distance_mi, kcal, source, confidence
 		   FROM activities WHERE user_id = $1 AND logged_at >= $2 AND logged_at < $3`,
 		window
 	);
@@ -267,6 +273,7 @@ export async function dayLog(db: Queryable, { userId, date, tzOffsetMin }: DayLo
 			description: row.description,
 			exercise: row.exercise,
 			exercise_id: row.exercise_id,
+			equipment: row.equipment,
 			category: row.category,
 			muscle_groups: row.muscle_groups ?? [],
 			sets: row.sets,

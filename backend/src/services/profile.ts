@@ -2,6 +2,7 @@ import type pg from "pg";
 import { boundsOf, localDay, type IsoDate } from "./localTime.js";
 import { computeDayTargets, type DayTargets, type GoalPace, type TdeeProfile } from "./tdee.js";
 import { getProfile } from "./entries.js";
+import { currentPlaceSummary, type PlaceSummary } from "./places.js";
 
 // The plan, and what it works out to (docs/build-plan.md §WP4; concept-v2 §Goals and
 // profile — "the Profile screen renders the plan organised … each field with the date it
@@ -65,6 +66,12 @@ export async function loadTargets(
 export interface ProfileView {
 	/** Every column of `profiles`, as the shipped app already reads it. */
 	[column: string]: unknown;
+	/**
+	 * Where they train now and how much has been seen there (migration 0012) — the Goals
+	 * screen's "New Millennium · 14 machines seen". Null until they name a place, which is
+	 * the state most accounts are in.
+	 */
+	place: PlaceSummary | null;
 	targets: {
 		/** Maintenance calories. null when the profile cannot produce one. */
 		tdee: number | null;
@@ -100,6 +107,7 @@ export async function profileView(
 	const targets = await loadTargets(db, userId, date, tzOffsetMin);
 	return {
 		...profile,
+		place: await currentPlaceSummary(db, userId),
 		targets: {
 			tdee: targets.tdee,
 			eat_target: targets.target,

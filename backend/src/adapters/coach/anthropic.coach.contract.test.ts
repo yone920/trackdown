@@ -89,6 +89,7 @@ function inputs(): CoachBriefInputs {
 			training_days: 4,
 			environment: "gym",
 			equipment: ["barbell", "dumbbell", "machine"],
+			place: null,
 			constraints: ["bad left knee — no deep squats or lunges"],
 			preferences: ["prefers free weights"],
 			eatback: "half",

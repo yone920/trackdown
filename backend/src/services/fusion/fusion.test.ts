@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
-import { buildFusionMessageContent, createFusionAnalyzer, photoPartsFrom, usableSegments } from "./analyze.js";
+import {
+	buildFusionMessageContent,
+	createFusionAnalyzer,
+	photoPartsFrom,
+	usableSegments,
+	withRefinements,
+} from "./analyze.js";
+import { bestCandidate, stem, suggestRefinement, tokens } from "./refine.js";
 import { localDay, type FusionContext } from "./context.js";
 import { buildFusionSystemPrompt, buildPartDetailSystemPrompt } from "./prompt.js";
 import {
@@ -44,9 +51,13 @@ const context: FusionContext = {
 	],
 	todayWeights: [181.4],
 	recentExercises: ["Bench Press", "Lat Pulldown"],
-	catalog: [{ name: "Dumbbell Bench Press", aliases: ["db bench", "dumbbell press"] }],
+	catalog: [
+		{ name: "Dumbbell Bench Press", aliases: ["db bench", "dumbbell press"], category: "strength", primary_muscles: ["chest"] },
+		{ name: "Chest-Supported Row", aliases: ["chest supported row", "incline bench row", "seal row"], category: "strength", primary_muscles: ["back"] },
+	],
 	goals: [{ id: "g1", kind: "lose_fat", title: "Down to 170 lb", priority: 1, metrics: [] }],
 	kindHint: null,
+	clarify: null,
 };
 
 describe("localDay", () => {
@@ -290,13 +301,10 @@ describe("the model-facing schema", () => {
 	 * pin above is only an early warning: the contract test is the real gate.
 	 */
 	/**
-	 * The training background rides on the plan-fields shape, which is a *second* call and
-	 * not the routing union — so it costs the schema with 80 bytes of headroom nothing.
-	 * plan_fields went 964 → 1570 and statement 1081 → 1687; the routing schema is 3580,
-	 * exactly what it was.
+	 * The training background and the place both ride on the plan-fields shape, which is a
+	 * *second* call and not the routing union — so neither costs the union anything.
 	 */
 	it("carries the training background on the second call, not on the routing schema", () => {
-		expect(schemaBytes(FusionRouteOutputSchema)).toBe(3580);
 		const fields = ProfileFieldsSchema.parse({
 			diet_style: null,
 			protein_g: null,
@@ -322,16 +330,47 @@ describe("the model-facing schema", () => {
 
 	it("keeps the routing schema to one branch of the union plus a list of bare kinds", () => {
 		const answer = FusionRouteOutputSchema.parse({
-			result: { kind: "weight", weight_lb: 181, confidence: "high", photo_fields: [] },
+			result: { kind: "weight", weight_lb: 181, confidence: "high" },
 			more_kinds: ["meal", "activities"],
+			photo_fields: ["weight_lb"],
 		});
 		// A segment is a kind and nothing else — its own call fills the fields in.
 		expect(answer.more_kinds).toEqual(["meal", "activities"]);
-		// The measured ceiling for this shape is ~3.66 KB, not the 4.5 KB the old pin
-		// claimed: a routing schema of 3655 bytes compiled and one of 3687 did not. This
-		// one is 3580. The number below is what is left of that budget; it is a budget and
-		// not a proof — anthropic.fusion.contract.test.ts is the real gate.
-		expect(schemaBytes(FusionRouteOutputSchema)).toBeLessThan(3660);
+		// And the photo attribution is one answer for the whole log, beside the result
+		// rather than inside it: the union could not afford three copies of it AND
+		// `equipment`, and one message has one set of photos (see FusionRouteOutputSchema).
+		expect(answer.photo_fields).toEqual(["weight_lb"]);
+		expect(FusionRouteSchema.parse(answer.result)).not.toHaveProperty("photo_fields");
+	});
+
+	/**
+	 * The field budget, counted rather than weighed. Every measurement taken while fitting
+	 * `equipment` in said the same thing: one more field anywhere in this union is one too
+	 * many, whatever it costs in bytes. So the pin is on the count, and the number below is
+	 * the count that is known to compile — `anthropic.fusion.contract.test.ts` is the proof.
+	 */
+	it("spends no more fields on the routing union than the provider will compile", () => {
+		const json = z.toJSONSchema(FusionRouteOutputSchema) as unknown as {
+			properties: {
+				result: { oneOf: { properties: Record<string, { items?: { properties?: object } }> }[] };
+			};
+		};
+		const branches = json.properties.result.oneOf;
+		// activities · meal · weight · goal · statement · unclear.
+		expect(branches.map((branch) => Object.keys(branch.properties).length)).toEqual([2, 10, 3, 2, 3, 2]);
+		// And one activity item, which is the object every extra field wanted to live on.
+		expect(Object.keys(branches[0]!.properties.items?.items?.properties ?? {})).toEqual([
+			"exercise",
+			"equipment",
+			"description",
+			"sets",
+			"reps",
+			"load_lb",
+			"duration_min",
+			"distance_mi",
+			"kcal",
+			"confidence",
+		]);
 	});
 
 	// Anthropic compiles a structured-output schema into a decoding grammar and refuses
@@ -342,7 +381,7 @@ describe("the model-facing schema", () => {
 		const statement = FusionRouteSchema.parse({ kind: "statement", scope: "constraint", text: "bad left knee" });
 		expect(toFusionResult(statement)).toEqual({ kind: "constraint", text: "bad left knee", fields: null });
 		// The plan fields, when there were any, come from the second call.
-		expect(toFusionResult(statement, { fields: { diet_style: "keto", protein_g: null, carbs_max_g: 50, training_days: null, environment: null, equipment: null, eatback: null, experience: null, background: null, reference_loads: null } })).toMatchObject({
+		expect(toFusionResult(statement, { fields: { diet_style: "keto", protein_g: null, carbs_max_g: 50, training_days: null, environment: null, equipment: null, eatback: null, experience: null, background: null, reference_loads: null, place_name: null, place_kind: null } })).toMatchObject({
 			kind: "constraint",
 			fields: { diet_style: "keto", carbs_max_g: 50 },
 		});
@@ -369,6 +408,7 @@ describe("the model-facing schema", () => {
 			items: [
 				{
 					exercise: "db bench",
+					equipment: "dumbbells",
 					description: "3 × 10 dumbbell bench at 45 lb",
 					sets: 3,
 					reps: 10,
@@ -377,10 +417,9 @@ describe("the model-facing schema", () => {
 					distance_mi: null,
 					kcal: 180,
 					confidence: "medium",
-					photo_fields: ["load_lb"],
 				},
 			],
-		});
+		}, { photoFields: ["load_lb"] });
 		expect(result.kind).toBe("activities");
 		if (result.kind !== "activities") return;
 		// category and muscle_groups are not asked of the model: services/entries.ts fills
@@ -393,8 +432,10 @@ describe("the model-facing schema", () => {
 });
 
 /** The routing answer, in the shape the provider is actually given. */
-function routed(result: unknown, moreKinds: string[] = []): unknown {
-	return { result, more_kinds: moreKinds };
+function routed(result: unknown, moreKinds: string[] = [], photoFields: string[] = []): unknown {
+	// `photo_fields` is one answer for the whole log, beside the result — the union could not
+	// afford three copies of it and `equipment` (see FusionRouteOutputSchema).
+	return { result, more_kinds: moreKinds, photo_fields: photoFields };
 }
 
 describe("createFusionAnalyzer", () => {
@@ -486,6 +527,8 @@ describe("createFusionAnalyzer", () => {
 					experience: null,
 					background: null,
 					reference_loads: null,
+					place_name: null,
+					place_kind: null,
 				},
 			}
 		);
@@ -538,13 +581,13 @@ describe("splitting one input into parts", () => {
 		fiber_g: 3,
 		items: [],
 		confidence: "medium",
-		photo_fields: [],
 	};
 	const run = {
 		kind: "activities",
 		items: [
 			{
 				exercise: "Run",
+				equipment: null,
 				description: "5 km run",
 				sets: null,
 				reps: null,
@@ -553,18 +596,17 @@ describe("splitting one input into parts", () => {
 				distance_mi: 3.11,
 				kcal: 300,
 				confidence: "medium",
-				photo_fields: [],
 			},
 		],
 	};
-	const weighIn = { weight_lb: 181, confidence: "high", photo_fields: [] };
+	const weighIn = { weight_lb: 181, confidence: "high" };
 
 	it("returns one result per kind, in the order they were said", async () => {
 		const llm = createFakeLlm();
 		llm.outputs.push(
 			routed(eggs, ["activities", "weight"]),
-			{ items: run.items, photo_indexes: [] },
-			{ ...weighIn, photo_indexes: [] }
+			{ items: run.items, photo_fields: [], photo_indexes: [] },
+			{ ...weighIn, photo_fields: [], photo_indexes: [] }
 		);
 		const { results } = await createFusionAnalyzer(llm).analyze({
 			text: "ate two eggs and toast, then ran 5k, weighed in at 181",
@@ -583,7 +625,7 @@ describe("splitting one input into parts", () => {
 
 	it("ignores a kind the router named twice", async () => {
 		const llm = createFakeLlm();
-		llm.outputs.push(routed(eggs, ["weight", "weight"]), { ...weighIn, photo_indexes: [] });
+		llm.outputs.push(routed(eggs, ["weight", "weight"]), { ...weighIn, photo_fields: [], photo_indexes: [] });
 		const { results } = await createFusionAnalyzer(llm).analyze({ text: "eggs; 181; 181", context });
 		expect(results.map((result) => result.kind)).toEqual(["meal", "weight"]);
 		expect(llm.requests).toHaveLength(2);
@@ -618,6 +660,8 @@ describe("splitting one input into parts", () => {
 					experience: null,
 					background: null,
 					reference_loads: null,
+					place_name: null,
+					place_kind: null,
 				},
 			}
 		);
@@ -672,7 +716,7 @@ describe("splitting one input into parts", () => {
 	it("files each photo against the part that says it read it", async () => {
 		const llm = createFakeLlm();
 		// The machine photo (index 1) went to the run; the plate stayed with the meal.
-		llm.outputs.push(routed(eggs, ["activities"]), { items: run.items, photo_indexes: [1] });
+		llm.outputs.push(routed(eggs, ["activities"]), { items: run.items, photo_fields: [], photo_indexes: [1] });
 		const { photoParts } = await createFusionAnalyzer(llm).analyze({
 			text: "ate this, then did this",
 			photos: [
@@ -696,7 +740,166 @@ describe("splitting one input into parts", () => {
 	it("has nothing more to ask when the whole log was unclear", () => {
 		const question = { kind: "unclear" as const, question: "What did you have?" };
 		expect(usableSegments(question, ["meal"])).toEqual([]);
-		const meal = { kind: "meal" as const, description: "x", meal_type: null, kcal: null, protein_g: null, carbs_g: null, fat_g: null, fiber_g: null, items: [], confidence: "low" as const, photo_fields: [] };
+		const meal = { kind: "meal" as const, description: "x", meal_type: null, kcal: null, protein_g: null, carbs_g: null, fat_g: null, fiber_g: null, items: [], confidence: "low" as const };
 		expect(usableSegments(meal, ["weight", "weight", "goal"])).toEqual(["weight", "goal"]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Always log, best effort
+// ---------------------------------------------------------------------------
+
+describe("the prompt's best-effort policy", () => {
+	const prompt = buildFusionSystemPrompt(context);
+
+	it("reserves 'unclear' for input that cannot be read at all", () => {
+		expect(prompt).toContain("LAST RESORT");
+		expect(prompt).toContain("cannot be interpreted at all");
+		// The rule the field report needed: a described movement is a workout, not a question.
+		expect(prompt).toContain("ALWAYS LOG. BEST EFFORT.");
+		expect(prompt).toContain("A question never stops a workout being saved");
+		expect(prompt).toContain("They cannot correct a workout that was never saved");
+	});
+
+	it("asks for the machine as its own field, never as the movement", () => {
+		expect(prompt).toContain("chest-supported row machine");
+		expect(prompt).toContain("It is NOT the movement");
+		expect(buildPartDetailSystemPrompt(context, "activities")).toContain('put the\nmachine in "equipment"');
+	});
+
+	it("says nothing about a clarify round when there is no question outstanding", () => {
+		expect(prompt).not.toContain("ANSWER TO A QUESTION");
+	});
+
+	it("hands back the question and the words it was about when there is one", () => {
+		const asked = buildFusionSystemPrompt({
+			...context,
+			clarify: { original_text: "did the thing", question: "Was that a bench press?" },
+		});
+		expect(asked).toContain("ANSWER TO A QUESTION YOU ASKED");
+		expect(asked).toContain('Their original log: "did the thing"');
+		expect(asked).toContain('The question you asked: "Was that a bench press?"');
+		expect(asked).toContain('a bare "yes" confirms whatever the question');
+	});
+});
+
+describe("the refinement offer", () => {
+	const catalog = context.catalog;
+
+	it("stems the endings that make one gym word look like two", () => {
+		expect(stem("inclined")).toBe("inclin");
+		expect(stem("incline")).toBe("inclin");
+		expect(stem("rows")).toBe("row");
+		expect(stem("pulling")).toBe("pull");
+		// Short words are left alone: "row" must not become "ro".
+		expect(stem("row")).toBe("row");
+	});
+
+	it("drops the words every entry in the catalogue would match", () => {
+		expect([...tokens("I don't know what that machine is called")]).toEqual([]);
+		expect([...tokens("inclined chest pull")]).toEqual(["inclin", "chest", "pull"]);
+	});
+
+	it("names the movement the words most look like", () => {
+		expect(bestCandidate({ said: ["inclined machine chest pull", "incline bench row machine"], catalog })).toBe(
+			"Chest-Supported Row"
+		);
+		// One word in common is not an identification.
+		expect(bestCandidate({ said: ["some sort of press"], catalog })).toBeNull();
+		expect(bestCandidate({ said: [null, ""], catalog })).toBeNull();
+	});
+
+	it("offers nothing when the reader already named a catalogue movement", () => {
+		const item = {
+			exercise: "Chest-Supported Row",
+			equipment: "incline bench row machine",
+			description: "3 × 12 at 45 lb",
+			confidence: "low" as const,
+		};
+		expect(suggestRefinement(item, catalog)).toBeNull();
+		// An alias counts as naming it: the save resolves it either way.
+		expect(suggestRefinement({ ...item, exercise: "seal row" }, catalog)).toBeNull();
+	});
+
+	it("offers nothing when the reader was sure", () => {
+		expect(
+			suggestRefinement(
+				{
+					exercise: "inclined machine chest pull",
+					equipment: "incline bench row machine",
+					description: "3 × 12",
+					confidence: "high",
+				},
+				catalog
+			)
+		).toBeNull();
+	});
+
+	it("borrows the catalogue's muscles for a guess, and says it is one", () => {
+		const guessed = withRefinements(
+			{
+				kind: "activities",
+				items: [
+					{
+						exercise: "inclined machine chest pull",
+						equipment: "incline bench row machine",
+						description: "3 × 12 at 45 lb",
+						category: null,
+						muscle_groups: null,
+						sets: 3,
+						reps: 12,
+						load_lb: 45,
+						duration_min: null,
+						distance_mi: null,
+						kcal: 90,
+						confidence: "low",
+						sources: null,
+						refine: null,
+					},
+				],
+			},
+			context
+		);
+		expect(guessed.kind).toBe("activities");
+		if (guessed.kind !== "activities") return;
+		expect(guessed.items[0]!.refine).toEqual({
+			question: "Was it a Chest-Supported Row?",
+			exercise: "Chest-Supported Row",
+		});
+		expect(guessed.items[0]).toMatchObject({ category: "strength", muscle_groups: ["back"] });
+		// The name the user gave is what is saved until they tap the chip.
+		expect(guessed.items[0]!.exercise).toBe("inclined machine chest pull");
+		// And it is still a valid public result, so it can be confirmed as it stands.
+		expect(FusionResultSchema.safeParse(guessed).success).toBe(true);
+	});
+
+	it("leaves a muscle group the user already has alone", () => {
+		const kept = withRefinements(
+			{
+				kind: "activities",
+				items: [
+					{
+						exercise: "inclined machine chest pull",
+						equipment: null,
+						description: "chest pull on the inclined bench row machine",
+						category: "mobility",
+						muscle_groups: ["shoulders"],
+						sets: null,
+						reps: null,
+						load_lb: null,
+						duration_min: null,
+						distance_mi: null,
+						kcal: 0,
+						confidence: "medium",
+						sources: null,
+						refine: null,
+					},
+				],
+			},
+			context
+		);
+		if (kept.kind !== "activities") return;
+		expect(kept.items[0]).toMatchObject({ category: "mobility", muscle_groups: ["shoulders"] });
+		expect(kept.items[0]!.refine).not.toBeNull();
 	});
 });

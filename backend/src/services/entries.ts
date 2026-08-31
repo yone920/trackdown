@@ -28,6 +28,9 @@ export const CONFIDENCE_LEVELS = ["low", "medium", "high"] as const;
 // writing a valid row.
 const activityFields = {
 	exercise: z.string().trim().min(1).max(120).nullable().optional(),
+	// What it was done ON (migration 0012). Separate from the movement, and never used to
+	// look one up: "cable stack" is not an exercise name.
+	equipment: z.string().trim().min(1).max(80).nullable().optional(),
 	category: z.enum(CATEGORIES).nullable().optional(),
 	muscle_groups: z.array(z.string().trim().min(1).max(40)).max(12).nullable().optional(),
 	sets: z.number().int().min(0).max(100).nullable().optional(),
@@ -133,6 +136,7 @@ const MACRO_COLUMNS = ["protein_g", "carbs_g", "fat_g", "fiber_g"] as const;
 const ACTIVITY_COLUMNS = [
 	"exercise",
 	"exercise_id",
+	"equipment",
 	"category",
 	"muscle_groups",
 	"sets",
@@ -249,6 +253,7 @@ export async function insertEntries(db: Queryable, userId: string, kind: Kind, e
 				// "last time you benched" matches across weeks of differently worded logs.
 				match?.name ?? e.exercise ?? null,
 				match?.id ?? null,
+				e.equipment ?? null,
 				e.category ?? match?.category ?? null,
 				e.muscle_groups ?? match?.primary_muscles ?? null,
 				e.sets ?? null,

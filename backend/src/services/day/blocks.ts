@@ -217,6 +217,8 @@ export function healthWorkoutAsActivity(workout: HealthWorkout): DayActivity {
 		exercise: workout.name,
 		// A Health workout was never matched against the catalogue; there is no sheet.
 		exercise_id: null,
+		// Health says what was done, never what it was done on.
+		equipment: null,
 		category: "cardio",
 		muscle_groups: [],
 		sets: null,

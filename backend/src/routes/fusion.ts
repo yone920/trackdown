@@ -44,6 +44,13 @@ const AnalyzeFields = z.object({
 	client_time: z.string().datetime({ offset: true }).optional(),
 	/** Minutes to add to UTC for local time: -new Date().getTimezoneOffset() on the phone. */
 	tz_offset_min: z.coerce.number().int().min(-840).max(840).optional(),
+	/**
+	 * The clarify round (docs/CHANGELOG-v2.md §Field fixes). When the last analyze came back
+	 * `unclear`, the app keeps the words it asked about and the question it asked, and sends
+	 * them with the answer — because "yes" on its own is not a log. Both or neither.
+	 */
+	clarify_original: z.string().trim().max(2000).optional(),
+	clarify_question: z.string().trim().max(300).optional(),
 });
 
 /** Turns multer's own errors into the status the client should act on. */
@@ -103,10 +110,18 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 		const stored = [];
 		for (const photo of photos) stored.push(await storePhotoEvidence(pool, store, userId, photo.buffer));
 
+		// Both halves or neither: a question with no words to apply it to would make the
+		// reader answer about a message it cannot see.
+		const clarify =
+			fields.clarify_original && fields.clarify_question
+				? { original_text: fields.clarify_original, question: fields.clarify_question }
+				: null;
+
 		const context = await buildFusionContext(pool, userId, {
 			...(fields.client_time ? { clientTime: new Date(fields.client_time) } : {}),
 			...(fields.tz_offset_min === undefined ? {} : { tzOffsetMin: fields.tz_offset_min }),
 			kindHint: fields.kind_hint ?? null,
+			clarify,
 		});
 
 		const llmPhotos: FusionPhoto[] = stored.map((s) => ({

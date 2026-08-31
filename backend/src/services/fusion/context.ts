@@ -63,10 +63,31 @@ export interface FusionContext {
 	todayWeights: number[];
 	/** Exercise names this user has actually logged, most recent first. */
 	recentExercises: string[];
-	catalog: { name: string; aliases: string[] }[];
+	/**
+	 * The catalogue. `name` and `aliases` are what the prompt prints; `category` and
+	 * `primary_muscles` are never shown to the model — they are what a best-guess movement
+	 * borrows when the user could only describe it (services/fusion/refine.ts).
+	 */
+	catalog: { name: string; aliases: string[]; category: string | null; primary_muscles: string[] }[];
 	goals: ActiveGoal[];
 	/** What the app thinks the user was doing ("meal", "goal"); a hint, never an order. */
 	kindHint: FusionKind | null;
+	/** The unanswered question this log is the answer to, when there is one. */
+	clarify: ClarifyRound | null;
+}
+
+/**
+ * The rare true-unclear case, remembered. When the reader genuinely cannot tell what
+ * happened it asks one question — and the answer to a question is meaningless without it.
+ * "Yes" is not a log; "yes" plus "was that a bench press?" plus the words that prompted it
+ * is. The app keeps both and sends them back with the next Read-it, so the second round
+ * resolves rather than asking the same question again.
+ */
+export interface ClarifyRound {
+	/** What the user said the first time, verbatim. */
+	original_text: string;
+	/** The question that came back. */
+	question: string;
 }
 
 export interface BuildContextOptions {
@@ -74,12 +95,14 @@ export interface BuildContextOptions {
 	clientTime?: Date;
 	tzOffsetMin?: number;
 	kindHint?: FusionKind | null;
+	/** The question the previous analyze asked, and the words it was asked about. */
+	clarify?: ClarifyRound | null;
 }
 
 export async function buildFusionContext(
 	db: Queryable,
 	userId: string,
-	{ clientTime, tzOffsetMin = 0, kindHint = null }: BuildContextOptions = {}
+	{ clientTime, tzOffsetMin = 0, kindHint = null, clarify = null }: BuildContextOptions = {}
 ): Promise<FusionContext> {
 	const day = localDay(clientTime ?? new Date(), tzOffsetMin);
 	const range = [day.startUtc.toISOString(), day.endUtc.toISOString()];
@@ -110,8 +133,8 @@ export async function buildFusionContext(
 		  GROUP BY exercise ORDER BY MAX(logged_at) DESC LIMIT $3`,
 		[userId, RECENT_EXERCISE_DAYS, MAX_RECENT_EXERCISES]
 	);
-	const catalog = await db.query<{ name: string; aliases: string[] }>(
-		`SELECT name, aliases FROM exercise_catalog ORDER BY name`
+	const catalog = await db.query<{ name: string; aliases: string[]; category: string | null; primary_muscles: string[] | null }>(
+		`SELECT name, aliases, category, primary_muscles FROM exercise_catalog ORDER BY name`
 	);
 	const goals = await db.query<ActiveGoal>(
 		`SELECT id, kind, title, metrics, priority FROM goals
@@ -132,8 +155,11 @@ export async function buildFusionContext(
 		catalog: catalog.rows.map((row) => ({
 			name: row.name,
 			aliases: row.aliases.slice(0, MAX_ALIASES_PER_EXERCISE),
+			category: row.category,
+			primary_muscles: row.primary_muscles ?? [],
 		})),
 		goals: goals.rows,
 		kindHint,
+		clarify,
 	};
 }

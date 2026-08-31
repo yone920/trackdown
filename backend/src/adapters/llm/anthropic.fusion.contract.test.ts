@@ -41,11 +41,13 @@ const context: FusionContext = {
 	todayWeights: [],
 	recentExercises: [],
 	catalog: [
-		{ name: "Treadmill Run", aliases: ["treadmill", "run"] },
-		{ name: "Dumbbell Bench Press", aliases: ["db bench"] },
+		{ name: "Treadmill Run", aliases: ["treadmill", "run"], category: "cardio", primary_muscles: [] },
+		{ name: "Dumbbell Bench Press", aliases: ["db bench"], category: "strength", primary_muscles: ["chest"] },
+		{ name: "Chest-Supported Row", aliases: ["chest supported row", "incline bench row", "seal row"], category: "strength", primary_muscles: ["back"] },
 	],
 	goals: [],
 	kindHint: null,
+	clarify: null,
 };
 
 /** A tiny generated image, so no binary fixture has to live in the repo. */
@@ -206,5 +208,70 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 		expect(photoParts).toHaveLength(1);
 		// The display belongs to the run, not to the burrito.
 		expect(results[photoParts[0]!]?.kind).toBe("activities");
+	}, 90_000);
+
+	// The field report this whole branch exists for. Said twice over, in circles, by someone
+	// who does not know the name of the machine they just used. The contract is not that the
+	// model guesses right — it is that it guesses AT ALL, and asks nothing.
+	it("logs a movement the user could not name, with no question and no missing numbers", async () => {
+		const said =
+			"I don't know what it is called but it is something is inclined, but I lay down on my " +
+			"tummy on my tummy and I pulled it up to my chest from down up down up. I don't know " +
+			"what that mission is called kind of inclined, but I laid up I lay on my tummy and " +
+			"using my BOSS hand pull it up to my chest. I don't know what that exercise what that " +
+			"machine is called but I did three reps of three sets of 12 rep at 45 pound.";
+		const { results } = await analyzer().analyze({ text: said, context });
+
+		// One workout. Not a question, and not a question hiding beside a workout.
+		expect(results).toHaveLength(1);
+		expect(results[0]!.kind).toBe("activities");
+		if (results[0]!.kind !== "activities") return;
+		const item = results[0]!.items[0]!;
+		// The numbers the user WAS sure of survive being unsure about everything else.
+		expect(item.sets).toBe(3);
+		expect(item.reps).toBe(12);
+		expect(item.load_lb).toBeCloseTo(45, 0);
+		// Something is named — the catalogue movement if it got there, their words if not.
+		expect(item.exercise ?? "").not.toBe("");
+		// And it says it was a guess rather than asking to be told.
+		expect(["low", "medium"]).toContain(item.confidence);
+	}, 90_000);
+
+	// The machine as its own field, on the routing schema — the one field this branch had to
+	// buy, and the reason `photo_fields` was hoisted out of the union to pay for it.
+	it("keeps the machine apart from the movement", async () => {
+		const { results } = await analyzer().analyze({
+			text: "did 3 sets of 12 at 45 pounds on the chest-supported row machine",
+			context,
+		});
+		expect(results[0]!.kind).toBe("activities");
+		if (results[0]!.kind !== "activities") return;
+		const item = results[0]!.items[0]!;
+		expect((item.equipment ?? "").toLowerCase()).toContain("machine");
+		// The movement is the movement; the machine is not smuggled into its name.
+		expect((item.exercise ?? "").toLowerCase()).not.toContain("machine");
+	}, 90_000);
+
+	// The place the equipment memory hangs off (migration 0012).
+	it("reads the name of the gym out of a statement about where they train", async () => {
+		const { results } = await analyzer().analyze({ text: "my gym is New Millennium", context });
+		const statement = results.find((part) => part.kind === "preference" || part.kind === "constraint");
+		expect(statement).toBeTruthy();
+		if (!statement || (statement.kind !== "preference" && statement.kind !== "constraint")) return;
+		expect(statement.fields?.place_name ?? "").toMatch(/new millennium/i);
+		expect(statement.fields?.place_kind).toBe("gym");
+	}, 90_000);
+
+	// The clarify round: the question is remembered, so "yes" resolves instead of looping.
+	it("resolves a bare answer against the question it was asked", async () => {
+		const { results } = await analyzer().analyze({
+			text: "yes",
+			context: {
+				...context,
+				clarify: { original_text: "did the thing on the treadmill", question: "Was that a treadmill run?" },
+			},
+		});
+		expect(results).toHaveLength(1);
+		expect(results[0]!.kind).toBe("activities");
 	}, 90_000);
 });

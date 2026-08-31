@@ -252,6 +252,12 @@ export function buildCoachPrompt(inputs: CoachBriefInputs, revision?: BriefRevis
 			// is writing for someone new to this or someone who has trained for years.
 			line("Experience (their own word for it)", plan.experience),
 			line("Training background as stated", plan.background),
+			// Observed, not declared: this is the kit they have actually used at this place,
+			// accrued from their own logs (migration 0012). It is evidence of what is there,
+			// never proof of what is not — hence "prefer", and hence the substitution rule.
+			plan.place && plan.place.equipment.length > 0
+				? `Seen at ${plan.place.name} (${plan.place.kind}), most used first: ${plan.place.equipment.join(", ")} — prefer these when you prescribe. Barbells, dumbbells and benches may be assumed. If you prescribe something not on this list, name a substitution from it in that exercise's note.`
+				: null,
 			plan.constraints.length > 0 ? `CONSTRAINTS (absolute): ${plan.constraints.join("; ")}` : null,
 			plan.preferences.length > 0 ? `Preferences: ${plan.preferences.join("; ")}` : null,
 		]),

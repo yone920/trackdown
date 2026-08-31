@@ -25,6 +25,7 @@ function activity(partial: Partial<DayActivity> & { logged_at: string }): DayAct
 		description: partial.description ?? "an exercise",
 		exercise: partial.exercise ?? null,
 		exercise_id: partial.exercise_id ?? null,
+		equipment: partial.equipment ?? null,
 		category: partial.category ?? "strength",
 		muscle_groups: partial.muscle_groups ?? [],
 		sets: partial.sets ?? null,
