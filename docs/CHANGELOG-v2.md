@@ -220,7 +220,8 @@ sees.
   the same reason every other plan field is: single-field tap to correct.
 - No new dependencies. One migration.
 
-**Tests** — 381 passing, 2 skipped in `backend` (was 360/2); 82 passing in the app (was 73).
+**Tests** — 384 passing, 2 skipped in `backend` (was 360/2, with the Anthropic key set so the
+contract tests run); 82 passing in the app (was 73).
 
 - `src/services/coach/rules.test.ts` (+10): a stated load prescribed and its shape; a
   logged exercise overriding it; the cold start taking it at face value against the
