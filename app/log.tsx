@@ -3,7 +3,6 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Image } from 'expo-image';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -16,7 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ConfirmCard, type DateChoice } from '@/components/confirm-card';
 import { Control } from '@/components/control';
 import { IconCamera, IconClose, IconKeyboard, IconMic } from '@/components/icons';
-import { Chip, Chips } from '@/components/kit';
+import { Card, Chip, Chips, Skeleton, SkeletonLines } from '@/components/kit';
 import { Disp, Sub } from '@/components/type';
 import { ApiError } from '@/lib/api';
 import { recordToResult, resultToPatch, type EditKind } from '@/lib/edit-record';
@@ -332,10 +331,15 @@ export default function LogSheet() {
         </View>
         )}
 
+        {/* The confirm card, in outline, while the read is running: the sheet already
+            shows where the answer is going to land. */}
         {analyze.isPending || (editing && !editEntry && dayLog.isLoading) ? (
-          <View style={{ marginTop: 24, alignItems: 'center' }}>
-            <ActivityIndicator color={C.mute} />
-          </View>
+          <Card testID="log-skeleton" style={{ marginTop: 24 }}>
+            <Skeleton width="40%" height={12} />
+            <View style={{ marginTop: 14 }}>
+              <SkeletonLines lines={3} />
+            </View>
+          </Card>
         ) : null}
 
         {error && results.length === 0 ? <Sub style={{ marginTop: 14, color: C.accent }}>{error}</Sub> : null}

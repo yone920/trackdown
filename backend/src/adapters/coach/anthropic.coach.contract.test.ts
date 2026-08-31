@@ -92,6 +92,8 @@ function inputs(): CoachBriefInputs {
 			constraints: ["bad left knee — no deep squats or lunges"],
 			preferences: ["prefers free weights"],
 			eatback: "half",
+			experience: null,
+			background: null,
 			units: "lb",
 			targets: { kcal: 2254, protein_g: 160, carbs_max_g: 250, fat_g: 63, tracking_only: false },
 		},
@@ -128,4 +130,45 @@ describe.skipIf(!apiKey)("anthropic coach brief (contract)", () => {
 		expect(brief.nutrition.kcal).toBe(2254);
 		expect(brief.nutrition.protein_g).toBe(160);
 	}, 120_000);
+
+	// The revision path, against the real model. Two claims a fake cannot make: the model
+	// can actually count past the old ceiling of six when it is asked to, and it returns a
+	// WHOLE brief rather than a patch — a revision that dropped the nutrition card or came
+	// back with an empty Do list is the failure this whole fix is about.
+	it("revises the brief it is handed, up to the number of exercises the user asked for", async () => {
+		const request = inputs();
+		const current = await coach().brief(request);
+
+		const revised = await coach().brief(request, {
+			instruction: "give me 7-8 workouts",
+			current,
+		});
+
+		expect(revised.workout.type).not.toBe("rest");
+		expect(revised.workout.exercises.length).toBeGreaterThanOrEqual(7);
+		expect(revised.workout.exercises.length).toBeLessThanOrEqual(10);
+		// The rest of the brief came back filled in, not dropped.
+		expect(revised.headline.length).toBeGreaterThan(3);
+		expect(revised.why.length).toBeGreaterThan(3);
+		expect(revised.nutrition.kcal).toBe(2254);
+		expect(revised.nudge.length).toBeGreaterThan(3);
+		// And the constraint still binds: the knee does not stop mattering because the
+		// user asked for a longer session.
+		expect(revised.workout.exercises.map((exercise) => exercise.name.toLowerCase()).join(" ")).not.toMatch(
+			/deep squat|lunge/
+		);
+	}, 180_000);
+
+	// "Switch to legs" is the other shape of revision: not more of the same, a different
+	// session. The Do list has to be rebuilt around it rather than appended to.
+	it("rebuilds the session around a different body part when asked", async () => {
+		const request = inputs();
+		const current = await coach().brief(request);
+		const revised = await coach().brief(request, { instruction: "switch to legs", current });
+
+		expect(revised.workout.exercises.length).toBeGreaterThan(0);
+		expect(`${revised.headline} ${revised.workout.targets.join(" ")}`.toLowerCase()).toMatch(
+			/leg|quad|hamstring|glute|calf|lower/
+		);
+	}, 180_000);
 });

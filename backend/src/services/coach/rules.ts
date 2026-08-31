@@ -1,3 +1,4 @@
+import type { ReferenceLoad } from "../fusion/schema.js";
 import type { CoachFeatures, ExerciseFeature, ExerciseSession, MuscleFeature } from "./features.js";
 
 // The coach's deterministic half (docs/concept-v2.md §Progression rules: "deterministic,
@@ -45,7 +46,16 @@ export interface GapRule {
 	text: string;
 }
 
-export type PrescriptionRule = "new" | "hold" | "step_up" | "step_down" | "ease_back" | "restart" | "cardio";
+export type PrescriptionRule =
+	| "new"
+	| "hold"
+	| "step_up"
+	| "step_down"
+	| "ease_back"
+	| "restart"
+	| "cardio"
+	/** From a load the user *stated* rather than one this log has seen — see below. */
+	| "reference";
 
 export interface Prescription {
 	exercise: string;
@@ -57,8 +67,23 @@ export interface Prescription {
 	rule: PrescriptionRule;
 	/** Why this number and not another — the sentence the coach may reuse verbatim. */
 	why: string;
-	days_since: number;
+	/** Null for a `reference` prescription: this log has never seen the exercise done. */
+	days_since: number | null;
 }
+
+/**
+ * The training background the user stated (migration 0011). Everything here is a claim,
+ * not a measurement — which is exactly why it is worth having: without it a first brief
+ * has to treat a three-year lifter as a beginner.
+ */
+export interface TrainingBackground {
+	experience: string | null;
+	background: string | null;
+	reference_loads: ReferenceLoad[];
+}
+
+/** Sets for a stated load: they gave a weight and maybe reps, never a set count. */
+export const REFERENCE_SETS = 3;
 
 export interface RecoveryRule {
 	/** Trained inside RECOVERY_DAYS — allowed as an accessory, never today's headline. */
@@ -73,7 +98,7 @@ export interface CardioRule {
 	text: string;
 }
 
-export type NudgeActionKind = "mark_reached" | "adjust_goal" | "weigh_in" | "close_items";
+export type NudgeActionKind = "mark_reached" | "adjust_goal" | "weigh_in" | "close_items" | "tell_background";
 
 export interface NudgeAction {
 	kind: NudgeActionKind;
@@ -119,6 +144,25 @@ export interface BuildRulesInput {
 	goals: CoachGoal[];
 	/** Equipment per exercise from the catalogue, keyed by lower-cased name. */
 	equipment?: Record<string, string[]>;
+	/** What the user said they bring with them, when they have said anything. */
+	background?: TrainingBackground;
+}
+
+const NO_BACKGROUND: TrainingBackground = { experience: null, background: null, reference_loads: [] };
+
+/**
+ * True when this user is a cold start we know nothing about: nothing logged in four weeks
+ * and nothing stated either. That is the one case where the coach has to guess, and the
+ * honest answer is to prescribe carefully and ask — not to assume a beginner, which is
+ * what "no history" used to be silently read as.
+ */
+export function needsBackground(features: CoachFeatures, background: TrainingBackground): boolean {
+	return (
+		features.exercises.length === 0 &&
+		!background.experience &&
+		!background.background &&
+		background.reference_loads.length === 0
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -293,14 +337,24 @@ export function cardioRule(features: CoachFeatures): CardioRule {
  *   4. Target reps on every set in two consecutive sessions steps up by one plate — unless
  *      the load already went up inside the last week.
  *   5. Otherwise: same load.
+ *
+ * And, since the training-background fix: an exercise with **no logged history but a
+ * stated reference load** ("I bench 165 for 3×5") is prescribed from the reference under
+ * the same rules. A statement is not a measurement, so the moment the exercise has real
+ * sessions behind it the log wins and the reference is not looked at again.
  */
 export function prescribeLoads(
 	features: CoachFeatures,
-	{ equipment, gap }: { equipment?: Record<string, string[]>; gap?: GapRule } = {}
+	{
+		equipment,
+		gap,
+		referenceLoads = [],
+	}: { equipment?: Record<string, string[]>; gap?: GapRule; referenceLoads?: readonly ReferenceLoad[] } = {}
 ): Prescription[] {
-	const gapLevel = (gap ?? gapRule(features.days_since_last_workout)).level;
+	const resolvedGap = gap ?? gapRule(features.days_since_last_workout);
+	const gapLevel = resolvedGap.level;
 
-	return features.exercises.map((feature) => {
+	const logged = features.exercises.map((feature) => {
 		const base = {
 			exercise: feature.exercise,
 			muscle_groups: feature.muscle_groups,
@@ -424,6 +478,54 @@ export function prescribeLoads(
 				: `${hits} of ${SESSIONS_AT_TARGET_BEFORE_STEP} sessions at target reps — hold ${current ?? "the load"} lb until it is two.`,
 		};
 	});
+
+	return [...logged, ...prescribeFromReferences(logged, referenceLoads, resolvedGap, equipment)];
+}
+
+/**
+ * The stated loads, for the exercises the log has nothing on. Two deliberate choices:
+ *
+ *   * A restart steps the reference down only when the gap is a *measured* one. On a brand
+ *     new account `days_since_last_workout` is null and `gapRule` calls that a restart —
+ *     but "we have never seen you train" is not "you stopped training", and taking a plate
+ *     off a load the user told us they lift today is the beginner assumption this whole
+ *     change exists to remove.
+ *   * A stated load never carries a set count, because nobody says one the same way twice.
+ *     Three sets is the plain starting scheme and the `why` says so.
+ */
+function prescribeFromReferences(
+	logged: readonly Prescription[],
+	references: readonly ReferenceLoad[],
+	gap: GapRule,
+	equipment?: Record<string, string[]>
+): Prescription[] {
+	if (references.length === 0) return [];
+	const known = new Set(logged.map((item) => item.exercise.trim().toLowerCase()));
+	const out: Prescription[] = [];
+
+	for (const reference of references) {
+		const key = reference.exercise.trim().toLowerCase();
+		if (known.has(key)) continue;
+		known.add(key);
+
+		const stated = reference.load_lb;
+		const easing = gap.level === "restart" && gap.days != null;
+		const step = stepFor(reference.exercise, stated, equipment);
+		out.push({
+			exercise: reference.exercise,
+			muscle_groups: [],
+			load_lb: easing ? Math.max(step, stated - step) : stated,
+			sets: easing ? Math.max(2, REFERENCE_SETS - 1) : REFERENCE_SETS,
+			reps: reference.reps,
+			minutes: null,
+			rule: "reference",
+			why: easing
+				? `Stated, not logged: ${stated} lb${reference.reps ? ` for ${reference.reps}` : ""}. Coming back after ${gap.days} days, so one step under it and a set fewer.`
+				: `Stated, not logged: the user says they lift ${stated} lb${reference.reps ? ` for ${reference.reps}` : ""}. Start there and let the log take over.`,
+			days_since: null,
+		});
+	}
+	return out;
 }
 
 /**
@@ -432,7 +534,11 @@ export function prescribeLoads(
  * has actually met is the most useful thing anyone could say — and the action is what the
  * app can do about it. The sentence itself is the model's; the button is not.
  */
-export function selectNudge(features: CoachFeatures, goals: readonly CoachGoal[]): NudgeSelection {
+export function selectNudge(
+	features: CoachFeatures,
+	goals: readonly CoachGoal[],
+	background: TrainingBackground = NO_BACKGROUND
+): NudgeSelection {
 	const byPriority = [...goals].sort((a, b) => a.priority - b.priority);
 
 	const reached = byPriority.find((goal) => goal.reached_candidate_at != null);
@@ -448,6 +554,18 @@ export function selectNudge(features: CoachFeatures, goals: readonly CoachGoal[]
 		return {
 			action: { kind: "adjust_goal", goal_id: stalled.id, label: "Adjust the goal" },
 			subject: `The goal "${stalled.title}" has not moved since ${stalled.stalled_since}. Offer to adjust it — a different pace, a different date, or a different measure. Do not imply the user failed.`,
+		};
+	}
+
+	// Before any of the log-quality nudges: with nothing logged they would all fire, and
+	// "you have not logged anything" is a worse thing to say to a new user than "tell me
+	// where you are starting from" — which is also the one answer that improves every
+	// brief after it (concept-v2 §Coach — the single most useful thing).
+	if (needsBackground(features, background)) {
+		return {
+			action: { kind: "tell_background", goal_id: null, label: "Tell me your background" },
+			subject:
+				"Nothing is logged yet and the user has not said what they bring with them. Ask for their training background in one sentence — how long they have trained and what they lift now (\"three years, I bench 165 for 3×5\") — and say plainly that it is what stops the first sessions being pitched at a beginner.",
 		};
 	}
 
@@ -482,12 +600,16 @@ export function selectNudge(features: CoachFeatures, goals: readonly CoachGoal[]
 	return { action: null, subject: "No outstanding action. Make the nudge the one thing that would most improve the next week." };
 }
 
-export function buildRules({ features, goals, equipment }: BuildRulesInput): CoachRules {
+export function buildRules({ features, goals, equipment, background = NO_BACKGROUND }: BuildRulesInput): CoachRules {
 	const gap = gapRule(features.days_since_last_workout);
 	const recovery = recoveryRule(features.muscles);
 	const cardio = cardioRule(features);
-	const prescriptions = prescribeLoads(features, { ...(equipment ? { equipment } : {}), gap });
-	const nudge = selectNudge(features, goals);
+	const prescriptions = prescribeLoads(features, {
+		...(equipment ? { equipment } : {}),
+		gap,
+		referenceLoads: background.reference_loads,
+	});
+	const nudge = selectNudge(features, goals, background);
 
 	const statements = [
 		gap.text,
@@ -497,8 +619,31 @@ export function buildRules({ features, goals, equipment }: BuildRulesInput): Coa
 			features.training_days_target ? ` against a plan of ${features.training_days_target}/week` : ""
 		}.`,
 		"Loads, sets and reps are prescribed below and are not yours to change: copy them exactly for any exercise you choose from the list. An exercise that is not on the list has no history, so give it no load — describe it and let the user pick the weight.",
+		backgroundStatement(features, background),
 		`Nudge: ${nudge.subject}`,
-	];
+	].filter((line): line is string => line !== null);
 
 	return { gap, recovery, cardio, prescriptions, nudge, statements };
+}
+
+/**
+ * What the coach is allowed to assume about a user it has no logs for. Three cases, and
+ * the middle one is the point of the whole change: "nothing logged" used to mean "treat
+ * them as a beginner", and it never did mean that.
+ */
+function backgroundStatement(features: CoachFeatures, background: TrainingBackground): string | null {
+	if (features.exercises.length > 0) return null;
+	if (needsBackground(features, background)) {
+		return "Nothing has ever been logged and this user has said nothing about their training background, so you do not know whether they are new to this. Do NOT assume a beginner and do not assume an athlete: prescribe a short, cautious first session with no loads, tell them to pick a weight they can control for the reps, and say in one clause that you are starting carefully because you do not know their background yet.";
+	}
+	const stated = [
+		background.experience ? `they describe themselves as ${background.experience}` : null,
+		background.background ? `in their words: "${background.background}"` : null,
+		background.reference_loads.length > 0
+			? `they state they currently lift ${background.reference_loads
+					.map((load) => `${load.exercise} ${load.load_lb} lb${load.reps ? ` × ${load.reps}` : ""}`)
+					.join(", ")}`
+			: null,
+	].filter(Boolean);
+	return `Nothing is logged yet, but this user told you where they are starting from — ${stated.join("; ")}. Pitch the session at that, not at a beginner. The stated loads are in PRESCRIBED LOADS below; they are a claim rather than a measurement, so use them as given and let the first real sessions correct them.`;
 }

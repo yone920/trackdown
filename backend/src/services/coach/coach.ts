@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
 import type pg from "pg";
-import type { Brief, CoachBriefInputs, CoachPlan, CoachPort, CoachToday } from "../../ports/coach.js";
+import type { Brief, BriefRevision, CoachBriefInputs, CoachPlan, CoachPort, CoachToday } from "../../ports/coach.js";
 import { computeDay, type DayView } from "../day.js";
 import { lookupExercises } from "../entries.js";
+import type { ReferenceLoad } from "../fusion/schema.js";
 import { listGoals } from "../goals/store.js";
 import { formatClock, localDay, localMinutesOf, type IsoDate } from "../localTime.js";
 import { loadTargets } from "../profile.js";
 import { computeFeatures, type CoachFeatures } from "./features.js";
-import { buildRules, type CoachGoal, type NudgeAction } from "./rules.js";
+import { assertUsableBrief, UnusableBriefError } from "./schema.js";
+import { buildRules, type CoachGoal, type NudgeAction, type TrainingBackground } from "./rules.js";
 
 // The brief: gathering its inputs, caching it for the day, and storing it
 // (docs/concept-v2.md §Coach — "on demand … cached for the rest of the day so repeated
@@ -174,6 +176,9 @@ interface PlanRow {
 	preferences: string[] | null;
 	eatback: string | null;
 	goal_pace: string | null;
+	experience: string | null;
+	background: string | null;
+	reference_loads: ReferenceLoad[] | null;
 }
 
 /** The weekly cardio minutes a goal asks for, when one does. */
@@ -223,11 +228,19 @@ export async function loadCoachInputs(
 	const plan = (
 		await db.query<PlanRow>(
 			`SELECT diet_style, training_days, environment, equipment, constraints, preferences,
-			        eatback, goal_pace
+			        eatback, goal_pace, experience, background, reference_loads
 			   FROM profiles WHERE id = $1`,
 			[userId]
 		)
 	).rows[0] ?? null;
+
+	// What the user said they bring with them (migration 0011). Stated, never measured —
+	// the rules read it only where the log has nothing to say.
+	const background: TrainingBackground = {
+		experience: plan?.experience ?? null,
+		background: plan?.background ?? null,
+		reference_loads: Array.isArray(plan?.reference_loads) ? plan.reference_loads : [],
+	};
 
 	// Through the goals store, so the coach sees exactly what the Goals screen sees:
 	// priority order, per-goal progress, and the reached/stalled candidates WP4 writes at
@@ -256,7 +269,7 @@ export async function loadCoachInputs(
 		},
 	});
 
-	const rules = buildRules({ features, goals, equipment: await equipmentFor(db, features) });
+	const rules = buildRules({ features, goals, equipment: await equipmentFor(db, features), background });
 
 	const statements = await dayContexts(db, userId, date);
 	const said = [...statements, ...(context?.trim() ? [context.trim()] : [])];
@@ -270,6 +283,8 @@ export async function loadCoachInputs(
 		constraints: plan?.constraints ?? [],
 		preferences: plan?.preferences ?? [],
 		eatback: plan?.eatback ?? "half",
+		experience: background.experience,
+		background: background.background,
 		units: "lb",
 		targets: {
 			kcal: view.target,
@@ -316,9 +331,12 @@ async function equipmentFor(db: Queryable, features: CoachFeatures): Promise<Rec
  * coach reads is a fact about what was logged. The local *hour* is in it because a brief at
  * 6 am and one at 9 pm are different answers to the same question; the minute is not.
  */
-export function briefInputsHash(inputs: CoachBriefInputs): string {
+export function briefInputsHash(inputs: CoachBriefInputs, revision: string | null = null): string {
 	const material = {
 		date: inputs.date,
+		// Only when there is one, so an ordinary brief hashes exactly as it always has and
+		// yesterday's stored rows do not all read as stale the day this ships.
+		...(revision === null ? {} : { revision }),
 		hour: inputs.local_time.slice(0, inputs.local_time.indexOf(":")) + inputs.local_time.slice(-2),
 		goals: inputs.goals.map((goal) => [goal.id, goal.priority, goal.reached_candidate_at, goal.stalled_since]),
 		plan: inputs.plan,
@@ -398,6 +416,12 @@ async function storeBrief(
 export interface NextBriefOptions extends LoadInputsOptions {
 	/** Ask again even if the cache has this exact answer (POST /api/coach/next/regenerate). */
 	regenerate?: boolean;
+	/**
+	 * "Make it 8 exercises", "switch to legs". The day's current brief goes to the model
+	 * with this instruction and the whole revised brief comes back. Implies a regenerate:
+	 * there is nothing to revise into the cache.
+	 */
+	revision?: string | null;
 }
 
 export interface NextBriefResult {
@@ -405,6 +429,8 @@ export interface NextBriefResult {
 	inputs: CoachBriefInputs;
 	/** True when the model could not be reached and an earlier brief was served instead. */
 	stale: boolean;
+	/** One line saying what went wrong, when `stale` is a fallback rather than a cache. */
+	note: string | null;
 }
 
 /** Thrown when there is no brief to serve at all — the route turns it into a 503. */
@@ -441,33 +467,97 @@ async function chooseBrief(
 	userId: string,
 	options: NextBriefOptions
 ): Promise<NextBriefResult> {
+	const instruction = options.revision?.trim() || null;
 	const inputs = await loadCoachInputs(db, userId, options);
-	const hash = briefInputsHash(inputs);
+	// A revision is about the brief in front of the user, so it is part of what the answer
+	// depends on: two different instructions against the same day are two different rows.
+	const hash = briefInputsHash(inputs, instruction);
 
-	if (!options.regenerate) {
+	if (!options.regenerate && !instruction) {
 		if (!inputs.context) {
 			const previous = await latestBrief(db, userId, inputs.date);
-			if (previous) return { brief: previous, inputs, stale: previous.inputs_hash !== hash };
+			if (previous) return { brief: previous, inputs, stale: previous.inputs_hash !== hash, note: null };
 		} else {
 			const cached = await cachedBrief(db, userId, inputs.date, hash);
-			if (cached) return { brief: cached, inputs, stale: false };
+			if (cached) return { brief: cached, inputs, stale: false, note: null };
 		}
 	}
 
+	// What is being revised: the day's standing answer, exactly as the app is drawing it.
+	// With nothing to revise the instruction is still worth having — it becomes the ask.
+	const current = instruction ? await latestBrief(db, userId, inputs.date) : null;
+
+	const revision = instruction && current ? { instruction, current: toBrief(current) } : undefined;
+
 	try {
-		const answer = await coach.brief(inputs);
+		const answer = await askUsable(coach, inputs, revision);
 		const stored = await storeBrief(db, userId, inputs, hash, answer, coach.model);
-		return { brief: stored, inputs, stale: false };
+		return { brief: stored, inputs, stale: false, note: null };
 	} catch (error) {
 		// A brief the user has already read beats an error page; nothing at all is a 503,
 		// because unlike a day reading the brief *is* the answer they asked for.
-		const previous = await latestBrief(db, userId, inputs.date);
+		const previous = current ?? (await latestBrief(db, userId, inputs.date));
 		if (previous) {
-			console.warn(`⚠️  Coach unavailable for ${inputs.date}, serving the previous brief:`, describe(error));
-			return { brief: previous, inputs, stale: true };
+			console.warn(`⚠️  Coach could not answer for ${inputs.date}, serving the previous brief:`, describe(error));
+			return { brief: previous, inputs, stale: true, note: failureNote(error, instruction) };
 		}
 		throw new CoachUnavailableError(describe(error));
 	}
+}
+
+/**
+ * One brief, with the one guarantee no schema can make: a training day has something to do
+ * in it. An empty Do list on a `strength` day parses perfectly and is not an answer — it is
+ * what the user saw when a regenerate "came back with nothing shown", and once stored it
+ * becomes the day's standing answer and every plain ask replays it.
+ *
+ * So it is asked again, once, and if the second answer is no better the caller falls back
+ * to the brief the user already has. This lives here rather than in the adapter because it
+ * is a rule about briefs, not about a provider: a rules-only coach or a hosted one must
+ * clear the same bar.
+ */
+async function askUsable(
+	coach: CoachPort,
+	inputs: CoachBriefInputs,
+	revision: BriefRevision | undefined
+): Promise<Brief> {
+	const answer = await coach.brief(inputs, revision);
+	try {
+		return assertUsableBrief(answer);
+	} catch (error) {
+		if (!(error instanceof UnusableBriefError)) throw error;
+		console.warn(`⚠️  Brief for ${inputs.date} had nothing to do in it, asking once more:`, error.message);
+		return assertUsableBrief(await coach.brief(inputs, revision));
+	}
+}
+
+/** The stored record, back in the shape the model wrote — what a revision is handed. */
+function toBrief(record: CoachBriefRecord): Brief {
+	return {
+		headline: record.headline,
+		why: record.why,
+		workout: {
+			type: record.workout.type,
+			targets: record.workout.targets,
+			// The catalogue ids are ours, not the model's; they mean nothing to it and cost
+			// a line of JSON each.
+			exercises: record.workout.exercises.map(({ exercise_id: _id, ...exercise }) => exercise),
+		},
+		nutrition: record.nutrition,
+		nudge: record.nudge,
+	};
+}
+
+/** One line, for the app to print above the brief it kept. Never a stack trace. */
+function failureNote(error: unknown, instruction: string | null): string {
+	if (error instanceof UnusableBriefError) {
+		return instruction
+			? "That change came back with nothing to do, twice — this is still your last brief. Try asking for it a different way."
+			: "The new brief came back with nothing to do, twice — this is still your last one.";
+	}
+	return instruction
+		? "The coach could not make that change just now — this is still your last brief."
+		: "The coach could not answer just now — this is still your last brief.";
 }
 
 /** The local date the user is asking about, from their offset. */

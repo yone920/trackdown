@@ -138,33 +138,48 @@ export function useProfile() {
   });
 }
 
+/** The one cache entry the Coach screen reads. Everything an ask returns is written here. */
+const COACH_NEXT: readonly unknown[] = ['coach', 'next'];
+
 /**
  * GET /api/coach/next — today's brief, cached for the day on the server. Never fetched
  * on its own: the coach is a button (concept-v2 §Principles 5), so this hook is only
  * mounted by the Coach screen.
+ *
+ * It takes no context. Anything the user types goes through {@link useAskCoach}, whose
+ * answer is written straight into this entry — one request per tap on Ask, and the brief
+ * already on screen stays on screen while it runs. (It used to take the typed line as part
+ * of the query key, which made every Ask fire a GET *and* a POST — two model calls — and
+ * blanked the screen in between, because a new key has no data in it yet.)
  */
-export function useCoachNext(context?: string | null) {
+export function useCoachNext() {
   return useQuery({
-    queryKey: ['coach', 'next', context ?? ''],
-    queryFn: () =>
-      api<CoachNext>('/api/coach/next', {
-        query: { tz: tzOffsetMin(), context: context ?? undefined },
-      }),
+    queryKey: COACH_NEXT,
+    queryFn: () => api<CoachNext>('/api/coach/next', { query: { tz: tzOffsetMin() } }),
     // A brief costs a model call; asking again on every focus is not what the button means.
     staleTime: 1000 * 60 * 30,
     retry: 0,
   });
 }
 
-export function useRegenerateCoach() {
+/**
+ * POST /api/coach/next/regenerate — the Ask button.
+ *
+ * `context` is a fact about today the next brief should account for ("knee hurts"); a
+ * `revision` is an instruction about the answer itself ("make it 8 exercises"), and the
+ * server hands the model the brief the user is looking at. The answer replaces the cache
+ * entry directly rather than invalidating it: a refetch would throw the brief away for a
+ * frame, and this response *is* the fresh one.
+ */
+export function useAskCoach() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (context: string | null) =>
+    mutationFn: ({ context = null, revision = null }: { context?: string | null; revision?: string | null }) =>
       api<CoachNext>('/api/coach/next/regenerate', {
         method: 'POST',
-        body: { tz_offset_min: tzOffsetMin(), context },
+        body: { tz_offset_min: tzOffsetMin(), context, revision },
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['coach'] }),
+    onSuccess: (data) => qc.setQueryData(COACH_NEXT, data),
   });
 }
 

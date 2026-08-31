@@ -1,10 +1,10 @@
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ActivityIndicator, Linking, Pressable, ScrollView, View } from 'react-native';
+import { Linking, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { IconChevronLeft } from '@/components/icons';
-import { Card, Section } from '@/components/kit';
+import { Card, Section, Skeleton, SkeletonLines } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { authHeaders, exerciseMediaUrl } from '@/lib/api';
 import { formVideoUrl, NO_EXERCISE_ID } from '@/lib/exercise';
@@ -96,9 +96,21 @@ export default function ExerciseSheetScreen() {
         </Sub>
       ) : null}
 
-      {/* The two positions, side by side. */}
+      {/* The two positions, side by side. While the row is being fetched they are two
+          skeleton tiles the same size and shape, so the sheet does not jump when they
+          arrive — the screen is already the right screen, it is only missing pixels. */}
       <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
-        {media.length > 0 ? (
+        {exercise.isLoading ? (
+          [0, 1].map((index) => (
+            <View key={index} style={{ flex: 1, aspectRatio: 4 / 3 }}>
+              <Skeleton
+                testID={`exercise-photo-skeleton-${index}`}
+                height="100%"
+                radius={RADIUS.tile}
+              />
+            </View>
+          ))
+        ) : media.length > 0 ? (
           media.slice(0, 2).map((frame) => (
             <View
               key={frame.index}
@@ -115,6 +127,10 @@ export default function ExerciseSheetScreen() {
                 style={{ width: '100%', height: '100%' }}
                 contentFit="cover"
                 transition={140}
+                // The frames are immutable and the route says so for a year; keeping them
+                // on disk means the second look at an exercise costs no request at all.
+                cachePolicy="disk"
+                recyclingKey={`${id}-${frame.index}`}
                 accessibilityLabel={`${name}, position ${frame.index + 1}`}
               />
             </View>
@@ -132,11 +148,7 @@ export default function ExerciseSheetScreen() {
               alignItems: 'center',
               justifyContent: 'center',
             }}>
-            {exercise.isLoading ? (
-              <ActivityIndicator color={C.mute} />
-            ) : (
-              <Sub>No photos for this one</Sub>
-            )}
+            <Sub>No photos for this one</Sub>
           </View>
         )}
       </View>
@@ -144,7 +156,9 @@ export default function ExerciseSheetScreen() {
       {/* The steps */}
       <Section title="How to do it">
         <Card>
-          {sheet && sheet.instructions.length > 0 ? (
+          {exercise.isLoading ? (
+            <SkeletonLines testID="exercise-steps-skeleton" lines={4} />
+          ) : sheet && sheet.instructions.length > 0 ? (
             sheet.instructions.map((step, index) => (
               <View
                 key={`${index}-${step.slice(0, 12)}`}
@@ -158,9 +172,7 @@ export default function ExerciseSheetScreen() {
             ))
           ) : (
             <Sub style={{ lineHeight: 18 }}>
-              {exercise.isLoading
-                ? 'Looking it up…'
-                : 'No written steps for this one — the form video below is the best guide.'}
+              No written steps for this one — the form video below is the best guide.
             </Sub>
           )}
         </Card>

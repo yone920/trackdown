@@ -1,10 +1,85 @@
-import { Pressable, View, type ViewProps } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { Animated, Easing, Pressable, View, type ViewProps, type ViewStyle } from 'react-native';
 
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
 
 // The small shared pieces of docs/design-system.md §Shared components: the card every
 // surface is made of, Section, Row and Chips.
+
+/**
+ * A block the shape of the thing that has not arrived yet. Used wherever a screen can be
+ * drawn before its data is: the exercise sheet opens on the name it was tapped with and
+ * fills in around it, the Day screen lays out its cards, the coach keeps its brief.
+ *
+ * It is the design's own colours and nothing more — `track` on `card`, the same radii, a
+ * slow pulse. A skeleton that flashes or shimmers draws attention to the wait, which is
+ * the opposite of the point.
+ */
+export function Skeleton({
+  width = '100%',
+  height = 14,
+  radius = RADIUS.thumb,
+  style,
+  testID,
+}: {
+  width?: number | `${number}%`;
+  height?: number | `${number}%`;
+  radius?: number;
+  style?: ViewStyle;
+  testID?: string;
+}) {
+  const pulse = useRef(new Animated.Value(0.5)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 700,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0.5,
+          duration: 700,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+
+  return (
+    <Animated.View
+      testID={testID}
+      accessibilityRole="progressbar"
+      accessibilityLabel="Loading"
+      style={[
+        { width, height, borderRadius: radius, backgroundColor: C.track, opacity: pulse },
+        style,
+      ]}
+    />
+  );
+}
+
+/** Two or three skeleton lines where a paragraph goes. The last one runs short. */
+export function SkeletonLines({ lines = 3, testID }: { lines?: number; testID?: string }) {
+  return (
+    <View testID={testID}>
+      {Array.from({ length: lines }, (_unused, index) => (
+        <Skeleton
+          key={index}
+          height={12}
+          width={index === lines - 1 ? '60%' : '100%'}
+          style={{ marginTop: index === 0 ? 0 : 10 }}
+        />
+      ))}
+    </View>
+  );
+}
 
 export function Card({ style, children, ...rest }: ViewProps) {
   return (

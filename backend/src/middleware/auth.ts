@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { fromNodeHeaders } from "better-auth/node";
 import type { Auth } from "../auth.js";
+import { timePhase } from "./timing.js";
 
 export interface AuthenticatedRequest extends Request {
 	userId?: string;
@@ -11,7 +12,11 @@ export interface AuthenticatedRequest extends Request {
 export function createRequireUser(auth: Auth) {
 	return async function requireUser(req: AuthenticatedRequest, res: Response, next: NextFunction) {
 		try {
-			const session = await auth.api.getSession({ headers: fromNodeHeaders(req.headers) });
+			// Timed under "auth": it is a database round trip on every single /api request,
+			// and on a route that is otherwise one indexed SELECT it is most of the answer.
+			const session = await timePhase(req, "auth", () =>
+				auth.api.getSession({ headers: fromNodeHeaders(req.headers) })
+			);
 			if (!session) {
 				res.status(401).json({ error: "Not authenticated." });
 				return;

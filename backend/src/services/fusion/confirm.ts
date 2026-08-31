@@ -13,7 +13,14 @@ import { insertTextEvidence, linkEvidence, type EvidenceRow } from "../evidence.
 import { InvalidGoalError, createGoal } from "../goals/store.js";
 import { localDateOf } from "../localTime.js";
 import type { GoalProposal } from "../goals/proposal.js";
-import { FusionResultSchema, MAX_PARTS, type FusionKind, type FusionResult, type GoalFacts } from "./schema.js";
+import {
+	FusionResultSchema,
+	MAX_PARTS,
+	type FusionKind,
+	type FusionResult,
+	type GoalFacts,
+	type ReferenceLoad,
+} from "./schema.js";
 
 // POST /api/log/confirm's half of the pipeline: take the preview the user just approved
 // (with whatever they edited) and write it, once, in one transaction.
@@ -193,7 +200,35 @@ const PROFILE_FIELD_COLUMNS = [
 	"environment",
 	"equipment",
 	"eatback",
+	// The training background (migration 0011). `reference_loads` is not here: it is a
+	// jsonb array and it merges rather than replaces — see mergeReferenceLoads below.
+	"experience",
+	"background",
 ] as const;
+
+/** More stated loads than this is a list nobody re-reads; the oldest fall off. */
+export const MAX_REFERENCE_LOADS = 20;
+
+/**
+ * Stated reference loads, merged into the ones already on the profile: restating an
+ * exercise replaces its entry in place, a new exercise is appended. Replacing the whole
+ * list would mean "I squat 225 now" quietly erased last month's bench, and appending
+ * blindly would leave two answers for the same lift with no way to tell which is current.
+ *
+ * Returns null when the statement named none — nothing to write, and nothing to date.
+ */
+export function mergeReferenceLoads(
+	existing: unknown,
+	stated: readonly ReferenceLoad[] | null | undefined
+): ReferenceLoad[] | null {
+	if (!stated || stated.length === 0) return null;
+	const current = Array.isArray(existing) ? (existing as ReferenceLoad[]) : [];
+	// A Map keyed by the exercise keeps each entry where it was while taking the new
+	// numbers, so the list reads in the order the user first named things.
+	const byExercise = new Map(current.map((load) => [load.exercise.trim().toLowerCase(), load]));
+	for (const load of stated) byExercise.set(load.exercise.trim().toLowerCase(), load);
+	return [...byExercise.values()].slice(-MAX_REFERENCE_LOADS);
+}
 
 async function applyProfileStatement(
 	client: pg.PoolClient,
@@ -202,7 +237,7 @@ async function applyProfileStatement(
 	text: string,
 	fields: Record<string, unknown> | null
 ): Promise<Row> {
-	await getProfile(client, userId);
+	const before = (await getProfile(client, userId)) as Record<string, unknown>;
 
 	const sets: string[] = [];
 	const params: unknown[] = [userId, text];
@@ -218,6 +253,13 @@ async function applyProfileStatement(
 		params.push(value);
 		sets.push(`${column} = $${params.length}`);
 		stated[column] = new Date().toISOString();
+	}
+
+	const loads = mergeReferenceLoads(before.reference_loads, fields?.reference_loads as ReferenceLoad[] | null);
+	if (loads) {
+		params.push(JSON.stringify(loads));
+		sets.push(`reference_loads = $${params.length}::jsonb`);
+		stated.reference_loads = new Date().toISOString();
 	}
 
 	params.push(JSON.stringify(stated));

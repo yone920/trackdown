@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ActivityIndicator, Pressable, ScrollView, Share, View } from 'react-native';
+import { Pressable, ScrollView, Share, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Bar } from '@/components/charts';
@@ -12,7 +12,7 @@ import {
   IconHeart,
   IconShare,
 } from '@/components/icons';
-import { Card, Chip, GroupHeading, Row, Section } from '@/components/kit';
+import { Card, Chip, GroupHeading, Row, Section, Skeleton, SkeletonLines } from '@/components/kit';
 import { ReadingCard } from '@/components/reading-card';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { addDays } from '@/lib/days-weeks';
@@ -90,9 +90,22 @@ export default function Day() {
         </View>
       </View>
 
+      {/* The day, in outline, while it is fetched: the verdict line, the paragraph, and
+          the three stats — in the places they are about to appear, so nothing jumps. */}
       {day.isLoading && !view ? (
-        <View style={{ paddingTop: 60, alignItems: 'center' }}>
-          <ActivityIndicator color={C.mute} />
+        <View testID="day-skeleton" style={{ paddingTop: 22 }}>
+          <Skeleton width="45%" height={26} />
+          <Card style={{ marginTop: 18 }}>
+            <SkeletonLines lines={3} />
+          </Card>
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
+            {[0, 1, 2].map((index) => (
+              <Card key={index} style={{ flex: 1 }}>
+                <Skeleton width="70%" height={22} />
+                <Skeleton width="50%" height={10} style={{ marginTop: 10 }} />
+              </Card>
+            ))}
+          </View>
         </View>
       ) : null}
 

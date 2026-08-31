@@ -1,4 +1,4 @@
-import type { CoachBriefInputs } from "../../ports/coach.js";
+import type { BriefRevision, CoachBriefInputs } from "../../ports/coach.js";
 import type { AdherenceWindow, CoachFeatures } from "./features.js";
 import type { Prescription } from "./rules.js";
 
@@ -23,7 +23,10 @@ const SYSTEM = `You are the coach inside TrackDown, a training and eating log. T
 
 WHAT YOU DECIDE
 - Whether today is strength, cardio, mixed or rest, and which muscle groups it is for.
-- Which 4–6 exercises (fewer for cardio, none for rest), in what order.
+- Which 4–6 exercises (fewer for cardio, none for rest), in what order. More than six only
+  when the user has asked for more; up to ten.
+- A day that is not a rest day always has at least one exercise in it. If you cannot fill a
+  session, say today is rest and say why — never answer with a training day and an empty list.
 - The reasoning, the meal ideas and the nudge, in plain sentences.
 
 WHAT YOU DO NOT DECIDE
@@ -89,7 +92,11 @@ function prescription(item: Prescription): string {
 				]
 					.filter(Boolean)
 					.join(" ") || "no load on record";
-	return `- ${item.exercise} → ${numbers} [${item.rule}] · last done ${item.days_since} day${item.days_since === 1 ? "" : "s"} ago · ${item.why}`;
+	const when =
+		item.days_since == null
+			? "never logged here — the user stated this load"
+			: `last done ${item.days_since} day${item.days_since === 1 ? "" : "s"} ago`;
+	return `- ${item.exercise} → ${numbers} [${item.rule}] · ${when} · ${item.why}`;
 }
 
 /** The features, as the model sees them. Deterministic: the same features, the same sheet. */
@@ -181,8 +188,34 @@ export function buildFeatureSheet(features: CoachFeatures): string {
 	return sections.filter(Boolean).join("\n\n");
 }
 
+/**
+ * Today's brief as the model gets to see it again — compact JSON, because a revision is
+ * about the *structure* of the answer ("make it 8 exercises", "drop the squats") and prose
+ * would make the model re-read its own sentences to find the list.
+ */
+function revisionBlock(revision: BriefRevision): string {
+	return `THE BRIEF YOU ARE REVISING — this is the answer the user is looking at right now, as JSON:
+${JSON.stringify(revision.current)}
+
+WHAT THEY WANT CHANGED
+"${revision.instruction}"
+
+HOW TO REVISE
+- Return the WHOLE brief, filled in exactly as if you were writing it fresh. It replaces the
+  one above; a partial answer loses whatever it leaves out.
+- Change what they asked for and leave everything else as it stands. If they asked for more
+  exercises, keep the ones already there and add to them; if they asked for a different body
+  part, rebuild the Do list around it.
+- Everything above still binds. The prescribed loads are still the only loads, the
+  constraints are still absolute, and a muscle group trained inside 48 hours is still not
+  today's primary target — say so in "why" if that is what limits the answer.
+- A training day ALWAYS has at least one exercise. If the instruction cannot be followed as
+  asked, do the nearest thing you can and say why in "why". Never answer with an empty list.
+- Update "headline" and "why" so they describe the revised session, not the old one.`;
+}
+
 /** The whole prompt: who the user is, what is true, what is fixed, and what was asked. */
-export function buildCoachPrompt(inputs: CoachBriefInputs): string {
+export function buildCoachPrompt(inputs: CoachBriefInputs, revision?: BriefRevision): string {
 	const { plan, features, rules, today, goals } = inputs;
 
 	const goalLines =
@@ -215,6 +248,10 @@ export function buildCoachPrompt(inputs: CoachBriefInputs): string {
 			line("Equipment", plan.equipment.length > 0 ? plan.equipment.join(", ") : null),
 			line("Pace", plan.goal_pace),
 			line("Eat-back of what is earned", plan.eatback),
+			// Stated, not measured — but the only thing that tells a first brief whether it
+			// is writing for someone new to this or someone who has trained for years.
+			line("Experience (their own word for it)", plan.experience),
+			line("Training background as stated", plan.background),
 			plan.constraints.length > 0 ? `CONSTRAINTS (absolute): ${plan.constraints.join("; ")}` : null,
 			plan.preferences.length > 0 ? `Preferences: ${plan.preferences.join("; ")}` : null,
 		]),
@@ -247,6 +284,7 @@ export function buildCoachPrompt(inputs: CoachBriefInputs): string {
 					`"${inputs.context}"`,
 				])
 			: "",
+		revision ? revisionBlock(revision) : "",
 	];
 
 	return `${SYSTEM}\n\n${sections.filter(Boolean).join("\n\n")}`;

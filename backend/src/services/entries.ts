@@ -1,6 +1,7 @@
 import type pg from "pg";
 import { z } from "zod";
 import { CATEGORIES, type ExerciseCategory } from "../db/exercises.js";
+import { EXPERIENCE_LEVELS, ReferenceLoadSchema } from "./fusion/schema.js";
 
 // Data access for the four user-owned tables. Every function takes the session's
 // userId and scopes the SQL by it — this is what Supabase's RLS policies used to do.
@@ -115,6 +116,12 @@ export const ProfilePatch = z
 		constraints: z.array(z.string().trim().min(1).max(200)).max(30),
 		preferences: z.array(z.string().trim().min(1).max(200)).max(30),
 		eatback: z.enum(["none", "half", "all"]),
+		// The training background (migration 0011): what the user brings with them, so a
+		// cold start does not have to assume a beginner. Normally stated out loud through
+		// the Log sheet; editable here for the same reason every other plan field is.
+		experience: z.enum(EXPERIENCE_LEVELS).nullable(),
+		background: z.string().trim().max(600).nullable(),
+		reference_loads: z.array(ReferenceLoadSchema).max(20),
 	})
 	.partial()
 	.refine((patch) => Object.keys(patch).length > 0, { message: "Empty patch." });
@@ -383,8 +390,11 @@ export async function updateProfile(db: Queryable, userId: string, patch: Profil
 	const stated: Record<string, string> = {};
 	const now = new Date().toISOString();
 	for (const [key, value] of Object.entries(patch)) {
-		params.push(value);
-		sets.push(`${key} = $${params.length}`);
+		// `reference_loads` is the one jsonb column here; pg would otherwise send the array
+		// as a Postgres array literal, which jsonb refuses.
+		const json = key === "reference_loads";
+		params.push(json ? JSON.stringify(value) : value);
+		sets.push(`${key} = $${params.length}${json ? "::jsonb" : ""}`);
 		stated[key] = now;
 	}
 	params.push(JSON.stringify(stated));

@@ -85,6 +85,187 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-08-31 — a background, a brief you can argue with, and a screen that waits well (`field-fixes-background-revisions`)
+
+Three things the morning test turned up, in one branch because they are all the same
+complaint: the coach answers as if it has met you before, and the app loses what it is
+showing you while it goes and asks.
+
+#### A — a cold start is not a beginner
+
+Someone who has trained for three years and installs this today has no history in it. The
+coach read "no history" as "new to lifting" — `prescribeLoads` had nothing to prescribe
+from, and the prompt was handed "no history yet: prescribe no loads". But they can simply
+say so, and now one sentence into the Log sheet is enough.
+
+- **Migration `0011_training_background.sql`** adds `profiles.experience`
+  (beginner | intermediate | advanced), `profiles.background` (their own words) and
+  `profiles.reference_loads` (jsonb `[{ exercise, load_lb, reps }]`). All three are stated
+  facts, so all three are dated in `stated_at` like every other plan field.
+- **The statement's own call learns to read them.** `ProfileFieldsSchema` — the second,
+  focused call behind a constraint or a preference — gained the three fields, and the
+  prompt says how: a claim of experience or a judgement from what they described, the
+  history in one line, and one `reference_loads` entry per lift they say they do *now*
+  ("I bench 165 for 3x5"). A load they want to reach is a goal and is explicitly not one
+  of these.
+- **Saving it is a profile merge and nothing else** — zero coach calls, pinned by a test.
+  `reference_loads` merges rather than replaces: restating a lift updates its entry in
+  place, a new lift is appended, and the list keeps the order things were first named.
+- **`prescribeLoads` prescribes from a stated load** when the exercise has no logged
+  history: same shape of prescription, `rule: "reference"`, `days_since: null`, three sets
+  at the weight they named. The moment the exercise has real sessions, the log wins and
+  the reference is not read again.
+- **The prompt is told what it knows.** `CoachPlan` carries `experience` and `background`;
+  the reference loads arrive as prescriptions, not as prose to parse. With nothing stated
+  *and* nothing logged the rules say so in as many words — "Do NOT assume a beginner and
+  do not assume an athlete" — and the nudge becomes `tell_background`, a button that opens
+  the Log sheet in statement mode.
+
+#### B — revisions, and never a blank brief
+
+The field report: "give me 7-8 workouts" typed into the Coach screen, and nothing shown.
+Both halves of that were real bugs.
+
+- **`POST /api/coach/next/regenerate` takes a `revision`.** The model is handed the day's
+  current brief as compact JSON plus the instruction, and must return the whole revised
+  brief — "make it 8 exercises", "switch to legs", "harder", "I feel like chest". A
+  revision is in the inputs hash, so two different instructions on one day are two rows,
+  and a revised brief is the day's standing answer like any other (sticky rules unchanged).
+- **The Do list may hold ten.** It was capped at six, and "give me 7-8" asked the model to
+  answer past its own grammar. A bound on an array costs no grammar bytes; the prompt still
+  says 4–6 unless the user asked for more.
+- **A training day with an empty Do list is refused.** It parses — a rest day needs an
+  empty array — and it is not an answer. `assertUsableBrief` throws on it,
+  `services/coach/coach.ts` asks once more, and if the second answer is no better the
+  route serves the previous brief with `stale: true` and a one-line `note`. **Nothing
+  empty is ever stored**, which was the sticky half of the bug: one such brief written to
+  `coach_briefs` became the day's standing answer and every later ask replayed it.
+- **The app never blanks.** `useCoachNext` took the typed line as part of its query key, so
+  every Ask started a brand-new, empty cache entry — the brief vanished for the duration —
+  and fired a GET *alongside* the POST, which is two model calls for one tap. The hook now
+  takes no context, the Ask button is the only thing that writes, and its answer goes
+  straight into the cache with `setQueryData`.
+- **`app/coach.tsx`**: once there is a brief the box is for adjusting it — the placeholder
+  becomes "Adjust it — 'make it 8 exercises', 'switch to legs'…", the section reads "Not
+  quite right?", and what is typed is sent as `revision`. While it runs, the brief stays
+  where it is under a "Rewriting your brief…" line. On failure the note prints above the
+  brief that was kept. An empty Do list is drawn as "Rest today." only when the workout
+  really is rest; anything else says no exercises came back and what to do about it.
+
+#### C — perceived and real speed
+
+- **A shared `Skeleton` / `SkeletonLines`** in `components/kit.tsx`, in the design's own
+  tokens (`track` on `card`, the same radii, a slow two-second pulse, no shimmer). Used on
+  the exercise sheet (two tiles the exact size of the photographs, four lines where the
+  steps go), the Day screen (verdict, paragraph, three stat cards), the Log sheet's
+  analyze, and the Coach screen's first brief. The exercise sheet already opened instantly
+  on the name it was tapped with; now it stops jumping when the row lands.
+- **`expo-image` with `cachePolicy="disk"`** on the exercise frames and the evidence
+  thumbnails, plus a `recyclingKey`. Both are immutable once written and both are looked at
+  repeatedly, so the second view costs no request at all. `expo-image` was already a
+  dependency and was already in use in both places — only the cache policy is new.
+- **`Server-Timing` on `/api/exercises/:id` and `/media/:n`** (`backend/src/middleware/
+  timing.ts`): `auth` is the Better Auth session lookup every `/api` request pays, `db` is
+  the catalogue row, `open` is the file handle, `total` is up to the header. It is not a
+  global hook — a header on every route would say nothing; these two are what the phone
+  waits on when a name is tapped.
+
+**Measured, through `https://trackdown-api.yonelab.net` from the Omarchy VM** (five runs
+each, seconds):
+
+| | before (dd37f1f) | after |
+|---|---|---|
+| `/api/exercises/:id` TTFB | 0.106 – 0.173 | see the table in the branch report |
+| `/api/exercises/:id/media/0` total (54 KB) | 0.119 – 0.171 | |
+| `/health` (no auth, no route work) | 0.099 – 0.151 | |
+
+The answer the measurement gave: **the server is not the slow part.** An unauthenticated
+`/health` costs the same 100–150 ms as either exercise route, so effectively all of it is
+the cloudflared tunnel round trip from this VM; the `Server-Timing` header now says so per
+request instead of leaving it to be guessed. Nothing was "fixed" server-side because there
+was nothing to fix there — the win is the disk cache, which removes the request entirely on
+every look after the first, and the skeletons, which remove the wait from the part the user
+sees.
+
+**Decisions**
+
+- **The empty-brief guard lives in the service, not the adapter.** `adapters/coach/llm.ts`
+  keeps its own retry for a malformed sample, but "a training day has something to do in
+  it" is a rule about briefs and not about a provider, so it is in
+  `services/coach/coach.ts` where every `CoachPort` — a rules-only coach, a hosted one —
+  has to clear it. The fake coach validates against the real schema and *lets* an empty Do
+  list through, because a fake that refused it would hide the bug it was written for.
+- **A revision is not context.** Context is a fact about today the next brief should
+  account for ("knee hurts"); a revision is an instruction about the answer in front of
+  you. They are different fields on the request and different blocks in the prompt, and
+  only the revision is handed the current brief.
+- **A stated load is stepped down after a gap only when the gap is measured.** On a brand
+  new account `days_since_last_workout` is null and `gapRule` calls that a restart — but
+  "we have never seen you train" is not "you stopped training", and taking a plate off a
+  weight the user just told us they lift is precisely the beginner assumption this change
+  removes. After eighteen days since a *logged* session, the reference eases back with
+  everything else.
+- **The background rides on the second call, not the routing schema.** The routing union
+  has about eighty bytes of headroom (see `fix-mixed-fusion`); `plan_fields` went
+  964 → 1570 bytes and `statement` 1081 → 1687, and the routing schema is 3580, exactly
+  what it was. Pinned, and proved on the live model by a contract test.
+- **`tell_background` sits after the goal candidates and before every data-quality nudge.**
+  With nothing logged, "no weigh-in" and "seven unlogged days" both fire and both are worse
+  things to say to a new user than "tell me where you are starting from" — which is also
+  the one answer that improves every brief after it.
+- **`experience` / `background` / `reference_loads` are on `PATCH /api/profile` too**, for
+  the same reason every other plan field is: single-field tap to correct.
+- No new dependencies. One migration.
+
+**Tests** — 381 passing, 2 skipped in `backend` (was 360/2); 82 passing in the app (was 73).
+
+- `src/services/coach/rules.test.ts` (+10): a stated load prescribed and its shape; a
+  logged exercise overriding it; the cold start taking it at face value against the
+  measured gap easing it back; `tell_background` beating every data-quality nudge and
+  stopping the moment one word is stated; `buildRules` refusing to assume a beginner, and
+  pitching at a stated background instead; `assertUsableBrief` on rest, cardio, mixed and
+  strength.
+- `src/app.test.ts` (+11): the revision round trip end to end — the model handed the
+  current brief, eight exercises back, the revised brief becoming the day's answer; the
+  empty-workout brief retried once, **not stored** (`coach_briefs` row count unchanged) and
+  the previous brief served with a note; a rest day still allowed through; the provider
+  outage on a revision; the 400 on an over-long revision. Plus the background: the
+  cold-start nudge, one sentence saving all three fields with **zero coach calls** and a
+  `stated_at` on each, the first session prescribed from the stated 165, a restated lift
+  updating in place, and the log taking over at 175.
+- `src/services/fusion/fusion.test.ts` (+1, and `statement` added to the size pins): the
+  routing schema still 3580 bytes, the widened plan fields parsing, and the two things they
+  refuse (an unknown experience level, a load with no exercise on it).
+- `anthropic.fusion.contract.test.ts` (+1) and `anthropic.coach.contract.test.ts` (+2),
+  **run here against the real model, ten for ten**: "I've been lifting three years, I bench
+  165 for 3x5" coming back as intermediate + a background line + one 165 × 5 reference and
+  *not* as a workout; a revision returning seven to ten exercises with the nutrition card
+  and the nudge intact and the bad knee still respected; and "switch to legs" rebuilding
+  the session rather than appending to it.
+- `__tests__/coach.test.tsx` (new, 9): one GET on open and nothing else; the typed line
+  going out as `revision` with a brief and as `context` without one; **one** request per
+  tap; the brief staying on screen mid-flight and after a failure, with the note above it;
+  the empty Do list explained; the rest day not explained away; and the cold-start nudge
+  routing to the Log sheet.
+
+**Deferred**
+
+- **A revision is not a conversation.** Each one is sent with the day's current brief and
+  no memory of the last instruction, so "make it 8" then "now swap the rows" works only
+  because the first is already in the brief being revised. A thread of instructions needs
+  somewhere to keep them and nothing has asked for one.
+- **The stated background is not editable on a screen.** It is on the profile row and
+  `PATCH /api/profile` takes it, but the Goals tab does not draw it yet. Correcting it
+  today means saying it again, which restates in place.
+- **`Server-Timing` is on two routes.** The coach and the day are the other two the phone
+  waits on, and both are dominated by a model call that is already logged. Add it when
+  there is a question it would answer.
+- **The tunnel is the latency.** 100–150 ms of round trip from this VM on every request,
+  including `/health`. Nothing in this branch addresses it; a serious answer is a closer
+  edge or a shorter path, and it is a network decision, not a code one.
+
+---
+
 ### 2026-08-30 — one input, several things (`fix-mixed-fusion`)
 
 People do not log one kind at a time. "Ate two eggs and toast, then ran 5k, weighed in at

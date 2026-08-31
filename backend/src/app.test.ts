@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import request from "supertest";
 import sharp from "sharp";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
 import { createAuth, type Auth } from "./auth.js";
 import { sweepUnlinkedEvidence } from "./services/evidence.js";
@@ -717,6 +717,9 @@ describe("fusion — confirm", () => {
 				environment: "gym",
 				equipment: null,
 				eatback: null,
+				experience: null,
+				background: null,
+				reference_loads: null,
 			},
 		});
 		expect(preference.status).toBe(201);
@@ -2607,6 +2610,317 @@ describe("coach — a return after two weeks off", () => {
 	it("refuses an impossible timezone and an unauthenticated ask", async () => {
 		expect((await request(app).get(`/api/coach/next?tz=999`).set(headers)).status).toBe(400);
 		expect((await request(app).get(`/api/coach/next?tz=${tz}`)).status).toBe(401);
+	});
+});
+
+// ── Field fix: a brief you can adjust, and never a blank one ──────────────────────────
+// The field report: "give me 7-8 workouts" into the Coach screen's box came back with
+// nothing shown. Two causes, both here. The model was asked for eight against a schema
+// that allowed six, answered with a training day and an empty exercise list — which
+// parses — and the route stored it, so every ask for the rest of the day replayed a brief
+// with an empty Do list. And the screen threw the brief it was showing away the moment a
+// new ask started, so a failure left it with nothing at all.
+
+/** Rows in coach_briefs for one account on one day — the "was it stored?" question. */
+async function countBriefs(date: string, email: string): Promise<number> {
+	const { rows } = await db.pool.query<{ count: string }>(
+		`SELECT COUNT(*)::text AS count FROM coach_briefs
+		  WHERE date = $1::date AND user_id = (SELECT id FROM "user" WHERE email = $2)`,
+		[date, email]
+	);
+	return Number(rows[0]!.count);
+}
+
+describe("coach — revising the brief, and never storing an empty one", () => {
+	const tz = tzForLocalHour(15);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("rev@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({
+				description: "3 × 8 bench at 135 lb",
+				exercise: "Bench Press",
+				sets: 3,
+				reps: 8,
+				load_lb: 135,
+				kcal: 110,
+				logged_at: localInstant(addDays(today, -2), "18:00", tz),
+			});
+	}, 60_000);
+
+	afterEach(() => {
+		coach.nextBrief = SAMPLE_BRIEF;
+		coach.briefs.length = 0;
+	});
+
+	it("hands the model the current brief and the instruction, and stores what comes back", async () => {
+		const first = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(first.status).toBe(200);
+
+		const eight = {
+			...SAMPLE_BRIEF,
+			headline: "Full body: eight movements",
+			workout: {
+				type: "strength",
+				targets: ["full body"],
+				exercises: Array.from({ length: 8 }, (_unused, index) => ({
+					name: `Exercise ${index + 1}`,
+					load_lb: null,
+					sets: 3,
+					reps: 8,
+					minutes: null,
+					note: null,
+				})),
+			},
+		};
+		coach.nextBrief = eight;
+
+		const revised = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "give me 7-8 workouts" });
+		expect(revised.status).toBe(200);
+		expect(revised.body.stale).toBe(false);
+		expect(revised.body.note).toBeNull();
+		// Eight, not six: a cap the user can ask past is a cap the model has to answer
+		// around, and answering around it is how the Do list came back empty.
+		expect(revised.body.brief.workout.exercises).toHaveLength(8);
+
+		// The model was handed the brief being revised, not just the words.
+		const revision = coach.revisions.at(-1);
+		expect(revision?.instruction).toBe("give me 7-8 workouts");
+		expect(revision?.current.headline).toBe(first.body.brief.headline);
+		expect(revision?.current.workout.exercises[0]).toMatchObject({ name: "Lat Pulldown", load_lb: 110 });
+
+		// A revised brief is the day's standing answer like any other.
+		const again = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(again.body.brief.id).toBe(revised.body.brief.id);
+		expect(again.body.brief.headline).toBe("Full body: eight movements");
+		expect(again.body.brief.cached).toBe(true);
+	});
+
+	it("never stores a training day with an empty Do list — it retries, then keeps the last brief", async () => {
+		const good = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		const briefsBefore = await countBriefs(today, "rev@example.com");
+		const callsBefore = coach.inputs.length;
+
+		// What the field report produced: a strength day with nothing in it. It parses —
+		// the fake validates against the real schema and lets it through, exactly as the
+		// provider would.
+		const empty = { ...SAMPLE_BRIEF, headline: "Push day", workout: { type: "strength", targets: ["chest"], exercises: [] } };
+		coach.briefs.push(empty, empty);
+
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "switch to legs" });
+
+		expect(res.status).toBe(200);
+		// One retry, then the previous brief — with a line saying so rather than a blank page.
+		expect(coach.inputs.length).toBe(callsBefore + 2);
+		expect(res.body.stale).toBe(true);
+		expect(res.body.note).toContain("nothing to do");
+		expect(res.body.brief.id).toBe(good.body.brief.id);
+		expect(res.body.brief.workout.exercises.length).toBeGreaterThan(0);
+
+		// Nothing was written, so the rest of the day is not stuck with the empty answer.
+		expect(await countBriefs(today, "rev@example.com")).toBe(briefsBefore);
+		const after = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(after.body.brief.id).toBe(good.body.brief.id);
+	});
+
+	it("keeps a rest day, which is the one brief that is allowed to have nothing in it", async () => {
+		coach.nextBrief = {
+			...SAMPLE_BRIEF,
+			headline: "Rest — three days running",
+			workout: { type: "rest", targets: ["recovery"], exercises: [] },
+		};
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "I need a day off" });
+		expect(res.status).toBe(200);
+		expect(res.body.stale).toBe(false);
+		expect(res.body.brief.workout).toMatchObject({ type: "rest", exercises: [] });
+	});
+
+	it("says the coach could not make the change, rather than 500ing, when the provider is down", async () => {
+		const good = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		coach.failNext = new Error("529 overloaded");
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "harder" });
+		expect(res.status).toBe(200);
+		expect(res.body.stale).toBe(true);
+		expect(res.body.note).toContain("could not make that change");
+		expect(res.body.brief.id).toBe(good.body.brief.id);
+	});
+
+	it("refuses a revision longer than the box allows", async () => {
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "x".repeat(501) });
+		expect(res.status).toBe(400);
+	});
+});
+
+// ── Field fix: a cold start is not a beginner ────────────────────────────────────────
+// Someone who has trained for three years and downloads this today has no history in it.
+// The coach used to read that as "new to lifting". One sentence into the Log sheet fixes
+// it, and the sentence is saved the way every other statement is: profile merge, no
+// second thought, and — the guard that matters — no coach call.
+
+describe("training background — what the user brings with them", () => {
+	const tz = 0;
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("bg@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+	}, 60_000);
+
+	it("asks a user it knows nothing about for their background", async () => {
+		const res = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+		expect(res.body.nudge_action).toEqual({
+			kind: "tell_background",
+			goal_id: null,
+			label: "Tell me your background",
+		});
+		// And the prompt is told not to guess in the meantime.
+		expect(coach.inputs.at(-1)!.rules.statements.join("\n")).toContain("Do NOT assume a beginner");
+	});
+
+	it("saves an experience, a background and reference loads from one sentence, with no coach call", async () => {
+		const said = "I've been lifting three years, I bench 165 for 3x5";
+		// Two calls: the router says "a statement about how they train", then the focused
+		// plan-fields call reads the background out of it.
+		nextFusion(
+			{ kind: "statement", scope: "preference", text: said },
+			{
+				fields: {
+					diet_style: null,
+					protein_g: null,
+					carbs_max_g: null,
+					training_days: null,
+					environment: null,
+					equipment: null,
+					eatback: null,
+					experience: "intermediate",
+					background: "three years of lifting",
+					reference_loads: [{ exercise: "Bench Press", load_lb: 165, reps: 5 }],
+				},
+			}
+		);
+
+		const analyzed = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("text", said)
+			.field("tz_offset_min", String(tz));
+		expect(analyzed.status).toBe(200);
+		expect(analyzed.body.result.fields).toMatchObject({ experience: "intermediate" });
+
+		const before = coach.inputs.length;
+		const confirmed = await request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({ client_id: randomUUID(), results: [analyzed.body.result], text: said, tz_offset_min: tz });
+		expect(confirmed.status).toBe(201);
+		// Saying where you are starting from is a profile merge, not a question.
+		expect(coach.inputs.length).toBe(before);
+
+		const profile = await request(app).get(`/api/profile?tz=${tz}`).set(headers);
+		expect(profile.body).toMatchObject({ experience: "intermediate", background: "three years of lifting" });
+		expect(profile.body.reference_loads).toEqual([{ exercise: "Bench Press", load_lb: 165, reps: 5 }]);
+		// Dated, like every other stated field (concept-v2 §Goals and profile).
+		for (const field of ["experience", "background", "reference_loads"]) {
+			expect(profile.body.stated_at[field]).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+		}
+	});
+
+	it("prescribes the first session from the stated load instead of from nothing", async () => {
+		const res = await request(app).post("/api/coach/next/regenerate").set(headers).send({ tz_offset_min: tz });
+		expect(res.status).toBe(200);
+
+		const inputs = coach.inputs.at(-1)!;
+		expect(inputs.plan).toMatchObject({ experience: "intermediate", background: "three years of lifting" });
+		expect(inputs.rules.prescriptions).toEqual([
+			expect.objectContaining({ exercise: "Bench Press", load_lb: 165, sets: 3, reps: 5, rule: "reference", days_since: null }),
+		]);
+		// It no longer asks for a background it has been given, and it no longer plans
+		// for a beginner.
+		expect(inputs.rules.nudge.action).not.toMatchObject({ kind: "tell_background" });
+		expect(inputs.rules.statements.join("\n")).toContain("Pitch the session at that, not at a beginner");
+	});
+
+	it("restating one lift updates it in place and leaves the others alone", async () => {
+		const said = "I squat 225 now";
+		nextFusion(
+			{ kind: "statement", scope: "preference", text: said },
+			{
+				fields: {
+					diet_style: null,
+					protein_g: null,
+					carbs_max_g: null,
+					training_days: null,
+					environment: null,
+					equipment: null,
+					eatback: null,
+					experience: null,
+					background: null,
+					reference_loads: [{ exercise: "Back Squat", load_lb: 225, reps: null }],
+				},
+			}
+		);
+		const analyzed = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("text", said)
+			.field("tz_offset_min", String(tz));
+		const confirmed = await request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({ client_id: randomUUID(), results: [analyzed.body.result], text: said, tz_offset_min: tz });
+		expect(confirmed.status).toBe(201);
+		expect(confirmed.body.profile.reference_loads).toEqual([
+			{ exercise: "Bench Press", load_lb: 165, reps: 5 },
+			{ exercise: "Back Squat", load_lb: 225, reps: null },
+		]);
+	});
+
+	it("stops reading the stated load once the exercise has been logged for real", async () => {
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({
+				description: "3 × 5 bench at 175 lb",
+				exercise: "Bench Press",
+				sets: 3,
+				reps: 5,
+				load_lb: 175,
+				kcal: 110,
+				confidence: "high",
+				logged_at: localInstant(addDays(today, -1), "18:00", tz),
+			});
+		coachLlm.nextOutput = READING;
+		await request(app).post("/api/coach/next/regenerate").set(headers).send({ tz_offset_min: tz });
+
+		const prescriptions = coach.inputs.at(-1)!.rules.prescriptions;
+		const bench = prescriptions.filter((item) => item.exercise === "Bench Press");
+		expect(bench).toHaveLength(1);
+		// From the log — 175, what they actually did — not from the 165 they claimed.
+		expect(bench[0]).toMatchObject({ load_lb: 175, rule: "new" });
 	});
 });
 

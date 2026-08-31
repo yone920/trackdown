@@ -10,7 +10,8 @@ import type { DayReadings } from "../services/readings/readings.js";
 // The coach (docs/build-plan.md §WP5).
 //
 //   GET  /api/coach/next?tz=&context=   today's brief — cached, or generated on this ask
-//   POST /api/coach/next/regenerate     the same, always generated
+//   POST /api/coach/next/regenerate     the same, always generated; with `revision` it is
+//                                       today's brief rewritten to the user's instruction
 //
 // **Nothing else in this codebase produces a brief.** There is no job, no scheduler and no
 // notification: concept-v2 §Principles 5 makes "the coach is a button" a product decision,
@@ -30,6 +31,13 @@ const NextQuery = z.object({ tz: tzOffset, context: contextText.optional() });
 const RegenerateBody = z.object({
 	tz_offset_min: z.number().int().min(-840).max(840).default(0),
 	context: contextText.nullable().optional(),
+	/**
+	 * A change to the brief the user is looking at — "make it 8 exercises", "switch to
+	 * legs", "harder". Different from `context`: context is a fact about today that the
+	 * next brief should account for; a revision is an instruction about the answer itself,
+	 * and the model is handed the current brief to rewrite.
+	 */
+	revision: contextText.nullable().optional(),
 });
 
 function badRequest(res: Response, message: string, issues?: unknown): void {
@@ -42,23 +50,32 @@ export function coachRouter(pool: pg.Pool, coach: CoachPort, readings: DayReadin
 	async function respond(
 		res: Response,
 		userId: string,
-		{ tzOffsetMin, context, regenerate }: { tzOffsetMin: number; context: string | null; regenerate: boolean }
+		{
+			tzOffsetMin,
+			context,
+			regenerate,
+			revision = null,
+		}: { tzOffsetMin: number; context: string | null; regenerate: boolean; revision?: string | null }
 	): Promise<void> {
 		const now = new Date();
 		await closeDueDays(pool, readings, { userId, tzOffsetMin, now });
 
 		const date = coachDate(now, tzOffsetMin);
 		try {
-			const { brief, inputs, stale } = await nextBrief(pool, coach, userId, {
+			const { brief, inputs, stale, note } = await nextBrief(pool, coach, userId, {
 				date,
 				tzOffsetMin,
 				now,
 				context,
 				regenerate,
+				revision,
 			});
 			res.json({
 				brief,
 				stale,
+				// Set only when `stale` is a fallback rather than a cache hit: the one line
+				// the Coach screen prints above the brief it kept.
+				note,
 				// The app renders the gap and the nudge's button from these; they are computed,
 				// so it never has to parse them back out of the model's sentences.
 				gap: inputs.rules.gap,
@@ -99,6 +116,7 @@ export function coachRouter(pool: pg.Pool, coach: CoachPort, readings: DayReadin
 			tzOffsetMin: parsed.data.tz_offset_min,
 			context: parsed.data.context ?? null,
 			regenerate: true,
+			revision: parsed.data.revision ?? null,
 		});
 	});
 
