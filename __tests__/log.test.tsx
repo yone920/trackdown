@@ -71,11 +71,12 @@ describe('the log sheet', () => {
 
   it('analyses typed text and saves the confirmed card', async () => {
     mockUpload.mockResolvedValue({
+      results: [meal],
       result: meal,
       evidence: [],
       context: { local_date: '2026-08-30', tz_offset_min: 0 },
     });
-    mockApi.mockResolvedValue({ kind: 'meal', replayed: false });
+    mockApi.mockResolvedValue({ kind: 'meal', kinds: ['meal'], replayed: false });
 
     renderSheet();
     fireEvent.changeText(screen.getByTestId('log-text'), 'chicken, rice and broccoli');
@@ -93,15 +94,15 @@ describe('the log sheet', () => {
     await waitFor(() => expect(mockApi).toHaveBeenCalled());
     const [path, options] = mockApi.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(path).toBe('/api/log/confirm');
-    // The uuid is minted once per card, so a retry replays rather than logging twice.
+    // The uuid is minted once per Save, so a retry replays rather than logging twice.
     expect(options.body.client_id).toBe('00000000-0000-4000-8000-000000000000');
-    expect(options.body.result).toMatchObject({ kind: 'meal', kcal: 700 });
+    expect(options.body.results).toMatchObject([{ kind: 'meal', kcal: 700 }]);
     expect(options.body.tz_offset_min).toBe(0);
   });
 
   it('offers no Save for an unclear reading, only the question', async () => {
     mockUpload.mockResolvedValue({
-      result: { kind: 'unclear', question: 'Machine or free weights?' },
+      results: [{ kind: 'unclear', question: 'Machine or free weights?' }],
       evidence: [],
       context: { local_date: '2026-08-30', tz_offset_min: 0 },
     });
@@ -111,5 +112,62 @@ describe('the log sheet', () => {
 
     await waitFor(() => expect(screen.getByText('Machine or free weights?')).toBeTruthy());
     expect(screen.queryByTestId('confirm-save')).toBeNull();
+  });
+
+  // One sentence, several things (backend Field fixes, mixed input): a card per part,
+  // each removable, one Save for all of them.
+  it('stacks a card per part, drops one on ✕, and saves the rest in one call', async () => {
+    const run: FusionResult = {
+      kind: 'activities',
+      items: [
+        {
+          exercise: 'Treadmill Run',
+          description: '5 km run',
+          category: null,
+          muscle_groups: null,
+          sets: null,
+          reps: null,
+          load_lb: null,
+          duration_min: 28,
+          distance_mi: 3.11,
+          kcal: 300,
+          confidence: 'medium',
+          sources: null,
+        },
+      ],
+    };
+    const weight: FusionResult = { kind: 'weight', weight_lb: 181, confidence: 'high', sources: null };
+    mockUpload.mockResolvedValue({
+      results: [meal, run, weight],
+      evidence: [
+        { id: 'e1', kind: 'photo', mime: 'image/jpeg', width: 10, height: 10, url: '/x', part: 0 },
+        { id: 'e2', kind: 'photo', mime: 'image/jpeg', width: 10, height: 10, url: '/y', part: 1 },
+      ],
+      context: { local_date: '2026-08-30', tz_offset_min: 0 },
+    });
+    mockApi.mockResolvedValue({ kind: 'meal', kinds: ['meal', 'weight'], replayed: false });
+
+    renderSheet();
+    fireEvent.changeText(screen.getByTestId('log-text'), 'ate this, ran 5k, weighed 181');
+    fireEvent.press(screen.getByTestId('log-read'));
+
+    // One card per part, and the count is said out loud rather than left to be counted.
+    await waitFor(() => expect(screen.getByTestId('confirm-card')).toBeTruthy());
+    expect(screen.getByTestId('confirm-card-1')).toBeTruthy();
+    expect(screen.getByTestId('confirm-card-2')).toBeTruthy();
+    expect(screen.getByText(/Read 3 things in that/)).toBeTruthy();
+
+    // The run was not what they meant: drop it, and the photo read for it goes too.
+    fireEvent.press(screen.getByTestId('confirm-card-1-remove'));
+    await waitFor(() => expect(screen.queryByTestId('confirm-card-2')).toBeNull());
+
+    fireEvent.press(screen.getByTestId('confirm-save'));
+    await waitFor(() => expect(mockApi).toHaveBeenCalled());
+    const [, options] = mockApi.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    // One call, one client_id, the two parts that are left — the meal and the weigh-in.
+    expect(mockApi).toHaveBeenCalledTimes(1);
+    expect(options.body.results).toMatchObject([{ kind: 'meal' }, { kind: 'weight' }]);
+    expect(options.body.evidence_ids).toEqual(['e1']);
+    expect(options.body.evidence_parts).toEqual([0]);
   });
 });

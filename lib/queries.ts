@@ -182,19 +182,23 @@ export function useAnalyze() {
 }
 
 export type ConfirmInput = {
-  /** Minted once per confirm card, so a retry replays instead of logging twice. */
+  /** Minted once per Save, however many parts it holds: a retry replays, it does not
+   * log the meal and the run and the weigh-in a second time. */
   clientId: string;
-  result: FusionResult;
+  /** Every part of the log, in the order they were said. One transaction, one Save. */
+  results: FusionResult[];
   evidenceIds?: string[];
+  /** Which part each evidence id belongs to, aligned with `evidenceIds`. */
+  evidenceParts?: number[];
   text?: string | null;
   textKind?: 'text' | 'transcript';
   source?: 'fused' | 'manual';
-  /** kind "goal": keep the user's own date, or save with no finish line. */
+  /** A goal part: keep the user's own date, or save with no finish line. */
   confirmDate?: boolean;
   noDate?: boolean;
 };
 
-/** POST /api/log/confirm — writes the (edited) preview in one transaction. */
+/** POST /api/log/confirm — writes every part of the (edited) preview in one transaction. */
 export function useConfirm() {
   const qc = useQueryClient();
   return useMutation({
@@ -203,8 +207,9 @@ export function useConfirm() {
         method: 'POST',
         body: {
           client_id: input.clientId,
-          result: input.result,
+          results: input.results,
           evidence_ids: input.evidenceIds ?? [],
+          evidence_parts: input.evidenceParts ?? [],
           text: input.text ?? null,
           text_kind: input.textKind ?? 'text',
           ...(input.source ? { source: input.source } : {}),

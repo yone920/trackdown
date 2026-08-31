@@ -114,8 +114,9 @@ export function logRouter(pool: pg.Pool, parser: LogParser): Router {
 				}
 				const saved = await saveConfirmed(client, userId, {
 					client_id: randomUUID(),
-					result,
+					results: [result],
 					evidence_ids: [],
+					evidence_parts: [],
 					// The typed line is the provenance for the whole log, so it is kept
 					// once and hung off the first thing it produced.
 					...(keptText ? {} : { text }),

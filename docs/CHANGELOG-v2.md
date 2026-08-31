@@ -81,6 +81,111 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-08-30 — one input, several things (`fix-mixed-fusion`)
+
+People do not log one kind at a time. "Ate two eggs and toast, then ran 5k, weighed in at
+181" is a meal, an activity and a weigh-in; one analyze returned one `FusionResult`, so two
+of the three were dropped on the floor without a word. The product rule is concept-v2
+§One input mechanism — the user says everything at once, the app sorts it out, one Save
+writes it all — and the pipeline did not implement it.
+
+- **The routing call now segments as well as routes.** It answers with the first thing the
+  user said, in full, plus `more_kinds`: the bare list of what else is in there, in the
+  order they said it. Each of those is filled in by a focused call with only its own kind's
+  schema (`activities`, `meal`, `weigh_in`, `goal_spec`, `statement`), and all of them run
+  in one `Promise.all`. So a mixed log is two round trips, the same as a goal has always
+  been.
+- **`POST /api/log/analyze` returns `results: FusionResult[]`** in statement order, with
+  `part` on each stored evidence row saying which result the photo was read for. `result`
+  is still returned when there is exactly one part, for one release of app compatibility.
+- **`POST /api/log/confirm` takes `results[]` and `evidence_parts[]`** — one `client_id`,
+  one transaction across every part. A meal that saved while the weigh-in beside it failed
+  would be a day the user has to repair by hand, so it is all or nothing. The response
+  gained `kinds` and `parts` (the ids each part became, in order) beside the existing
+  first-of-each fields, plus `meals` and `weights`. Idempotency is unchanged.
+- **App**: `app/log.tsx` draws one `ConfirmCard` per part down the sheet, each editable and
+  each removable with an ✕, under a single "Save all 3". Removing a part takes the photos
+  read for it with it. "Add more" saves the batch and keeps the sheet open. `ConfirmCard`
+  gained `onRemove`, `showActions` and a `testID`; on its own — the DayLog correction — it
+  is exactly what it was.
+
+**Decisions**
+
+- **The grammar ceiling is about 3.66 KB, not the 4.5 KB the old pin claimed, and the byte
+  count is not what it measures.** The design called for a segmenter call in front of
+  everything; that was rejected because it puts a second round trip on the hot path
+  (logging a workout or a meal) to answer a question that *is* the routing decision. The
+  obvious alternative, `results: FusionRoute[]`, was implemented, measured at 3.7 KB —
+  under the pin — and refused outright by Anthropic with "the compiled grammar is too
+  large": an array multiplies a union's grammar by far more than its JSON bytes. Measured
+  against the live API, from a routing union of 3486 bytes: `+ more_kinds: SegmentKind[]`
+  3655 **OK**; `+ more_kinds` and one string field 3687 **FAIL**; `+ more: [{kind, text}]`
+  3764 **FAIL**; `+ more: [{kind, text, photo_indexes}]` 3908 **FAIL**. So a segment is a
+  bare enum value and nothing else. It is not even monotonic in size — a 4.2 KB probe of a
+  different shape compiled — which is why `fusion.test.ts`'s pin is now documented as an
+  early warning and `anthropic.fusion.contract.test.ts` is named as the real gate. **Run
+  the contract test before believing any change to a model-facing schema.**
+- **A segment carries no quoted text.** There is no room for one, and the follow-up call is
+  handed the whole original message anyway — quoting the words back at it would tell it
+  nothing it cannot read for itself. It is told which kind to pull out and to leave the
+  rest alone, since another call is already reading those.
+- **`SEGMENT_KINDS` is the router's own five words, not the public seven.** Naming
+  `constraint` / `preference` / `coach_context` in the list was tried and the model ignored
+  it: the routing rules directly above it in the same prompt call all three "statement", so
+  that is what it answered with, and the enum rejected it. The scope comes back from the
+  statement's own follow-up call, which has room for it.
+- **A weight stated on the way to a goal is still one part, not two.** The prompt says so
+  and the model mostly obeys, but on the 212-goal field report it listed a `weight` part
+  beside the goal — which would have put 212 on the scale twice in one Save.
+  `dropWeightStatedWithGoal` removes a weight part within 0.5 lb of the goal's stated
+  `current_weight_lb`; the goal's own weigh-in is the one kept, because it is what the
+  timeline is projected from.
+- **The transcript is kept once per part.** Three records from one sentence each get their
+  own evidence row with the same words, so the DayLog shows "You said …" under all three
+  rather than only under the first. For a single-part log this is byte-for-byte what it was.
+- **Call counts are unchanged on the hot path**: one call for a single activities / meal /
+  weight / coach context, two for a single goal or constraint — pinned by tests. A mixed
+  input costs one call per extra part, in one extra round trip.
+- No new dependencies. No migration.
+
+**Schema sizes** (JSON bytes, `fusion.test.ts` pins them all under 4500 and the routing one
+under 3660): `fusion_result` **3580** · `goal_spec` 1586 · `plan_fields` 964 · `activities`
+1257 · `meal` 1430 · `weigh_in` 479 · `statement` 1081. The routing schema was 3486 before
+this and would have been 3655 with `more_kinds` alone; dropping the pointless `maxLength: 40`
+from `photo_fields` (three occurrences — the strings are only matched against a fixed list
+of field names) paid for most of it.
+
+**Tests** — 344 passing, 2 skipped in `backend` (was 324/2); 67 passing in the app (was 64).
+
+- `src/services/fusion/fusion.test.ts` (+11): the three-part split and its call count and
+  schema names, the dedupe of a repeated kind, the statement segment's scope, the goal
+  segment naming its own title, the photo claim and its fallbacks, the unclear-alone rule,
+  the weight-with-a-goal dedupe, the two new prompts, and the routing schema's size.
+- `src/app.test.ts` (+4): "ate two eggs, ran 5k, weighed in at 181" end to end — three
+  parts out of analyze, one confirm, ids back in order, three rows in three tables, the
+  transcript against each, and **zero CoachPort calls**; the photo filed against the run
+  and not the plate; a part that cannot be saved rolling back the ones that can; and a
+  single-kind log answering exactly as before, including the old single-`result` body.
+- `anthropic.fusion.contract.test.ts` (+3, against the real model): the sentence splitting
+  into meal + activity + weigh-in in the order said and in miles, a three-exercise workout
+  staying ONE part, and a photo landing on the activity rather than the meal. Run here,
+  green — six for six.
+- `__tests__/log.test.tsx` (+1), `__tests__/confirm-card.test.tsx` (+2): the stack, the ✕
+  dropping a part and its photo, one Save with `results[]`, and the card's own buttons
+  hidden when the sheet draws them.
+
+**Deferred**
+
+- **A photo cannot be moved between parts by hand.** The model assigns it and the user can
+  only drop the whole part. Rare enough to wait for a complaint.
+- **"Add more" still saves first.** It writes the batch and reopens the sheet rather than
+  appending to an unsaved one, which is what it did before; a true multi-turn basket needs
+  the preview to survive a second analyze, and nothing has asked for it yet.
+- **The routing schema has under a hundred bytes of headroom.** The next field on it will
+  most likely not fit. When one is needed, the meal branch's nested `items` array (528
+  bytes) is the thing to move to a focused call — at the cost of the plate breakdown on the
+  single-meal hot path.
+
 ### 2026-08-30 — a goal with facts in it (`fix-goal-fusion`)
 
 One sentence typed into the Log sheet broke three things at once:

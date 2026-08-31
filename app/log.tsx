@@ -39,6 +39,12 @@ import type { FusionResult } from '@/lib/types';
 // here, the row comes back as a confirm card with its saved values in it, and Save PATCHes
 // instead of confirming. One card for "is this right?" and for "that was wrong" — the
 // screen the user learned the first time is the screen they get the second time.
+//
+// One input can be several things. "Ate two eggs, ran 5k, weighed in at 181" comes back as
+// three parts, drawn as three cards down the sheet — each editable, each removable with its
+// ✕ — under ONE Save, which writes all of them in one transaction (concept-v2 §One input
+// mechanism: the user says everything at once and the app sorts it out). "Add more" saves
+// the batch and leaves the sheet open for the next thing.
 
 export default function LogSheet() {
   const router = useRouter();
@@ -59,7 +65,9 @@ export default function LogSheet() {
   const [text, setText] = useState('');
   const [photos, setPhotos] = useState<LocalPhoto[]>([]);
   const [evidenceIds, setEvidenceIds] = useState<string[]>([]);
-  const [result, setResult] = useState<FusionResult | null>(null);
+  const [evidenceParts, setEvidenceParts] = useState<number[]>([]);
+  // Every part of what was just read, in the order it was said. One card each, one Save.
+  const [results, setResults] = useState<FusionResult[]>([]);
   const [clientId, setClientId] = useState<string | null>(null);
   const [dateChoice, setDateChoice] = useState<DateChoice>('proposed');
   const [listening, setListening] = useState(false);
@@ -76,9 +84,9 @@ export default function LogSheet() {
   const dayLog = useDayLog(editing ? editDate : '');
   const editEntry = editing ? (dayLog.data?.entries.find((entry) => entry.id === editId) ?? null) : null;
   useEffect(() => {
-    if (!editEntry || result) return;
+    if (!editEntry || results.length > 0) return;
     const seeded = recordToResult(editEntry.record);
-    if (seeded) setResult(seeded);
+    if (seeded) setResults([seeded]);
     // Only seeds once — after that the card owns the values the user is editing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editEntry]);
@@ -87,7 +95,8 @@ export default function LogSheet() {
     setText('');
     setPhotos([]);
     setEvidenceIds([]);
-    setResult(null);
+    setEvidenceParts([]);
+    setResults([]);
     setClientId(null);
     setDateChoice('proposed');
     setTranscribed(false);
@@ -103,10 +112,13 @@ export default function LogSheet() {
         photos: withPhotos,
         kindHint: typeof params.hint === 'string' ? params.hint : null,
       });
-      setResult(response.result);
+      // `results` since the mixed-input fix; `result` is the old single-part shape, kept
+      // for one release so a phone that has not updated still works against a new server.
+      setResults(response.results ?? (response.result ? [response.result] : []));
       setEvidenceIds(response.evidence.map((item) => item.id));
-      // One id per confirm card: a retry after a timeout must replay, not log twice
-      // (backend/src/services/fusion/confirm.ts).
+      setEvidenceParts(response.evidence.map((item) => item.part ?? 0));
+      // One id per Save, however many parts it holds: a retry after a timeout must replay,
+      // not log the meal and the run twice (backend/src/services/fusion/confirm.ts).
       setClientId(Crypto.randomUUID());
       setDateChoice('proposed');
     } catch (caught) {
@@ -114,7 +126,17 @@ export default function LogSheet() {
     }
   };
 
+  /** Drops one part, and the photos that were read for it, from the batch. */
+  const removePart = (index: number) => {
+    setResults((current) => current.filter((_, i) => i !== index));
+    setEvidenceIds((current) => current.filter((_, i) => evidenceParts[i] !== index));
+    setEvidenceParts((current) =>
+      current.filter((part) => part !== index).map((part) => (part > index ? part - 1 : part)),
+    );
+  };
+
   const saveEdit = async () => {
+    const result = results[0];
     if (!result || !editing || !editKind) return;
     const body = resultToPatch(editKind, result);
     if (!body) return;
@@ -128,17 +150,20 @@ export default function LogSheet() {
   };
 
   const save = async (keepOpen: boolean) => {
-    if (!result || !clientId) return;
+    // An unclear reading is a question, not a record; it goes no further than the card.
+    const toSave = results.filter((result) => result.kind !== 'unclear');
+    if (toSave.length === 0 || !clientId) return;
     setError(null);
     try {
       await confirm.mutateAsync({
         clientId,
-        result,
+        results: toSave,
         evidenceIds,
+        evidenceParts,
         text: text.trim() || null,
         textKind: transcribed ? 'transcript' : 'text',
         source: evidenceIds.length > 0 ? 'fused' : 'manual',
-        ...(result.kind === 'goal'
+        ...(toSave.some((result) => result.kind === 'goal')
           ? { confirmDate: dateChoice === 'confirm_date', noDate: dateChoice === 'no_date' }
           : {}),
       });
@@ -185,6 +210,8 @@ export default function LogSheet() {
   };
 
   const canRead = (text.trim().length > 0 || photos.length > 0) && !analyze.isPending;
+  /** The parts that are records rather than questions — what Save would actually write. */
+  const savable = results.filter((result) => result.kind !== 'unclear');
 
   return (
     <KeyboardAvoidingView
@@ -311,26 +338,67 @@ export default function LogSheet() {
           </View>
         ) : null}
 
-        {error && !result ? <Sub style={{ marginTop: 14, color: C.accent }}>{error}</Sub> : null}
+        {error && results.length === 0 ? <Sub style={{ marginTop: 14, color: C.accent }}>{error}</Sub> : null}
 
-        {result ? (
+        {results.length > 1 ? (
+          <Sub style={{ marginTop: 20 }}>
+            {`Read ${results.length} things in that. Fix any of them, drop what you did not mean, then Save once.`}
+          </Sub>
+        ) : null}
+
+        {results.map((result, index) => (
           <ConfirmCard
+            key={index}
+            testID={index === 0 ? 'confirm-card' : `confirm-card-${index}`}
             result={result}
-            onChange={setResult}
+            onChange={(next) => setResults((current) => current.map((r, i) => (i === index ? next : r)))}
+            // Nothing to drop when the whole log is one thing: the ✕ at the top closes it.
+            {...(results.length > 1 ? { onRemove: () => removePart(index) } : {})}
             dateChoice={dateChoice}
             onDateChoice={setDateChoice}
             onSave={() => void (editing ? saveEdit() : save(false))}
-            // "Add more" saves and keeps the sheet; an unclear reading has nothing to save.
-            onAddMore={() => {
-              if (result.kind === 'unclear') setResult(null);
-              else void save(true);
-            }}
+            onAddMore={() => void save(true)}
             saving={confirm.isPending || patch.isPending}
-            error={error}
+            {...(index === results.length - 1 ? { error } : {})}
             saveLabel={editing ? 'Save changes' : 'Save'}
             showAddMore={!editing}
+            // One Save under the whole stack, not one per card.
+            showActions={false}
             eyebrow={editing ? `As recorded · ${editKind}` : undefined}
           />
+        ))}
+
+        {results.length > 0 ? (
+          <View style={{ marginTop: 18 }}>
+            <Chips>
+              {savable.length > 0 ? (
+                <Chip
+                  testID="confirm-save"
+                  label={
+                    confirm.isPending || patch.isPending
+                      ? 'Saving…'
+                      : editing
+                        ? 'Save changes'
+                        : savable.length > 1
+                          ? `Save all ${savable.length}`
+                          : 'Save'
+                  }
+                  variant="primary"
+                  onPress={() => void (editing ? saveEdit() : save(false))}
+                  disabled={confirm.isPending || patch.isPending}
+                />
+              ) : null}
+              {editing ? null : (
+                <Chip
+                  testID="confirm-add-more"
+                  label="Add more"
+                  // Nothing to save behind a question: clear it and let them say it again.
+                  onPress={() => (savable.length === 0 ? reset() : void save(true))}
+                  disabled={confirm.isPending}
+                />
+              )}
+            </Chips>
+          </View>
         ) : null}
       </ScrollView>
     </KeyboardAvoidingView>
