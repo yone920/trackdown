@@ -19,7 +19,7 @@ import { loadTargets } from "../profile.js";
 import { catalogFactsFor, introductionCandidates } from "./catalog.js";
 import { completionOf, planIsComplete, type ExerciseCompletion } from "./completion.js";
 import { computeFeatures } from "./features.js";
-import { assertUsableBrief, assertUsableRevision, UnusableBriefError } from "./schema.js";
+import { assertUsableBrief, assertUsableRevision, resolveRestAfterTraining, UnusableBriefError } from "./schema.js";
 import { buildRules, type CoachGoal, type NudgeAction, type TrainingBackground } from "./rules.js";
 
 // The brief: gathering its inputs, caching it for the day, and storing it
@@ -681,9 +681,14 @@ async function askUsable(
 	revision: BriefRevision | undefined,
 	current: CoachBriefRecord | null
 ): Promise<StorableBrief> {
+	// Anything logged today makes a rest verdict a verdict on work already done, which is
+	// never an answer to "what should I do today" (schema.ts §resolveRestAfterTraining).
+	const trainedToday = inputs.today.logged.length > 0;
 	const ask = async (): Promise<StorableBrief> => {
-		if (!revision) return assertUsableBrief(await coach.brief(inputs));
-		const answer = assertUsableRevision(await coach.revise(inputs, revision));
+		if (!revision) {
+			return assertUsableBrief(resolveRestAfterTraining(await coach.brief(inputs), { trainedToday }));
+		}
+		const answer = assertUsableRevision(resolveRestAfterTraining(await coach.revise(inputs, revision), { trainedToday }));
 		return answer.revision_mode === "append" && current
 			? appendToBrief(current, answer, inputs.local_time)
 			: assertUsableBrief(stripMode(answer));

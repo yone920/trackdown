@@ -439,7 +439,9 @@ export function gapRule(daysSinceLastWorkout: number | null): GapRule {
 					? // Never "rest, then" — that is a verdict on work already done, and it is
 						// the bug this wording exists to prevent (user decision 2026-08-31 §A2).
 						// See the NEVER A RETROACTIVE REST rule in services/coach/prompt.ts.
-						"Already trained today. Name what was done and build the plan around it: anything you add is a COMPLEMENT to that session, and offering nothing more is a fine answer said as information. This is not a rest day and must never be called one."
+						// Written as a directive rather than as advice because the live model
+						// read the gentler version, agreed with it, and still answered "rest".
+						"Already trained today. Name what was done and build the plan around it: anything you add is a COMPLEMENT to that session. workout.type MUST NOT be \"rest\" and the Do list MUST NOT be empty — a ten-minute stretch of what was trained, an easy walk, or two mobility drills is a complete answer. Say \"nothing more strenuous today\" in the prose if that is the truth, never by emptying the list."
 					: "Trained yesterday. Yesterday's muscle groups are still recovering.",
 		};
 	}

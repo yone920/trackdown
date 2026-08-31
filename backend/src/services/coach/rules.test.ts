@@ -18,7 +18,14 @@ import {
 	type CoachGoal,
 	type Prescription,
 } from "./rules.js";
-import { assertUsableBrief, assertUsableRevision, CoachBriefSchema, CoachRevisionSchema, UnusableBriefError } from "./schema.js";
+import {
+	assertUsableBrief,
+	assertUsableRevision,
+	CoachBriefSchema,
+	CoachRevisionSchema,
+	resolveRestAfterTraining,
+	UnusableBriefError,
+} from "./schema.js";
 
 // The deterministic half of the coach. Every number in a brief comes from this file, so
 // every rule in docs/concept-v2.md §Progression rules has a test here that would fail if
@@ -698,8 +705,38 @@ describe("a brief asked for after the session has already happened", () => {
 		const rule = gapRule(0);
 		expect(rule.level).toBe("fresh");
 		expect(rule.text).toContain("COMPLEMENT");
-		expect(rule.text).toContain("never be called one");
+		expect(rule.text).toContain('MUST NOT be "rest"');
+		expect(rule.text).toContain("MUST NOT be empty");
 		expect(rule.text.toLowerCase()).not.toMatch(/consider mobility, cardio or rest/);
+	});
+
+	/**
+	 * The prompt says it twice and the live model still answered "rest" with an empty list
+	 * for a user who had logged four sets of pulldowns that morning. So it is enforced in
+	 * code as well as asked for.
+	 */
+	const restBrief = (exercises: unknown[]) => ({ workout: { type: "rest", targets: [], exercises } });
+
+	it("relabels a rest day that has a complement in it, rather than losing the complement", () => {
+		const answer = resolveRestAfterTraining(restBrief([{ name: "Lat Stretch" }]), { trainedToday: true });
+		expect(answer.workout.type).toBe("mixed");
+		expect(answer.workout.exercises).toHaveLength(1);
+	});
+
+	it("throws on a rest verdict with nothing in it, so the caller asks again", () => {
+		expect(() => resolveRestAfterTraining(restBrief([]), { trainedToday: true })).toThrow(UnusableBriefError);
+	});
+
+	it("leaves a genuinely planned rest day alone", () => {
+		const planned = resolveRestAfterTraining(restBrief([]), { trainedToday: false });
+		expect(planned.workout.type).toBe("rest");
+		expect(assertUsableBrief(planned)).toBeTruthy();
+	});
+
+	it("touches nothing on a training day, trained or not", () => {
+		const strength = { workout: { type: "strength", targets: [], exercises: [{ name: "Bench Press" }] } };
+		expect(resolveRestAfterTraining(strength, { trainedToday: true })).toBe(strength);
+		expect(resolveRestAfterTraining(strength, { trainedToday: false })).toBe(strength);
 	});
 });
 

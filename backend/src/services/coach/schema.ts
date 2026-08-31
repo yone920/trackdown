@@ -195,6 +195,35 @@ export function assertUsableBrief<T extends { workout: { type: string; exercises
 }
 
 /**
+ * A rest verdict on a day that has already been trained (user decision 2026-08-31 §A2).
+ *
+ * The prompt forbids it in as many words, twice, and the live model still wrote
+ * `type: "rest"` with an empty list for a user who had logged four sets of pulldowns that
+ * morning — reasoning, not unreasonably, that a second lat session would be overtraining.
+ * The reasoning was fine; the *shape* of the answer was the bug, because on this screen it
+ * reads as "today was a rest day" and it replaces a plan the user is halfway through.
+ *
+ * So it is also enforced here, where no amount of persuasion is involved:
+ *
+ *   * A rest day with something in it is a mislabelled complement — the exercises are the
+ *     answer, so the label is corrected to `mixed` and the brief is kept. Nothing the user
+ *     can see is lost by relabelling a list that is already right.
+ *   * A rest day with NOTHING in it, on a day that has been trained, is thrown: the caller
+ *     asks once more, and falls back to the standing plan rather than storing a blank page
+ *     as the day's answer.
+ */
+export function resolveRestAfterTraining<T extends { workout: { type: string; exercises: unknown[] } }>(
+	brief: T,
+	{ trainedToday }: { trainedToday: boolean }
+): T {
+	if (!trainedToday || brief.workout.type !== "rest") return brief;
+	if (brief.workout.exercises.length === 0) {
+		throw new UnusableBriefError("the model called today a rest day after the user had already trained, and listed nothing to do");
+	}
+	return { ...brief, workout: { ...brief.workout, type: "mixed" } };
+}
+
+/**
  * The same guarantee for an append: "add core" that adds nothing is not an answer either,
  * and unlike a rewrite it cannot be spotted by looking at the merged result — the plan is
  * still full of the exercises that were already there.

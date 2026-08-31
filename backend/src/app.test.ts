@@ -3233,6 +3233,50 @@ describe("asking after the session has already happened", () => {
 		expect(inputs.rules.gap.text).toContain("COMPLEMENT");
 	});
 
+	/**
+	 * The photographed answer, reproduced through the fake: "Rest or light cardio — you
+	 * trained lats today", type rest, nothing in the list. It is refused before it can be
+	 * stored, because once stored it is the day's standing answer.
+	 */
+	it("refuses the rest verdict the field report produced, and keeps a mislabelled complement", async () => {
+		const briefsBefore = await countBriefs(today, "mid@example.com");
+		const verdict = {
+			...SAMPLE_BRIEF,
+			headline: "Rest or light cardio — you trained lats today",
+			workout: { type: "rest", targets: [], exercises: [], finisher: [] },
+		};
+		coach.briefs.push(verdict, verdict);
+
+		const refused = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz });
+		// Asked twice, stored never — and with no earlier brief on this day the answer is
+		// an honest 503 rather than a blank plan written into the record.
+		expect([200, 503]).toContain(refused.status);
+		expect(await countBriefs(today, "mid@example.com")).toBe(briefsBefore);
+		if (refused.status === 200) expect(refused.body.brief.workout.type).not.toBe("rest");
+
+		// The same answer WITH a complement in it is not refused: the label was wrong, the
+		// list was right, so the label is corrected and the session is kept.
+		coach.briefs.push({
+			...verdict,
+			workout: {
+				type: "rest",
+				targets: ["recovery"],
+				exercises: [{ name: "Lat Stretch", load_lb: null, sets: null, reps: null, minutes: 5, note: null, is_new: false }],
+				finisher: [],
+			},
+		});
+		const kept = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, context: "what else can I do" });
+		expect(kept.status).toBe(200);
+		expect(kept.body.brief.workout.type).toBe("mixed");
+		expect(kept.body.brief.workout.exercises.map((e: { name: string }) => e.name)).toEqual(["Lat Stretch"]);
+	});
+
 	it("carries the coverage ledger with its debts named", async () => {
 		await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
 		const inputs = coach.inputs.at(-1)!;

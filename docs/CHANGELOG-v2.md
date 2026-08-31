@@ -130,9 +130,23 @@ already done, and two places used to let it become one.
   rest day and must never be called one".
 - **The prompt** gained a `NEVER A RETROACTIVE REST VERDICT` block saying the same thing in
   the model's own terms, including the two ways the old answer was written and why neither
-  is allowed: *"Nothing more today" is a fine answer — as a sentence in "why". It is NOT
-  written by setting workout.type to "rest", and it is NOT written by returning an empty Do
-  list, which replaces the user's plan with a blank page.*
+  is allowed: *"Nothing more strenuous today" is a fine answer — as a sentence in "why",
+  beside a short recovery list. It is NOT said by setting workout.type to "rest", and it is
+  NOT said by returning an empty Do list, which replaces the user's plan with a blank page.*
+  It also spells out what a complement may be, because "do not answer rest" with no
+  alternative is a rule with nowhere to go: *a ten-minute stretch of what was trained, a
+  twenty-minute walk, or two mobility drills is a complete and honest answer.*
+- **And it is enforced in code, because the prompt was not enough.** Checked against the
+  live account after the first deploy: the user had logged four sets of pulldowns that
+  morning, and the model — having read the rule, twice — still answered `type: "rest"` with
+  an empty list, reasoning that a second lat session would be overtraining. The reasoning
+  was fine; the *shape* was the bug. `resolveRestAfterTraining` now runs on every answer
+  when the day has anything logged: a rest label over a list that has something in it is
+  **relabelled `mixed`** and kept (the label was wrong, the session was right), and a rest
+  label over an empty list is **thrown**, so the caller asks once more and falls back to the
+  standing plan rather than writing a blank page into the record. The gap rule's own line
+  became a directive for the same reason — `workout.type MUST NOT be "rest" and the Do list
+  MUST NOT be empty` — after the gentler wording was read, agreed with, and ignored.
 - **`today.logged`** is new on `CoachToday`: every movement of the day with its set count,
   not just the block titles, printed as *"Logged today, movement by movement: … This work is
   DONE and counts."* The completion match reads the same list, so the sentence the model is
@@ -234,7 +248,7 @@ model's `nutrition.kcal` is untouched: it is the target, and it does not move.
   unasked.
 - No new dependencies. One migration.
 
-**Tests** — 558 passing, 2 skipped in `backend` (was 505/2, with the key set so the contract
+**Tests** — 563 passing, 2 skipped in `backend` (was 505/2, with the key set so the contract
 tests run); 185 passing in the app (was 176).
 
 - `src/services/coach/completion.test.ts` (new, 14): the match across case, punctuation,
@@ -247,25 +261,30 @@ tests run); 185 passing in the app (was 176).
   into "core" and back + traps into "upper back"; stretching counted in **sessions**;
   overdue at fourteen days with "never" as the largest debt there is; the future ignored;
   and the ledger on `computeFeatures` being the same object the board gets.
-- `src/services/coach/rules.test.ts` (+16): the default hour and what it sizes to; the list
+- `src/services/coach/rules.test.ts` (+20): the default hour and what it sizes to; the list
   shrinking with the minutes and flooring at two; the cap one over the ask; the finisher
   scaling; absurd minutes held to 10–240; `buildRules` carrying it and saying who said it;
   the debts named with their numbers and the recovery constraint kept above them; the "nothing
   is overdue" wording; the candidate list and its silence when there is nothing to introduce;
-  `gapRule(0)` demanding a complement and forbidding "rest"; and the revision schema refusing
-  a missing or unknown mode, an append that adds nothing, and a rewrite with an empty
-  training day.
+  `gapRule(0)` demanding a complement and forbidding "rest"; `resolveRestAfterTraining`
+  relabelling a rest day that has a complement in it, throwing on one that has nothing,
+  leaving a genuinely planned rest day alone and touching no training day at all; and the
+  revision schema refusing a missing or unknown mode, an append that adds nothing, and a
+  rewrite with an empty training day.
 - `src/services/training/board.test.ts` (+1): the ledger on the board being `features.coverage`
   itself, with chest served, quads never, stretching in sessions, and the debts first.
 - `src/services/fusion/fusion.test.ts` (+1): `session_minutes` on the plan-fields call, its
   bounds both ways, its default when absent, and **not one byte of it on the routing union**.
-- `src/app.test.ts` (+11): the plan ticked from none → partial → complete over real rows with
+- `src/app.test.ts` (+12): the plan ticked from none → partial → complete over real rows with
   every item still on screen and **no `completion` in the stored jsonb**; the Eat card equal
   to `GET /api/day`'s own numbers, and the over-allowance line with nothing to do about it;
   an append landing under the plan with the headline, nutrition and nudge kept, the reasoning
   extended and only the new rows stamped; a rewrite replacing the list; an empty append
   refused and not stored; three `is_new` flags cut to one with all three exercises kept; the
-  mid-workout ask carrying every movement with its sets and the two prompt rules; the ledger
+  mid-workout ask carrying every movement with its sets and the two prompt rules; **the
+  photographed answer reproduced through the fake** — "Rest or light cardio — you trained
+  lats today" with an empty list — asked twice, stored never, and the same answer *with* a
+  five-minute lat stretch in it kept and relabelled `mixed`; the ledger
   and its debts in the prompt; the sizing block, the candidate list (never a logged
   exercise); and 25 stated minutes cutting five movements to three.
 - `anthropic.coach.contract.test.ts` (+2, all five run here against the real model, **five for
