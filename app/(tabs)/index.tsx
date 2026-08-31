@@ -64,6 +64,15 @@ export default function Today() {
   const openLog = (hint?: string) =>
     router.push(hint ? { pathname: '/log', params: { hint } } : '/log');
 
+  /**
+   * Tapping a logged row opens it for a correction — the same review-and-tell screen the
+   * record view routes to (app/day/[date]/log.tsx). Editing used to be two screens deep,
+   * behind Day → "See the log as recorded"; the row you are looking at is where you notice
+   * it is wrong, so it is where the correction starts.
+   */
+  const correct = (kind: 'activity' | 'meal' | 'weight', id: string) =>
+    router.push({ pathname: '/log', params: { editDate: date, editId: id, editKind: kind } });
+
   const onAction = (kind: ActionKind) => {
     if (kind === 'coach') router.push('/coach');
     else if (kind === 'weigh_in') openLog('weight');
@@ -253,6 +262,7 @@ export default function Today() {
                       }
                       sub={activity.exercise ? activity.description : null}
                       right={activity.kcal > 0 ? kcal(activity.kcal) : null}
+                      onPress={activity.id ? () => correct('activity', activity.id as string) : undefined}
                       onDelete={
                         activity.id
                           ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
@@ -288,6 +298,7 @@ export default function Today() {
                     }
                     sub={activity.source === 'health' ? 'From Health' : null}
                     right={activity.kcal > 0 ? kcal(activity.kcal) : null}
+                    onPress={activity.id ? () => correct('activity', activity.id as string) : undefined}
                     onDelete={
                       activity.id
                         ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
@@ -322,6 +333,7 @@ export default function Today() {
                   title={meal.description}
                   sub={grams(meal.protein_g) ? `${grams(meal.protein_g)} protein` : null}
                   right={kcal(meal.kcal)}
+                  onPress={() => correct('meal', meal.id)}
                   onDelete={() => remove.mutate({ kind: 'meal', id: meal.id })}
                   divider={index < group.meals.length - 1}>
                   <EvidenceThumbs photos={meal.evidence} />

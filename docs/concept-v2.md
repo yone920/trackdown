@@ -160,7 +160,8 @@ always showing what it understood before saving.
   done, what's short, the one best next action, with action chips), a **day arc** (6a–11p line:
   logs as dots, workout as a bar, NOW), then Training and Eating organised like the closed day.
   Only what was logged is on it — no ghost dot and no placeholder row for a meal nobody has
-  eaten (§Principles 8) — and every logged row carries a ✕ that deletes it in two taps.
+  eaten (§Principles 8). Every logged row is three targets: the exercise name opens its sheet,
+  the ✕ deletes it in two taps, and the rest of the row opens it for a correction.
 - **Day** (closed) is a reading, not a replay: verdict vs the goal active that day, an **In
   short** paragraph written at day close, training by muscle group with each exercise's load and
   its delta vs last time, eating as macros vs targets + a pattern line + meals by slot, body,

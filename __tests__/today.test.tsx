@@ -21,6 +21,13 @@ jest.mock('@/lib/api', () => ({
   setUnauthorizedHandler: () => {},
 }));
 
+// The global mock hands out a fresh `push` per call, so this screen brings its own.
+const mockPush = jest.fn();
+jest.mock('expo-router', () => ({
+  useRouter: () => ({ push: (...args: unknown[]) => mockPush(...args), back: jest.fn(), replace: jest.fn() }),
+  useLocalSearchParams: () => ({}),
+}));
+
 function renderToday() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
@@ -44,7 +51,10 @@ function serve({
   });
 }
 
-beforeEach(() => mockApi.mockReset());
+beforeEach(() => {
+  mockApi.mockReset();
+  mockPush.mockReset();
+});
 
 describe('Today', () => {
   it('shows the day number, the status and the no-goal banner', async () => {
@@ -266,6 +276,36 @@ describe('Today', () => {
     fireEvent.press(screen.getByTestId('row-meal-m1-delete-yes'));
     await waitFor(() => expect(screen.getByText('Nothing eaten yet today.')).toBeTruthy());
     expect(calls).toContainEqual({ path: '/api/entries/meals/m1', method: 'DELETE' });
+  });
+
+  it('opens a training row for correction, and its name still opens the exercise', async () => {
+    serveDeletable();
+    renderToday();
+    await waitFor(() => expect(screen.getByText('Bench Press')).toBeTruthy());
+
+    // The row body is the correction — the same screen the record view routes to.
+    fireEvent.press(screen.getByTestId('row-activity-a1-open'));
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/log',
+      params: { editDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), editId: 'a1', editKind: 'activity' },
+    });
+
+    // The name inside it is still its own target, and it is not the correction.
+    mockPush.mockReset();
+    fireEvent.press(screen.getByLabelText('Bench Press — how it is done'));
+    expect(mockPush).toHaveBeenCalledTimes(1);
+    expect(mockPush.mock.calls[0]?.[0]).not.toMatchObject({ pathname: '/log' });
+  });
+
+  it('opens a meal row for correction', async () => {
+    serveDeletable();
+    renderToday();
+    await waitFor(() => expect(screen.getByText('eggs and toast')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('row-meal-m1-open'));
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/log',
+      params: { editDate: expect.any(String), editId: 'm1', editKind: 'meal' },
+    });
   });
 
   it('shows one meal for one meal, and nothing about a dinner nobody ate', async () => {

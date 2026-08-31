@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
-import { buildDaySheet, buildInShortPrompt, buildRightNowPrompt } from "./prompt.js";
+import { PROMPT_FINGERPRINT, buildDaySheet, buildInShortPrompt, buildRightNowPrompt } from "./prompt.js";
 import { dayInputsHash } from "./readings.js";
 import { InShortSchema, RightNowSchema } from "./schema.js";
 import { dayViewFixture as view } from "../../test/fixtures/dayView.js";
@@ -150,5 +150,18 @@ describe("the inputs hash", () => {
 
 	it("changes when a slot stops being empty", () => {
 		expect(dayInputsHash(view({ expected: [] }))).not.toBe(dayInputsHash(view()));
+	});
+
+	/**
+	 * The field case this exists for: the prompt was told never to say "left to log" and the
+	 * reading already in the table went on saying it, because the *day* had not changed.
+	 *
+	 * The pin is deliberate. Editing either prompt changes this value and fails this test,
+	 * which is the moment to notice that the edit rewrites every cached reading once —
+	 * one model call per active day, and worth it, but not a thing to do by accident.
+	 */
+	it("is bound to what the prompt currently says", () => {
+		expect(PROMPT_FINGERPRINT).toBe("9bbc420b");
+		expect(dayInputsHash(view())).toMatch(/^[0-9a-f]{32}$/);
 	});
 });

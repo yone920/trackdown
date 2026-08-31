@@ -122,6 +122,31 @@ picture of the day for ever.
   Pressable. React Native gives the touch to the innermost responder, and the test pins that
   arming the ✕ does not open the correction sheet.
 
+#### A′ — and while we were in these rows: tapping one corrects it
+
+Reported alongside the delete: **Today's rows were not tappable at all**, and correcting
+anything meant Day → "See the log as recorded" → the row. Two screens deep to fix a number
+you are looking at.
+
+The row body now pushes exactly what the DayLog pushes — `{ pathname: '/log', params: {
+editDate, editId, editKind } }` — on Today (`editDate` is the screen's own `localDateKey()`,
+so it is the phone's local day, not UTC's) and on Day (`editDate` is the day being read, not
+today). `/log` already resolves that triple through `useDayLog`, so nothing new was needed on
+the other end.
+
+**Three targets on one row, settled by nesting rather than by z-order:** the exercise **name**
+(a nested `Pressable`, still opening `/exercise/[id]`), the **✕** (28 px drawn, `hitSlop={8}`,
+44 px of target), and the **rest of the row**, which is the correction. React Native hands the
+touch to the innermost responder, so the name and the ✕ each win their own area and the row
+gets everything else; the row is ~44 px tall on its own padding. The Row's outer Pressable
+carries `accessibilityLabel="<title> — open to correct"` and a `-open` testID.
+
+**Not done: weigh-in rows.** The scope note asks for them, and neither Today nor Day *has* a
+weigh-in row — Today does not render `items.weights` at all and Day shows weight as three
+stat tiles. Making one tappable would mean designing a Body section for Today first, which is
+a screen change rather than a wiring change. Weigh-ins remain correctable and deletable in
+"the log, as recorded", which already routes. **Flagged for the user.**
+
 #### B — no expectations, anywhere
 
 Today drew a dashed **"Dinner — not logged yet"** row and the arc drew a dashed ghost dot for
@@ -146,6 +171,16 @@ the same thing. Both are a to-do list the user never wrote.
   owes)`.
 - **The action chips stay.** They are how the user gets to the Log sheet in one tap; nothing
   about them says anything is due.
+- **The prompt is part of the cache key** (`PROMPT_FINGERPRINT`). Caught on the live read after
+  deploying: the day's reading still said *"Dinner is the only meal left to log."* A reading is
+  cached until the day's **inputs hash** changes, and the day had not changed — only the
+  instructions had, so every reading already written would have kept the old wording until the
+  user next logged something. `dayInputsHash` now carries a sha256 of the two prompt bodies, so
+  editing the wording rewrites each cached reading once, on the next read. Hashing the prompts
+  themselves rather than a hand-bumped version number means the next edit cannot forget; the
+  unit test pins the current value so the rewrite is never accidental. `in_short` is unaffected
+  — it returns whatever is stored without consulting the hash, because a closed day's reading
+  is a record.
 
 **Decisions**
 
@@ -159,24 +194,27 @@ the same thing. Both are a to-do list the user never wrote.
   so the contract test can ask the real model with the **real prompt**. Pinning the wording
   against a hand-written sheet would have pinned nothing.
 
-**Tests** — 444 passing, 2 skipped in `backend` (was 439/2, with the key set so the contract
-tests run); 105 passing in the app (was 99).
+**Tests** — 445 passing, 2 skipped in `backend` (was 439/2, with the key set so the contract
+tests run); 108 passing in the app (was 99).
 
 - `src/app.test.ts` (+1): deleting one lift out of a three-lift block — `earned` drops by its
   calories, the block's `exercise_count` and kcal follow, the allowance is `target + half` of
   what is left, the muscle's set count drops by that row's sets, the Right-now hash changes,
   the row's evidence is gone, and a retry of the same delete is a 404.
-- `src/services/readings/readings.test.ts` (+3, one rewritten): the open-slots heading and the
+- `src/services/readings/readings.test.ts` (+4, one rewritten): the open-slots heading and the
   absence of the old one, the obligation ban present in **both** prompts with the arithmetic
-  closer still allowed, and the chip described as a shortcut.
+  closer still allowed, the chip described as a shortcut, and the prompt fingerprint pinned.
 - `anthropic.readings.contract.test.ts` (+1), **run here against the real model, four for
   four**: the real `buildRightNowPrompt` over the real fixture, with the answer's text, the
   next action's label and hint and every chip label checked against ten obligation phrasings.
-- `__tests__/today.test.tsx` (+3): the two-tap delete of a lift with the training line going
+- `__tests__/today.test.tsx` (+5): the two-tap delete of a lift with the training line going
   from "264 kcal earned" to "Nothing yet", the same for a meal with the cancel path proving no
-  request goes out, and a day whose `expected` holds a dinner rendering no trace of it.
-- `__tests__/day.test.tsx` (+1) and `__tests__/day-log.test.tsx` (+2): the same two taps on a
-  closed day, on the record view, and no ✕ on a statement.
+  request goes out, a day whose `expected` holds a dinner rendering no trace of it, and the two
+  targets on one row — the body pushing `/log` with `editId`/`editKind`, the name pushing
+  somewhere that is *not* `/log`.
+- `__tests__/day.test.tsx` (+2) and `__tests__/day-log.test.tsx` (+2): the same two taps on a
+  closed day, its correction dated **that** day rather than today, the record view, and no ✕
+  on a statement.
 
 **Deferred**
 

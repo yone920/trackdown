@@ -115,12 +115,30 @@ export default function Day() {
         </Card>
       ) : null}
 
-      {view ? <DayBody view={view} onOpenLog={() => router.push(`/day/${date}/log`)} /> : null}
+      {view ? (
+        <DayBody
+          view={view}
+          onOpenLog={() => router.push(`/day/${date}/log`)}
+          // A row on the reading opens the same review-and-tell screen the record view
+          // routes to, for the day being read rather than for today.
+          onCorrect={(kind, id) =>
+            router.push({ pathname: '/log', params: { editDate: date, editId: id, editKind: kind } })
+          }
+        />
+      ) : null}
     </ScrollView>
   );
 }
 
-function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) {
+function DayBody({
+  view,
+  onOpenLog,
+  onCorrect,
+}: {
+  view: DayView;
+  onOpenLog: () => void;
+  onCorrect: (kind: 'activity' | 'meal', id: string) => void;
+}) {
   const remove = useDeleteRecord();
   const color = VERDICT_COLOR[view.verdict] ?? C.mute;
   const Mark = view.verdict === 'served' ? IconCheckCircle : IconAlertCircle;
@@ -209,6 +227,7 @@ function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) 
                       key={activity.id ?? `${group.muscle}-${index}`}
                       activity={activity}
                       last={index === members.length - 1}
+                      onPress={activity.id ? () => onCorrect('activity', activity.id as string) : undefined}
                       onDelete={
                         activity.id
                           ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
@@ -230,6 +249,7 @@ function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) 
                       key={activity.id ?? `other-${index}`}
                       activity={activity}
                       last={index === all.length - 1}
+                      onPress={activity.id ? () => onCorrect('activity', activity.id as string) : undefined}
                       onDelete={
                         activity.id
                           ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
@@ -284,6 +304,7 @@ function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) 
                     title={meal.description}
                     sub={grams(meal.protein_g) ? `${grams(meal.protein_g)} protein` : null}
                     right={kcal(meal.kcal)}
+                    onPress={() => onCorrect('meal', meal.id)}
                     onDelete={() => remove.mutate({ kind: 'meal', id: meal.id })}
                     divider={index < group.meals.length - 1}>
                     <EvidenceThumbs photos={meal.evidence} />
@@ -354,10 +375,12 @@ function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) 
 function ActivityRow({
   activity,
   last,
+  onPress,
   onDelete,
 }: {
   activity: DayActivity;
   last: boolean;
+  onPress?: () => void;
   onDelete?: () => void;
 }) {
   const router = useRouter();
@@ -385,6 +408,7 @@ function ActivityRow({
         .filter(Boolean)
         .join(' · ')}
       right={activity.kcal > 0 ? kcal(activity.kcal) : null}
+      onPress={onPress}
       onDelete={onDelete}
       deleteLabel={activity.exercise ?? activity.description}
       divider={!last}>

@@ -20,8 +20,14 @@ jest.mock('@/lib/api', () => ({
   setUnauthorizedHandler: () => {},
 }));
 
+const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ push: jest.fn(), back: jest.fn(), replace: jest.fn(), canGoBack: () => true }),
+  useRouter: () => ({
+    push: (...args: unknown[]) => mockPush(...args),
+    back: jest.fn(),
+    replace: jest.fn(),
+    canGoBack: () => true,
+  }),
   useLocalSearchParams: () => ({ date: '2026-08-29' }),
 }));
 
@@ -137,6 +143,7 @@ function renderDay() {
 
 beforeEach(() => {
   mockApi.mockReset();
+  mockPush.mockReset();
   mockApi.mockImplementation((path: string) =>
     path.startsWith('/api/day/') ? Promise.resolve(CLOSED) : Promise.resolve(null),
   );
@@ -199,6 +206,23 @@ describe('Day', () => {
     expect(screen.getByText('181.9')).toBeTruthy();
     expect(screen.getByTestId('open-day-log')).toBeTruthy();
     expect(screen.getByTestId('export-day')).toBeTruthy();
+  });
+
+  it('opens a row of a closed day for correction, dated that day and not today', async () => {
+    renderDay();
+    await waitFor(() => expect(screen.getByText('Bench Press')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('row-activity-a1-open'));
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/log',
+      params: { editDate: '2026-08-29', editId: 'a1', editKind: 'activity' },
+    });
+
+    mockPush.mockReset();
+    fireEvent.press(screen.getByTestId('row-meal-m1-open'));
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/log',
+      params: { editDate: '2026-08-29', editId: 'm1', editKind: 'meal' },
+    });
   });
 
   it('deletes a lift and a meal from a closed day, asking in the row first', async () => {

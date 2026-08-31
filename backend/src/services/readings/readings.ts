@@ -3,7 +3,7 @@ import type pg from "pg";
 import type { LlmPort } from "../../ports/llm.js";
 import type { DayView } from "../day.js";
 import { formatClock, localMinutesOf, type IsoDate } from "../localTime.js";
-import { buildInShortPrompt, buildRightNowPrompt } from "./prompt.js";
+import { PROMPT_FINGERPRINT, buildInShortPrompt, buildRightNowPrompt } from "./prompt.js";
 import {
 	IN_SHORT_SCHEMA_NAME,
 	InShortSchema,
@@ -62,6 +62,9 @@ function toReading(row: ReadingRow): Reading {
  */
 export function dayInputsHash(view: DayView): string {
 	const material = {
+		// The instructions are an input too: a reading written under the old wording is
+		// stale the moment the wording changes (prompt.ts §PROMPT_FINGERPRINT).
+		prompt: PROMPT_FINGERPRINT,
 		date: view.date,
 		goal: view.goal?.id ?? null,
 		eaten: view.eaten,

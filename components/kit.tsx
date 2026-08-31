@@ -246,6 +246,7 @@ export function Row({
   right,
   rightColor,
   onPress,
+  pressLabel,
   onTitlePress,
   onDelete,
   deleteLabel,
@@ -258,7 +259,10 @@ export function Row({
   sub?: string | null;
   right?: string | null;
   rightColor?: string;
+  /** The row body: opens the saved row for a correction (concept-v2 §Principles 7). */
   onPress?: () => void;
+  /** What the row body's tap is, for the screen reader. Defaults to "<title> — open to correct". */
+  pressLabel?: string;
   /**
    * The title alone is tappable — an exercise name opening its sheet. Underlined, because
    * a row that is a link in some rows and not in others has to say which it is.
@@ -319,8 +323,16 @@ export function Row({
     </View>
   );
   if (!onPress) return body;
+  // Three targets on one row, innermost first: the exercise name opens its sheet, the ✕
+  // deletes, and everything else opens the row for a correction. React Native gives the
+  // touch to the innermost responder, so the order is settled by the nesting, not by z.
   return (
-    <Pressable onPress={onPress} style={({ opacity: 1 })}>
+    <Pressable
+      testID={testID ? `${testID}-open` : undefined}
+      accessibilityRole="button"
+      accessibilityLabel={pressLabel ?? `${title} — open to correct`}
+      onPress={onPress}
+      style={({ opacity: 1 })}>
       {body}
     </Pressable>
   );
