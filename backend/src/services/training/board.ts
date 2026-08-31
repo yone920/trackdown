@@ -6,6 +6,7 @@ import {
 	isCardio,
 	WEEK_DAYS,
 	type CoachFeatures,
+	type CoverageEntry,
 	type ExerciseFeature,
 	type ExerciseSession,
 } from "../coach/features.js";
@@ -99,6 +100,16 @@ export interface BoardFrequency {
 	training_days_target: number | null;
 	/** Sets per muscle group — the bars under the frequency columns. */
 	muscles: { muscle: string; sets_7d: number; sets_28d: number }[];
+	/**
+	 * The coverage ledger, largest debt first (user decision 2026-08-31: "surface the ledger
+	 * in GET /api/training/board — the coverage section can show 'overdue' muscles").
+	 *
+	 * It is `coverageLedger`'s own output and not a second reading of the same rows, for the
+	 * reason the board's next step is `prescribeLoads` and not a copy of it: the tab that
+	 * says the calves are three weeks overdue and the brief that puts calves in today's
+	 * session must be quoting one number.
+	 */
+	coverage: CoverageEntry[];
 }
 
 export interface BoardCardio {
@@ -454,6 +465,8 @@ function frequencyOf(
 			.filter((muscle) => muscle.sets_28d > 0)
 			.map((muscle) => ({ muscle: muscle.muscle, sets_7d: muscle.sets_7d, sets_28d: muscle.sets_28d }))
 			.sort((a, b) => b.sets_28d - a.sets_28d || a.muscle.localeCompare(b.muscle)),
+		// Straight through from the features, in the order the ledger sorted itself into.
+		coverage: features.coverage,
 	};
 }
 

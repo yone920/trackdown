@@ -46,6 +46,73 @@ export const TRACKED_MUSCLES = [
 	"abs",
 ] as const;
 
+/**
+ * The coverage ledger's vocabulary (user decision 2026-08-31: "per specific muscle …
+ * days-since-served and 14/28-day set counts, plus stretching as a tracked category").
+ *
+ * `TRACKED_MUSCLES` above is the *catalogue's* vocabulary and stays exactly as it is — the
+ * recovery rule and the muscle bars are built on it. This is a second, coarser reading of
+ * the same rows, and it exists because the words a lifter uses are not one-to-one with the
+ * catalogue's tags: "core" is abs and obliques, "upper back" is back and traps. Each entry
+ * names the catalogue tokens it counts, so nothing here has to guess.
+ *
+ * Order is the order the ledger is *defined* in, not the order it is read in — the ledger
+ * sorts itself by debt.
+ */
+export const LEDGER_MUSCLES: readonly { key: string; label: string; tokens: readonly string[] }[] = [
+	{ key: "quads", label: "quads", tokens: ["quads"] },
+	{ key: "hamstrings", label: "hamstrings", tokens: ["hamstrings"] },
+	{ key: "glutes", label: "glutes", tokens: ["glutes"] },
+	{ key: "calves", label: "calves", tokens: ["calves"] },
+	{ key: "core", label: "core", tokens: ["abs", "obliques"] },
+	{ key: "chest", label: "chest", tokens: ["chest"] },
+	{ key: "lats", label: "lats", tokens: ["lats"] },
+	{ key: "upper_back", label: "upper back", tokens: ["back", "traps"] },
+	{ key: "shoulders", label: "shoulders", tokens: ["shoulders"] },
+	{ key: "biceps", label: "biceps", tokens: ["biceps"] },
+	{ key: "triceps", label: "triceps", tokens: ["triceps"] },
+	{ key: "forearms", label: "forearms", tokens: ["forearms"] },
+];
+
+/**
+ * Mobility is a *category*, not a muscle, and it is on the ledger for the same reason the
+ * muscles are: something nobody has done for three weeks is invisible unless an absence can
+ * be counted. `sets` for it are sessions — a stretch is not measured in sets — which is why
+ * the entry says so in its own `unit`.
+ */
+export const STRETCHING_KEY = "stretching";
+
+/** The trailing window the ledger reports beside the four-week one. */
+export const LEDGER_SHORT_DAYS = 14;
+
+/**
+ * How long an entry may go unserved before the rotation owes it one. Two weeks: long enough
+ * that a four-day split is never nagged about the muscle it trains on Fridays, short enough
+ * that "core: 21 days unserved" is a debt and not a discovery.
+ */
+export const LEDGER_OVERDUE_DAYS = 14;
+
+export interface CoverageEntry {
+	key: string;
+	/** What to call it in a sentence: "upper back", "core", "stretching". */
+	label: string;
+	/** Days since it was last served; null when nothing in four weeks touched it. */
+	days_since: number | null;
+	last_date: IsoDate | null;
+	/** Sets in the trailing 14 and 28 days. Sessions rather than sets for stretching. */
+	sets_14d: number;
+	sets_28d: number;
+	/** "sets" for a muscle, "sessions" for stretching — so a sentence can say it right. */
+	unit: "sets" | "sessions";
+	/** True when the rotation owes this one: never served, or unserved past the threshold. */
+	overdue: boolean;
+	/**
+	 * How large the debt is, for sorting and for the prompt's ordering. Days unserved, with
+	 * "never in four weeks" scored one day past the window so it always sorts first.
+	 */
+	debt_days: number;
+}
+
 export interface MuscleFeature {
 	muscle: string;
 	/** Days since this group was last trained; null when it is not in the window at all. */
@@ -149,6 +216,12 @@ export interface CoachFeatures {
 	muscles: MuscleFeature[];
 	/** Groups with no entry in the window at all — trained never, as far as we can see. */
 	untrained_muscles: string[];
+	/**
+	 * The fine-grained coverage ledger, largest debt first. This is what the rotation is
+	 * held to: over two to four weeks every entry on it gets served, and the prompt is given
+	 * the debts in as many words ("core: 21 days unserved").
+	 */
+	coverage: CoverageEntry[];
 	exercises: ExerciseFeature[];
 	cardio: CardioFeature;
 	adherence: { day1: AdherenceWindow; day3: AdherenceWindow; day7: AdherenceWindow };
@@ -259,6 +332,74 @@ export function muscleFeatures(facts: DayFacts): MuscleFeature[] {
 			if (b.days_since == null) return 1;
 			return b.days_since - a.days_since || a.muscle.localeCompare(b.muscle);
 		});
+}
+
+/** True when this row is stretching / mobility work rather than a lift or a run. */
+export function isMobility(activity: FactActivity): boolean {
+	return activity.category === "mobility";
+}
+
+/**
+ * The coverage ledger (user decision 2026-08-31). One row per specific muscle plus
+ * stretching, each with days-since-served and the 14- and 28-day counts, sorted by debt.
+ *
+ * Two things it is deliberately NOT:
+ *
+ *   * It is not a second recovery rule. `recoveryRule` says what today may not be built
+ *     around; this says what has been *neglected*, which is the opposite question and a
+ *     much longer horizon. The rotation has to retire the biggest debts within the recovery
+ *     constraints, and the two disagreeing on a given day is normal.
+ *   * It is not derived from the exercises the user happened to log under a name we know.
+ *     It counts `muscle_groups`, which the confirm fills in from the catalogue, so a
+ *     paraphrased machine still pays into the muscles it worked.
+ *
+ * A muscle nothing in four weeks has touched scores one day past the window, so "never" is
+ * always the largest debt there can be and always sorts first.
+ */
+export function coverageLedger(facts: DayFacts): CoverageEntry[] {
+	const window = inWindow(facts);
+
+	const entryFor = (
+		key: string,
+		label: string,
+		rows: FactActivity[],
+		unit: "sets" | "sessions"
+	): CoverageEntry => {
+		const lastDate = rows.map((row) => row.date).sort().at(-1) ?? null;
+		const count = (days: number): number => {
+			const inside = rows.filter((row) => withinWindow(row.date, facts.date, days));
+			// A stretch has no sets to count, so its volume is how many days it happened on.
+			return unit === "sessions"
+				? new Set(inside.map((row) => row.date)).size
+				: inside.reduce((total, row) => total + (row.sets ?? 0), 0);
+		};
+		const daysSince = lastDate == null ? null : daysBefore(lastDate, facts.date);
+		return {
+			key,
+			label,
+			days_since: daysSince,
+			last_date: lastDate,
+			sets_14d: count(LEDGER_SHORT_DAYS),
+			sets_28d: count(COACH_WINDOW_DAYS),
+			unit,
+			overdue: daysSince == null || daysSince >= LEDGER_OVERDUE_DAYS,
+			debt_days: daysSince == null ? COACH_WINDOW_DAYS + 1 : daysSince,
+		};
+	};
+
+	const entries = LEDGER_MUSCLES.map((muscle) =>
+		entryFor(
+			muscle.key,
+			muscle.label,
+			window.filter((activity) => muscle.tokens.some((token) => hasMuscle(activity, token))),
+			"sets"
+		)
+	);
+	entries.push(entryFor(STRETCHING_KEY, "stretching", window.filter(isMobility), "sessions"));
+
+	// Largest debt first, then alphabetically, so the same facts always read in the same
+	// order — the prompt is hashed and a wobbling order would be a new brief every ask.
+	return entries.sort((a, b) => b.debt_days - a.debt_days || a.label.localeCompare(b.label));
 }
 
 /**
@@ -475,6 +616,7 @@ export function computeFeatures(input: CoachFeaturesInput): CoachFeatures {
 		training_days_target: input.trainingDaysTarget ?? null,
 		muscles,
 		untrained_muscles: muscles.filter((muscle) => muscle.days_since == null).map((muscle) => muscle.muscle),
+		coverage: coverageLedger(facts),
 		exercises: exerciseFeatures(facts),
 		cardio: cardioFeature(facts, input.cardioTargetMin),
 		adherence: {

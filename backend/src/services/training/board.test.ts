@@ -222,6 +222,28 @@ describe("frequency, cardio and body", () => {
 		expect(result.frequency.muscles).toEqual([]);
 		expect(result.body.latest).toBeNull();
 	});
+
+	// The coverage ledger, on the tab (user decision 2026-08-31 §B7). Unlike the bars above
+	// it, it draws every entry including the ones with nothing in them — an absence is the
+	// only thing this section is for.
+	it("carries the coverage ledger with its overdue entries, straight from the features", () => {
+		const dayFacts = facts({ date: TODAY, activities: [bench(daysAgo(1), 135)] });
+		const result = board({ activities: [bench(daysAgo(1), 135)] });
+		const features = computeFeatures({ facts: dayFacts });
+
+		// One ledger, not a second reading of it: the tab and the brief must agree.
+		expect(result.frequency.coverage).toEqual(features.coverage);
+
+		const find = (key: string) => result.frequency.coverage.find((entry) => entry.key === key);
+		expect(find("chest")).toMatchObject({ days_since: 1, sets_14d: 3, sets_28d: 3, overdue: false });
+		// The bars show two muscles; the ledger shows the twelve that have had nothing.
+		expect(find("quads")).toMatchObject({ days_since: null, overdue: true });
+		expect(find("stretching")).toMatchObject({ label: "stretching", unit: "sessions", overdue: true });
+		expect(result.frequency.coverage.filter((entry) => entry.overdue).length).toBeGreaterThan(5);
+		// Largest debt first, so an app can render the top of the list as the overdue ones.
+		expect(result.frequency.coverage[0]?.overdue).toBe(true);
+		expect(result.frequency.coverage.slice(-2).map((entry) => entry.key).sort()).toEqual(["chest", "triceps"]);
+	});
 });
 
 // The point of the whole module.

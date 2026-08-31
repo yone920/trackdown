@@ -1,6 +1,6 @@
 import { DEFAULT_LOAD_DIRECTION, type LoadDirection } from "../../db/exercises.js";
 import type { ReferenceLoad } from "../fusion/schema.js";
-import type { CoachFeatures, ExerciseFeature, ExerciseSession, MuscleFeature } from "./features.js";
+import type { CoachFeatures, CoverageEntry, ExerciseFeature, ExerciseSession, MuscleFeature } from "./features.js";
 
 // The coach's deterministic half (docs/concept-v2.md §Progression rules: "deterministic,
 // fed to the model as constraints").
@@ -106,6 +106,124 @@ export interface CardioRule {
 	text: string;
 }
 
+/**
+ * How long a normal session is, when nobody has said (migration 0014). An hour: the number
+ * every gym programme in print assumes, and the only defensible guess.
+ */
+export const DEFAULT_SESSION_MINUTES = 60;
+/** Below this there is no session to size — a warm-up and one movement. */
+export const MIN_SESSION_MINUTES = 10;
+export const MAX_SESSION_MINUTES = 240;
+
+/**
+ * The session's shape, from its minutes (user decision 2026-08-31: "brief sizing scales
+ * with the effective minutes — as prompt rules plus a deterministic cap").
+ *
+ * Both halves matter. The prompt is *told* the minutes and the shape, because a model that
+ * knows it has twenty-five minutes writes a different session than one told "keep it short".
+ * And the cap is applied afterwards in code, because a model asked for four exercises will
+ * occasionally answer with seven and the user with twenty-five minutes is the one who pays.
+ *
+ * The arithmetic, stated once so it can be argued with: about eight working minutes per
+ * exercise (sets, rest and the walk to the rack), five minutes of warm-up, and the finisher
+ * off the end. That gives roughly 5 exercises at an hour, which is what the prompt has
+ * always asked for — so the default changes nobody's brief.
+ */
+export const MINUTES_PER_EXERCISE = 8;
+const WARM_UP_MINUTES = 5;
+
+export interface SessionSizing {
+	/** The minutes this session is being built for. */
+	minutes: number;
+	/** True when the user said so; false when this is the default. */
+	stated: boolean;
+	/** The hard ceiling on the Do list. Applied in code as well as asked for. */
+	max_exercises: number;
+	/** What the prompt asks for — one under the cap, so there is room to be generous. */
+	target_exercises: number;
+	/** How many stretch/mobility items close the session. 0 when there is no room. */
+	finisher_items: number;
+	text: string;
+}
+
+/** Everything above, from a number of minutes. Pure, and the only place the maths lives. */
+export function sessionSizing(minutes: number | null, stated: boolean): SessionSizing {
+	const effective = Math.min(
+		MAX_SESSION_MINUTES,
+		Math.max(MIN_SESSION_MINUTES, Math.round(minutes ?? DEFAULT_SESSION_MINUTES))
+	);
+	// The finisher takes its share off the top before the exercises are counted, so a short
+	// session does not lose a movement to the stretching and then get stretching anyway.
+	const finisherItems = effective < 25 ? 2 : effective < 45 ? 3 : 4;
+	const finisherMinutes = finisherItems;
+	const working = Math.max(MINUTES_PER_EXERCISE, effective - WARM_UP_MINUTES - finisherMinutes);
+	const target = Math.max(2, Math.min(8, Math.floor(working / MINUTES_PER_EXERCISE)));
+	// One over the ask: the cap exists to stop a session nobody has time for, not to refuse
+	// a sixth movement the model had a reason for.
+	const cap = Math.min(10, target + 1);
+
+	return {
+		minutes: effective,
+		stated,
+		max_exercises: cap,
+		target_exercises: target,
+		finisher_items: finisherItems,
+		text: `SESSION LENGTH: ${effective} minutes${
+			stated ? " (the user said so)" : " (nobody has said, so this is the standing hour)"
+		}. That is room for about ${target} exercise${target === 1 ? "" : "s"} — never more than ${cap} — plus ${finisherItems} short stretch or mobility items to close. If the user's context names a different length today, use THAT and re-size to it. Fewer, harder movements beat a list nobody can finish.`,
+	};
+}
+
+/**
+ * The rotation's debts (user decision 2026-08-31 — the coverage ledger). Everything the
+ * ledger says is overdue, longest first, with the instruction that makes it binding: within
+ * the recovery constraints, today retires the largest debts it can.
+ */
+export function coverageRule(coverage: readonly CoverageEntry[], avoidPrimary: readonly string[]): string | null {
+	if (coverage.length === 0) return null;
+	const debts = coverage.filter((entry) => entry.overdue);
+	const line = (entry: CoverageEntry): string =>
+		entry.days_since == null
+			? `${entry.label}: never served in four weeks`
+			: `${entry.label}: ${entry.days_since} day${entry.days_since === 1 ? "" : "s"} unserved (${entry.sets_14d} ${entry.unit} in 14d, ${entry.sets_28d} in 28d)`;
+
+	if (debts.length === 0) {
+		return `COVERAGE: nothing is overdue — every muscle on the ledger has been served inside two weeks. Keep the rotation moving; the least recently served are ${coverage
+			.slice(0, 3)
+			.map((entry) => entry.label)
+			.join(", ")}.`;
+	}
+
+	const recovering =
+		avoidPrimary.length > 0
+			? ` Anything on the 48-hour list (${avoidPrimary.join(", ")}) waits its turn — a debt is not a reason to train a muscle that is still recovering.`
+			: "";
+	return `COVERAGE DEBTS (the rotation owes these — longest first):\n${debts
+		.map((entry) => `- ${line(entry)}`)
+		.join(
+			"\n"
+		)}\nRETIRE THE LARGEST DEBTS YOU CAN TODAY, within the recovery constraints. Over two to four weeks every entry on this ledger gets served; a muscle that keeps losing to the day's theme is how a programme quietly stops covering the body.${recovering}`;
+}
+
+/**
+ * Variety, and the one introduction a plan is allowed (user decision 2026-08-31). Written
+ * as a rule rather than left to the model's taste, because "include some bodyweight work"
+ * and "at most one new thing" are both constraints the user stated.
+ */
+export function varietyRule(candidates: readonly string[]): string {
+	const introduction =
+		candidates.length === 0
+			? "There is nothing in the catalogue this user has not already logged, so introduce nothing: set is_new false on every exercise."
+			: `You may include AT MOST ONE exercise the user has never logged. Choose it from this list and from nowhere else — ${candidates.join(
+					", "
+				)} — set is_new true on exactly that one, and put the reason in its note in one line ("your calves have had nothing in three weeks"). Every other exercise has is_new false. Introducing nothing is a perfectly good answer; introducing two is not.`;
+	return `VARIETY AND INTRODUCTIONS
+- Rotate the movements, not just the muscles. A session that is the same five lifts every week is how a plan stops being read.
+- Bodyweight work belongs in the rotation on its own merits — push-ups, chin-ups, dips, planks, lunges, glute bridges — not only as a fallback when equipment is missing.
+- ${introduction}
+- Close a training day with the short stretch or mobility finisher (the number of items is in SESSION LENGTH), targeting the muscles TODAY actually trained. A rest day has no finisher.`;
+}
+
 export type NudgeActionKind = "mark_reached" | "adjust_goal" | "weigh_in" | "close_items" | "tell_background";
 
 export interface NudgeAction {
@@ -141,6 +259,8 @@ export interface CoachRules {
 	gap: GapRule;
 	recovery: RecoveryRule;
 	cardio: CardioRule;
+	/** How long today's session is and what fits in it (migration 0014). */
+	sizing: SessionSizing;
 	prescriptions: Prescription[];
 	nudge: NudgeSelection;
 	/** Every rule above as a line the prompt can print. Order is the order they are read in. */
@@ -156,6 +276,10 @@ export interface BuildRulesInput {
 	loadDirection?: Record<string, LoadDirection>;
 	/** What the user said they bring with them, when they have said anything. */
 	background?: TrainingBackground;
+	/** The profile's stated session length; null falls back to DEFAULT_SESSION_MINUTES. */
+	sessionMinutes?: number | null;
+	/** Catalogue names this user has never logged — the pool an introduction is drawn from. */
+	introductionCandidates?: readonly string[];
 }
 
 const NO_BACKGROUND: TrainingBackground = { experience: null, background: null, reference_loads: [] };
@@ -312,7 +436,10 @@ export function gapRule(daysSinceLastWorkout: number | null): GapRule {
 			level: "fresh",
 			text:
 				daysSinceLastWorkout === 0
-					? "Already trained today. Anything prescribed is in addition to that — consider mobility, cardio or rest."
+					? // Never "rest, then" — that is a verdict on work already done, and it is
+						// the bug this wording exists to prevent (user decision 2026-08-31 §A2).
+						// See the NEVER A RETROACTIVE REST rule in services/coach/prompt.ts.
+						"Already trained today. Name what was done and build the plan around it: anything you add is a COMPLEMENT to that session, and offering nothing more is a fine answer said as information. This is not a rest day and must never be called one."
 					: "Trained yesterday. Yesterday's muscle groups are still recovering.",
 		};
 	}
@@ -682,10 +809,13 @@ export function buildRules({
 	equipment,
 	loadDirection,
 	background = NO_BACKGROUND,
+	sessionMinutes = null,
+	introductionCandidates = [],
 }: BuildRulesInput): CoachRules {
 	const gap = gapRule(features.days_since_last_workout);
 	const recovery = recoveryRule(features.muscles);
 	const cardio = cardioRule(features);
+	const sizing = sessionSizing(sessionMinutes, sessionMinutes != null);
 	const prescriptions = prescribeLoads(features, {
 		...(equipment ? { equipment } : {}),
 		...(loadDirection ? { loadDirection } : {}),
@@ -698,6 +828,9 @@ export function buildRules({
 		gap.text,
 		recovery.text,
 		cardio.text,
+		sizing.text,
+		coverageRule(features.coverage ?? [], recovery.avoid_primary),
+		varietyRule(introductionCandidates),
 		`Sessions: ${features.sessions_this_week} in the last 7 days${
 			features.training_days_target ? ` against a plan of ${features.training_days_target}/week` : ""
 		}.`,
@@ -707,7 +840,7 @@ export function buildRules({
 		`Nudge: ${nudge.subject}`,
 	].filter((line): line is string => line !== null);
 
-	return { gap, recovery, cardio, prescriptions, nudge, statements };
+	return { gap, recovery, cardio, sizing, prescriptions, nudge, statements };
 }
 
 /**

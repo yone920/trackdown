@@ -15,6 +15,7 @@ import {
   goalCard,
   goalSections,
   muscleBars,
+  overdueGroups,
   untrainedGroups,
   type ProgressSection,
 } from '@/lib/progress-sections';
@@ -479,7 +480,10 @@ function Frequency({ board, judge }: { board: TrainingBoard | null; judge: boole
   const frequency = board?.frequency ?? null;
   const columns = frequency ? frequencyColumns(frequency.weeks, judge) : null;
   const bars = frequency ? muscleBars(frequency.muscles) : [];
-  const missing = frequency ? untrainedGroups(frequency.muscles) : [];
+  // The ledger when the server sends one; the old "nothing at all in four weeks" line as
+  // the fallback, so a phone talking to an older build still says something true.
+  const overdue = overdueGroups(frequency?.coverage);
+  const missing = overdue.length > 0 ? [] : frequency ? untrainedGroups(frequency.muscles) : [];
 
   return (
     <Section
@@ -528,6 +532,14 @@ function Frequency({ board, judge }: { board: TrainingBoard | null; judge: boole
                   </View>
                 </View>
               ))}
+              {overdue.length > 0 ? (
+                <View testID="muscles-overdue" style={{ marginTop: 12 }}>
+                  <Sub style={{ color: C.dim }}>Overdue a turn</Sub>
+                  <Sub style={[{ marginTop: 2, color: C.accent, lineHeight: 18 }, TABULAR]}>
+                    {overdue.join(' · ')}
+                  </Sub>
+                </View>
+              ) : null}
               {missing.length > 0 ? (
                 <Sub testID="muscles-untrained" style={{ marginTop: 12, color: C.dim }}>
                   Not trained in four weeks: {missing.join(', ')}.

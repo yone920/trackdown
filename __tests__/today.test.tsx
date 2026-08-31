@@ -95,7 +95,11 @@ describe('Today', () => {
     expect(screen.queryByTestId('metric-calories-left')).toBeNull();
   });
 
-  it('flips the coach button once the day has a workout in it', async () => {
+  // It used to flip to "What should I do tomorrow?" the moment anything was logged, which
+  // told a user standing in the gym that today was over — and the brief behind the button
+  // is a plan for the rest of today, with the morning's work already ticked off it (user
+  // decision 2026-08-31 §A4).
+  it('always asks about today, workout logged or not', async () => {
     serve();
     renderToday();
     await waitFor(() => expect(screen.getByTestId('coach-button')).toBeTruthy());
@@ -104,7 +108,8 @@ describe('Today', () => {
     mockApi.mockReset();
     serve({ day: makeDay({ workout_done: true }) });
     const again = renderToday();
-    await waitFor(() => expect(again.getByText('What should I do tomorrow?')).toBeTruthy());
+    await waitFor(() => expect(again.getByText('What should I do today?')).toBeTruthy());
+    expect(again.queryByText('What should I do tomorrow?')).toBeNull();
   });
 
   it('marks an estimated block "est." on the training line and on the block itself', async () => {

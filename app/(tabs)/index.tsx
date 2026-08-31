@@ -104,7 +104,6 @@ export default function Today() {
   const view = day.data;
   const status = STATUS_WORDS[view.status];
   const reading = view.reading;
-  const workoutDone = view.workout_done ?? view.blocks.length > 0;
   const mealsBySlot = SLOT_ORDER.map((slot) => ({
     slot,
     meals: view.items.meals.filter((meal) => meal.slot === slot),
@@ -373,9 +372,11 @@ export default function Today() {
           alignItems: 'center',
           opacity: 1,
         })}>
-        <Body style={{ fontFamily: FONT.semi, color: C.bg }}>
-          {workoutDone ? 'What should I do tomorrow?' : 'What should I do today?'}
-        </Body>
+        {/* Always today's question. It used to flip to "tomorrow" once anything had
+            been logged, which told a user mid-session that today was finished with —
+            and the brief behind it is a PLAN for the rest of today, tick-list and all
+            (user decision 2026-08-31 §A4). */}
+        <Body style={{ fontFamily: FONT.semi, color: C.bg }}>What should I do today?</Body>
       </Pressable>
     </ScrollView>
   );

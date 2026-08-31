@@ -206,6 +206,9 @@ const PROFILE_FIELD_COLUMNS = [
 	"protein_g",
 	"carbs_max_g",
 	"training_days",
+	// How long a normal session is (migration 0014). A plan field like the rest: stated by
+	// talking, dated in stated_at, and read by the coach's session sizing.
+	"session_minutes",
 	"environment",
 	"equipment",
 	"eatback",

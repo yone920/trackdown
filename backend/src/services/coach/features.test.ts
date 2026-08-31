@@ -4,7 +4,10 @@ import {
 	adherenceWindow,
 	cardioFeature,
 	computeFeatures,
+	coverageLedger,
 	exerciseFeatures,
+	LEDGER_MUSCLES,
+	STRETCHING_KEY,
 	muscleFeatures,
 	weightFeature,
 } from "./features.js";
@@ -268,5 +271,84 @@ describe("data quality — what the coach must discount", () => {
 		});
 		expect(features.data_quality.low_confidence_items).toHaveLength(0);
 		expect(features.data_quality.weigh_in_due).toBe(false);
+	});
+});
+
+// ── The coverage ledger ──────────────────────────────────────────────────────────────
+// Fine-grained, in the words a lifter uses, and it counts absences: an entry nothing has
+// served is the whole point (user decision 2026-08-31 §B7).
+
+describe("the coverage ledger", () => {
+	const find = (ledger: ReturnType<typeof coverageLedger>, key: string) => ledger.find((entry) => entry.key === key);
+
+	const squat = (date: string, sets = 4) =>
+		activity(date, { exercise: "Back Squat", category: "strength", muscle_groups: ["quads", "glutes"], sets, reps: 5, load_lb: 225 });
+	const crunch = (date: string, sets = 3) =>
+		activity(date, { exercise: "Crunch", category: "strength", muscle_groups: ["abs"], sets, reps: 20 });
+	const stretch = (date: string) =>
+		activity(date, { exercise: "Stretching", category: "mobility", muscle_groups: ["full_body"], duration_min: 10 });
+
+	it("has a row for every muscle it tracks, plus stretching, whether or not it was trained", () => {
+		const ledger = coverageLedger(facts({ activities: [squat(TODAY)] }));
+		expect(ledger).toHaveLength(LEDGER_MUSCLES.length + 1);
+		expect(find(ledger, STRETCHING_KEY)?.label).toBe("stretching");
+		expect(ledger.map((entry) => entry.key)).toContain("upper_back");
+	});
+
+	it("counts sets in 14 and 28 days, and days since it was last served", () => {
+		const ledger = coverageLedger(
+			facts({ activities: [squat(daysAgo(3), 4), squat(daysAgo(10), 3), squat(daysAgo(20), 5)] })
+		);
+		const quads = find(ledger, "quads");
+		expect(quads).toMatchObject({ days_since: 3, sets_14d: 7, sets_28d: 12, unit: "sets", overdue: false });
+		// The same rows pay into every muscle they name.
+		expect(find(ledger, "glutes")).toMatchObject({ sets_14d: 7, sets_28d: 12 });
+	});
+
+	it("folds the catalogue's tags into the words a lifter uses", () => {
+		const ledger = coverageLedger(
+			facts({
+				activities: [
+					crunch(daysAgo(2), 3),
+					activity(daysAgo(2), { exercise: "Russian Twist", category: "strength", muscle_groups: ["obliques"], sets: 2 }),
+					activity(daysAgo(4), { exercise: "Barbell Row", category: "strength", muscle_groups: ["back", "traps"], sets: 4 }),
+				],
+			})
+		);
+		// abs + obliques are one entry called "core"; back + traps are "upper back". And a
+		// row tagged with both halves is counted once for the entry, not twice.
+		expect(find(ledger, "core")).toMatchObject({ label: "core", days_since: 2, sets_28d: 5 });
+		expect(find(ledger, "upper_back")).toMatchObject({ label: "upper back", days_since: 4, sets_28d: 4 });
+	});
+
+	it("counts stretching in SESSIONS, because a stretch has no sets", () => {
+		const ledger = coverageLedger(facts({ activities: [stretch(daysAgo(1)), stretch(daysAgo(1)), stretch(daysAgo(9))] }));
+		expect(find(ledger, STRETCHING_KEY)).toMatchObject({
+			days_since: 1,
+			sets_14d: 2,
+			sets_28d: 2,
+			unit: "sessions",
+			overdue: false,
+		});
+	});
+
+	it("calls an entry overdue at two weeks, and 'never' the largest debt there is", () => {
+		const ledger = coverageLedger(facts({ activities: [squat(daysAgo(1)), crunch(daysAgo(15))] }));
+		expect(find(ledger, "quads")?.overdue).toBe(false);
+		expect(find(ledger, "core")).toMatchObject({ days_since: 15, overdue: true });
+		expect(find(ledger, "calves")).toMatchObject({ days_since: null, overdue: true, debt_days: 29 });
+		// Never-served entries sort above a 15-day debt, which sorts above everything fresh.
+		expect(ledger[0]?.days_since).toBeNull();
+		expect(ledger.at(-1)?.key).toBe("quads");
+	});
+
+	it("ignores what happened after the day being advised, like every other feature", () => {
+		const ledger = coverageLedger(facts({ activities: [squat(daysAgo(-2))] }));
+		expect(find(ledger, "quads")).toMatchObject({ days_since: null, sets_28d: 0 });
+	});
+
+	it("rides on computeFeatures, so the prompt and the board read one ledger", () => {
+		const features = computeFeatures({ facts: facts({ activities: [squat(daysAgo(2))] }) });
+		expect(features.coverage).toEqual(coverageLedger(facts({ activities: [squat(daysAgo(2))] })));
 	});
 });

@@ -330,6 +330,34 @@ describe("the model-facing schema", () => {
 		expect(ProfileFieldsSchema.safeParse({ ...fields, reference_loads: [{ load_lb: 165, reps: 5 }] }).success).toBe(false);
 	});
 
+	/**
+	 * Session length rides on the same second call as the background and the place, for the
+	 * same reason: the routing union has no room and never will (migration 0014).
+	 */
+	it("carries the session length on the second call, not on the routing schema", () => {
+		const fields = ProfileFieldsSchema.parse({
+			diet_style: null,
+			protein_g: null,
+			carbs_max_g: null,
+			training_days: 4,
+			session_minutes: 45,
+			environment: null,
+			equipment: null,
+			eatback: null,
+			experience: null,
+			background: null,
+			reference_loads: null,
+		});
+		expect(fields).toMatchObject({ session_minutes: 45, training_days: 4 });
+		// Absent is "nobody said", not a validation failure — the same default place_name has.
+		expect(ProfileFieldsSchema.parse({ ...fields, session_minutes: undefined })?.session_minutes).toBeNull();
+		// A session nobody could train, either way round.
+		expect(ProfileFieldsSchema.safeParse({ ...fields, session_minutes: 3 }).success).toBe(false);
+		expect(ProfileFieldsSchema.safeParse({ ...fields, session_minutes: 900 }).success).toBe(false);
+		// And it is nowhere near the routing union, which is where the grammar budget is.
+		expect(JSON.stringify(z.toJSONSchema(FusionRouteOutputSchema))).not.toContain("session_minutes");
+	});
+
 	it("keeps the routing schema to one branch of the union plus a list of bare kinds", () => {
 		const answer = FusionRouteOutputSchema.parse({
 			result: { kind: "weight", weight_lb: 181, confidence: "high" },
@@ -383,7 +411,7 @@ describe("the model-facing schema", () => {
 		const statement = FusionRouteSchema.parse({ kind: "statement", scope: "constraint", text: "bad left knee" });
 		expect(toFusionResult(statement)).toEqual({ kind: "constraint", text: "bad left knee", fields: null });
 		// The plan fields, when there were any, come from the second call.
-		expect(toFusionResult(statement, { fields: { diet_style: "keto", protein_g: null, carbs_max_g: 50, training_days: null, environment: null, equipment: null, eatback: null, experience: null, background: null, reference_loads: null, place_name: null, place_kind: null } })).toMatchObject({
+		expect(toFusionResult(statement, { fields: { diet_style: "keto", protein_g: null, carbs_max_g: 50, training_days: null, session_minutes: null, environment: null, equipment: null, eatback: null, experience: null, background: null, reference_loads: null, place_name: null, place_kind: null } })).toMatchObject({
 			kind: "constraint",
 			fields: { diet_style: "keto", carbs_max_g: 50 },
 		});

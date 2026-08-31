@@ -95,12 +95,25 @@ function inputs(): CoachBriefInputs {
 			eatback: "half",
 			experience: null,
 			background: null,
+			session_minutes: rules.sizing.minutes,
+			session_minutes_stated: rules.sizing.stated,
 			units: "lb",
 			targets: { kcal: 2254, protein_g: 160, carbs_max_g: 250, fat_g: 63, tracking_only: false },
 		},
 		features,
 		rules,
-		today: { eaten: 620, earned: 0, target: 2254, allowance: 2254, remaining: 1634, protein_g: 42, status: "on_track", trained: [] },
+		today: {
+			eaten: 620,
+			earned: 0,
+			target: 2254,
+			allowance: 2254,
+			remaining: 1634,
+			protein_g: 42,
+			protein_target_g: 160,
+			status: "on_track",
+			trained: [],
+			logged: [],
+		},
 		context: "only about 40 minutes today",
 	};
 }
@@ -140,11 +153,13 @@ describe.skipIf(!apiKey)("anthropic coach brief (contract)", () => {
 		const request = inputs();
 		const current = await coach().brief(request);
 
-		const revised = await coach().brief(request, {
+		const revised = await coach().revise(request, {
 			instruction: "give me 7-8 workouts",
 			current,
 		});
 
+		// A count is a change to what the session IS, not an addition to it.
+		expect(revised.revision_mode).toBe("rewrite");
 		expect(revised.workout.type).not.toBe("rest");
 		expect(revised.workout.exercises.length).toBeGreaterThanOrEqual(7);
 		expect(revised.workout.exercises.length).toBeLessThanOrEqual(10);
@@ -165,11 +180,60 @@ describe.skipIf(!apiKey)("anthropic coach brief (contract)", () => {
 	it("rebuilds the session around a different body part when asked", async () => {
 		const request = inputs();
 		const current = await coach().brief(request);
-		const revised = await coach().brief(request, { instruction: "switch to legs", current });
+		const revised = await coach().revise(request, { instruction: "switch to legs", current });
 
+		expect(revised.revision_mode).toBe("rewrite");
 		expect(revised.workout.exercises.length).toBeGreaterThan(0);
 		expect(`${revised.headline} ${revised.workout.targets.join(" ")}`.toLowerCase()).toMatch(
 			/leg|quad|hamstring|glute|calf|lower/
 		);
+	}, 180_000);
+
+	// The other half of the mode, and the one the whole field report is about: an ADD-ON
+	// appends. Only the model can tell "add core" from "switch to legs", and no fake can
+	// prove it can.
+	it("adds to the plan rather than rebuilding it when the instruction is an add-on", async () => {
+		const request = inputs();
+		const current = await coach().brief(request);
+		const revised = await coach().revise(request, { instruction: "add core", current });
+
+		expect(revised.revision_mode).toBe("append");
+		// Only the NEW items come back on an append — the plan above is kept for it.
+		expect(revised.workout.exercises.length).toBeGreaterThan(0);
+		expect(revised.workout.exercises.length).toBeLessThanOrEqual(4);
+		const names = revised.workout.exercises.map((exercise) => exercise.name.toLowerCase());
+		expect(names.join(" ")).toMatch(/plank|crunch|ab|core|leg raise|dead bug|hollow|russian|sit.?up|oblique/);
+		// And it does not simply hand back the session it was given.
+		const before = new Set(current.workout.exercises.map((exercise) => exercise.name.toLowerCase()));
+		expect(names.every((name) => before.has(name))).toBe(false);
+	}, 180_000);
+
+	// The field report, reproduced: asked mid-workout, after lats were already logged this
+	// morning. The old prompt answered "Rest today · 0 MOVES" and replaced the plan.
+	it("never calls today rest because the user already trained, and never returns an empty plan", async () => {
+		const request = inputs();
+		const trained = {
+			...request,
+			local_time: "11:20 am",
+			today: {
+				...request.today,
+				earned: 264,
+				trained: ["Morning session"],
+				logged: [
+					{ exercise: "Lat Pulldown", exercise_id: null, sets: 4, category: "strength" },
+					{ exercise: "Seated Cable Row", exercise_id: null, sets: 3, category: "strength" },
+					{ exercise: "Assisted Chin-Up", exercise_id: null, sets: 3, category: "strength" },
+				],
+			},
+			context: null,
+		};
+
+		const brief = await coach().brief(trained);
+
+		expect(brief.workout.type).not.toBe("rest");
+		expect(brief.workout.exercises.length).toBeGreaterThan(0);
+		// It says what was done rather than passing a verdict on the day.
+		expect(`${brief.headline} ${brief.why}`.toLowerCase()).toMatch(/lat|pulldown|row|chin|back|pull|this morning|already/);
+		expect(brief.headline.toLowerCase()).not.toMatch(/^rest\b|rest day/);
 	}, 180_000);
 });

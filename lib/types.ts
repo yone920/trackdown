@@ -349,6 +349,45 @@ export type DayLogView = {
   entries: DayLogEntry[];
 };
 
+/**
+ * How much of a prescribed line has been done today. Computed server-side against the day's
+ * log on every read, so the tick follows a correction or a delete without asking.
+ */
+export type ExerciseCompletion = {
+  done: boolean;
+  sets_done: number;
+  sets_prescribed: number | null;
+  partial: boolean;
+};
+
+export type BriefExercise = {
+  name: string;
+  /** Resolved server-side when the brief is returned, so the app never name-matches. */
+  exercise_id?: string | null;
+  load_lb: number | null;
+  sets: number | null;
+  reps: number | null;
+  minutes?: number | null;
+  note?: string | null;
+  /** The one movement in this plan the user has never logged, when there is one. */
+  is_new?: boolean;
+  /** The local clock an appended item arrived at ("2:05p"); null for the plan's own lines. */
+  added_at?: string | null;
+  completion?: ExerciseCompletion;
+};
+
+export type NutritionNow = {
+  remaining_kcal: number | null;
+  eaten_kcal: number;
+  allowance_kcal: number | null;
+  remaining_protein_g: number | null;
+  eaten_protein_g: number | null;
+  protein_target_g: number | null;
+  /** True once the day is past its allowance. One flat line, never a scolding. */
+  past_target: boolean;
+  line: string;
+};
+
 export type CoachBrief = {
   id?: string;
   date?: IsoDate;
@@ -364,16 +403,11 @@ export type CoachBrief = {
   workout?: {
     type?: string;
     targets?: string[];
-    exercises?: {
-      name: string;
-      /** Resolved server-side when the brief is returned, so the app never name-matches. */
-      exercise_id?: string | null;
-      load_lb: number | null;
-      sets: number | null;
-      reps: number | null;
-      minutes?: number | null;
-      note?: string | null;
-    }[];
+    exercises?: BriefExercise[];
+    /** The short stretch / mobility close on a training day. Empty on a rest day. */
+    finisher?: { name: string; minutes?: number | null; note?: string | null }[];
+    /** True when every line of a non-empty plan is done — the "Plan complete" state. */
+    complete?: boolean;
   } | null;
   nutrition?: {
     kcal: number | null;
@@ -382,6 +416,11 @@ export type CoachBrief = {
     ideas?: string[];
     why?: string | null;
   } | null;
+  /**
+   * What is LEFT of the day, computed by the server on every read (never stored). The Eat
+   * card draws these; `nutrition` above is the day's target and does not move.
+   */
+  nutrition_now?: NutritionNow | null;
   nudge?: string | null;
   nudge_action?: { kind: string; goal_id?: string | null; label?: string } | null;
 };
@@ -691,6 +730,20 @@ export type TrainingBoard = {
     average_per_week: number;
     training_days_target: number | null;
     muscles: { muscle: string; sets_7d: number; sets_28d: number }[];
+    /**
+     * The coverage ledger — every muscle the coach rotates through plus stretching, largest
+     * debt first, each with whether the rotation owes it one. The same ledger the brief is
+     * built from, so the tab and the coach never disagree about what is overdue.
+     */
+    coverage?: {
+      key: string;
+      label: string;
+      days_since: number | null;
+      sets_14d: number;
+      sets_28d: number;
+      unit: 'sets' | 'sessions';
+      overdue: boolean;
+    }[];
   };
   cardio: {
     weeks: { start: IsoDate; minutes: number }[];
