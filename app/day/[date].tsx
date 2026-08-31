@@ -18,7 +18,7 @@ import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { addDays } from '@/lib/days-weeks';
 import { openExercise } from '@/lib/exercise';
 import { clock, dateLabel, grams, kcal, slotLabel } from '@/lib/format';
-import { localDateKey, useDay } from '@/lib/queries';
+import { localDateKey, useDay, useDeleteRecord } from '@/lib/queries';
 import { C, FONT, SPACE, TABULAR } from '@/lib/theme';
 import type { DayActivity, DayView, MacroLine, MealSlot, Verdict } from '@/lib/types';
 
@@ -121,6 +121,7 @@ export default function Day() {
 }
 
 function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) {
+  const remove = useDeleteRecord();
   const color = VERDICT_COLOR[view.verdict] ?? C.mute;
   const Mark = view.verdict === 'served' ? IconCheckCircle : IconAlertCircle;
   const health = view.items.activities.filter((activity) => activity.source === 'health');
@@ -204,7 +205,16 @@ function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) 
                 <View key={group.muscle}>
                   <GroupHeading label={group.muscle} right={`${group.sets} sets`} />
                   {members.map((activity, index) => (
-                    <ActivityRow key={activity.id ?? `${group.muscle}-${index}`} activity={activity} last={index === members.length - 1} />
+                    <ActivityRow
+                      key={activity.id ?? `${group.muscle}-${index}`}
+                      activity={activity}
+                      last={index === members.length - 1}
+                      onDelete={
+                        activity.id
+                          ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
+                          : undefined
+                      }
+                    />
                   ))}
                 </View>
               );
@@ -216,7 +226,16 @@ function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) 
                 {logged
                   .filter((activity) => activity.muscle_groups.length === 0)
                   .map((activity, index, all) => (
-                    <ActivityRow key={activity.id ?? `other-${index}`} activity={activity} last={index === all.length - 1} />
+                    <ActivityRow
+                      key={activity.id ?? `other-${index}`}
+                      activity={activity}
+                      last={index === all.length - 1}
+                      onDelete={
+                        activity.id
+                          ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
+                          : undefined
+                      }
+                    />
                   ))}
               </View>
             ) : null}
@@ -260,10 +279,12 @@ function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) 
                 {group.meals.map((meal, index) => (
                   <Row
                     key={meal.id}
+                    testID={`row-meal-${meal.id}`}
                     time={clock(meal.logged_at)}
                     title={meal.description}
                     sub={grams(meal.protein_g) ? `${grams(meal.protein_g)} protein` : null}
                     right={kcal(meal.kcal)}
+                    onDelete={() => remove.mutate({ kind: 'meal', id: meal.id })}
                     divider={index < group.meals.length - 1}>
                     <EvidenceThumbs photos={meal.evidence} />
                   </Row>
@@ -330,13 +351,22 @@ function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) 
   );
 }
 
-function ActivityRow({ activity, last }: { activity: DayActivity; last: boolean }) {
+function ActivityRow({
+  activity,
+  last,
+  onDelete,
+}: {
+  activity: DayActivity;
+  last: boolean;
+  onDelete?: () => void;
+}) {
   const router = useRouter();
   const load = activity.load_lb == null ? null : `${activity.load_lb} lb`;
   const shape =
     activity.sets != null && activity.reps != null ? `${activity.sets} × ${activity.reps}` : null;
   return (
     <Row
+      testID={activity.id ? `row-activity-${activity.id}` : undefined}
       time={clock(activity.logged_at)}
       title={activity.exercise ?? activity.description}
       onTitlePress={
@@ -355,6 +385,8 @@ function ActivityRow({ activity, last }: { activity: DayActivity; last: boolean 
         .filter(Boolean)
         .join(' · ')}
       right={activity.kcal > 0 ? kcal(activity.kcal) : null}
+      onDelete={onDelete}
+      deleteLabel={activity.exercise ?? activity.description}
       divider={!last}>
       {activity.delta_vs_last ? (
         <Sub style={{ marginTop: 3, color: deltaColor(activity.delta_vs_last.direction) }}>

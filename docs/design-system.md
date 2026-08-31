@@ -35,8 +35,10 @@ No emoji anywhere; icons are stroke SVGs (react-native-svg).
 - **Reading card** (`In short` / `Right now`): card with 3px left border (`accent` for closed day,
   `good` for live), eyebrow, paragraph 15/1.55.
 - **DayArc**: 6a→11p line; `ink` dots = logs, `accent` bar = workout span, `good` NOW marker,
-  dashed dot = expected-but-missing (dinner, weigh-in), hour labels 9px.
-- **Row**: time (12 `mute`, 50 wide) · title 15/500 + sub 12 `mute` · right numeral `disp` 18.
+  hour labels 9px. **No ghost dots** — the arc draws what happened (decision 2026-08-31).
+- **Row**: time (12 `mute`, 50 wide) · title 15/500 + sub 12 `mute` · right numeral `disp` 18;
+  optional trailing ✕ (`dim`, drawn at 28px, 44px hit target) that arms into "Delete? ✓ ✕" in
+  the row itself — `DeleteControl` in `components/kit.tsx`.
 - **Chips**: pill, 12/700; primary = `ink` bg / `bg` text; secondary = 1px `track` border.
 - **Section**: `disp` 20 title left, 12 `mute` summary right, 26 top padding.
 
@@ -50,9 +52,10 @@ sets/week + per-muscle coverage strip; endurance → cardio minutes by day + las
 HR (Health); strength → target lift + next step due + push/pull/legs; no goal → workouts/week +
 cardio minutes + coverage, **no judgement colours**. Then **Right now** reading (LLM, regenerated on
 every log; ≤ 2 sentences + the single next action) with action chips. **DayArc**. Then Training and
-Eating sections organised as on Day (below), with a dashed placeholder row for the expected next
-meal. Coach button (`accent` pill): "What should I do today?" → "…tomorrow?" once today's workout
-is logged. Tabs + `+`.
+Eating sections organised as on Day (below) — **only what was logged**: no placeholder row for a
+meal nobody has eaten (decision 2026-08-31). Every logged row carries the ✕. Coach button
+(`accent` pill): "What should I do today?" → "…tomorrow?" once today's workout is logged.
+Tabs + `+`.
 
 ### Log (modal from `+`, also from chips) — NO FORMS (concept-v2 principle 7)
 Title `disp` 34 "What did you do?"; transcript/typed text area (`disp` 20) with attached photo

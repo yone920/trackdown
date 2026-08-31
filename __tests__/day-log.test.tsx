@@ -114,6 +114,28 @@ describe('DayLog', () => {
     expect(mockPush).not.toHaveBeenCalled();
     expect(screen.getByText('Kept on your plan')).toBeTruthy();
   });
+
+  it('deletes a row from the record view, and asks first', async () => {
+    renderLog();
+    await waitFor(() => expect(screen.getByTestId('log-entry-a1')).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId('log-delete-a1'));
+    expect(screen.getByText('Delete?')).toBeTruthy();
+    expect(mockApi).not.toHaveBeenCalledWith('/api/entries/movement/a1', { method: 'DELETE' });
+    // Arming the row is not opening it: the correction must not fire under the ✕.
+    expect(mockPush).not.toHaveBeenCalled();
+
+    fireEvent.press(screen.getByTestId('log-delete-a1-yes'));
+    await waitFor(() =>
+      expect(mockApi).toHaveBeenCalledWith('/api/entries/movement/a1', { method: 'DELETE' }),
+    );
+  });
+
+  it('offers no ✕ on a statement: the plan is edited, not deleted', async () => {
+    renderLog();
+    await waitFor(() => expect(screen.getByTestId('log-entry-e9')).toBeTruthy());
+    expect(screen.queryByTestId('log-delete-e9')).toBeNull();
+  });
 });
 
 describe('edit-record — the round trip', () => {

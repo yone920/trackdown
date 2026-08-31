@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Pressable, View, type ViewProps, type ViewStyle } from 'react-native';
 
+import { IconCheck, IconClose } from '@/components/icons';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
 
@@ -169,6 +170,74 @@ export function Chips({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * The ✕ on a logged row, and the confirm it turns into.
+ *
+ * One tap arms it — the row keeps its words and grows a "Delete? ✓ ✕" on the right — and
+ * the second tap deletes. No Alert, no sheet, no swipe gesture and no new dependency: the
+ * question is asked where the answer will land, which is the row itself. The buttons are
+ * drawn at 28 px and reach 44 with `hitSlop`, so arming a row does not change its height.
+ */
+export function DeleteControl({
+  label,
+  onDelete,
+  testID,
+}: {
+  /** What is being deleted, for the screen reader: "Delete Bench Press". */
+  label: string;
+  onDelete: () => void;
+  testID?: string;
+}) {
+  const [armed, setArmed] = useState(false);
+  const box = {
+    width: 28,
+    height: 28,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  };
+
+  if (!armed) {
+    return (
+      <Pressable
+        testID={testID}
+        accessibilityRole="button"
+        accessibilityLabel={`Delete ${label}`}
+        hitSlop={8}
+        onPress={() => setArmed(true)}
+        style={box}>
+        <IconClose size={15} color={C.dim} />
+      </Pressable>
+    );
+  }
+
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      <Sub style={{ color: C.dim, marginRight: 2 }}>Delete?</Sub>
+      <Pressable
+        testID={testID ? `${testID}-yes` : undefined}
+        accessibilityRole="button"
+        accessibilityLabel={`Delete ${label}, confirm`}
+        hitSlop={8}
+        onPress={() => {
+          setArmed(false);
+          onDelete();
+        }}
+        style={box}>
+        <IconCheck size={16} color={C.accent} />
+      </Pressable>
+      <Pressable
+        testID={testID ? `${testID}-no` : undefined}
+        accessibilityRole="button"
+        accessibilityLabel={`Keep ${label}`}
+        hitSlop={8}
+        onPress={() => setArmed(false)}
+        style={box}>
+        <IconClose size={16} color={C.mute} />
+      </Pressable>
+    </View>
+  );
+}
+
 /** time (12 `mute`, 50 wide) · title 15/500 + sub 12 `mute` · right numeral `disp` 18. */
 export function Row({
   time,
@@ -178,8 +247,10 @@ export function Row({
   rightColor,
   onPress,
   onTitlePress,
+  onDelete,
+  deleteLabel,
   divider = true,
-  dashed = false,
+  testID,
   children,
 }: {
   time?: string | null;
@@ -193,21 +264,23 @@ export function Row({
    * a row that is a link in some rows and not in others has to say which it is.
    */
   onTitlePress?: () => void;
+  /** A logged row can be taken back: draws {@link DeleteControl} at the end of the row. */
+  onDelete?: () => void;
+  /** What the ✕ says it is deleting, when the title is not the readable name. */
+  deleteLabel?: string;
   divider?: boolean;
-  /** The expected-but-missing placeholder: the same row, drawn as an outline. */
-  dashed?: boolean;
+  testID?: string;
   children?: React.ReactNode;
 }) {
   const body = (
     <View
+      testID={testID}
       style={{
         flexDirection: 'row',
         alignItems: 'flex-start',
         paddingVertical: 11,
         borderBottomWidth: divider ? 1 : 0,
         borderBottomColor: C.line,
-        borderStyle: dashed ? 'dashed' : 'solid',
-        opacity: dashed ? 0.6 : 1,
       }}>
       <View style={{ width: 50 }}>
         {time ? <Sub style={[{ paddingTop: 2 }, TABULAR]}>{time}</Sub> : null}
@@ -233,6 +306,15 @@ export function Row({
         <Disp size={18} style={{ color: rightColor ?? C.ink, paddingTop: 1 }}>
           {right}
         </Disp>
+      ) : null}
+      {onDelete ? (
+        <View style={{ marginLeft: 8, paddingTop: 2 }}>
+          <DeleteControl
+            label={deleteLabel ?? title}
+            onDelete={onDelete}
+            testID={testID ? `${testID}-delete` : undefined}
+          />
+        </View>
       ) : null}
     </View>
   );
