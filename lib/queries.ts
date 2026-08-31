@@ -198,13 +198,21 @@ export type AnalyzeInput = {
    * or neither (backend/src/services/fusion/context.ts §ClarifyRound).
    */
   clarify?: { originalText: string; question: string } | null;
+  /**
+   * "Make a change" (concept-v2 §Principles 7 — NO FORMS). The parts the user is looking
+   * at and what they said to change about them. Sent instead of a fresh log: the server
+   * re-reads each part with the instruction in its prompt and hands them back revised.
+   * `results` is a pending preview; `record` is one saved row read back the same way.
+   */
+  revise?: { results?: FusionResult[]; record?: FusionResult; instruction: string } | null;
 };
 
 /** POST /api/log/analyze — a preview. Nothing is saved until the user confirms. */
 export function useAnalyze() {
   return useMutation({
-    mutationFn: ({ text, photos = [], kindHint, clarify }: AnalyzeInput) => {
+    mutationFn: ({ text, photos = [], kindHint, clarify, revise }: AnalyzeInput) => {
       const parts = [
+        ...(revise ? [{ name: 'revise', value: JSON.stringify(revise) }] : []),
         ...(text ? [{ name: 'text', value: text }] : []),
         ...(kindHint ? [{ name: 'kind_hint', value: kindHint }] : []),
         ...(clarify

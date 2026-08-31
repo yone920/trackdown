@@ -9,6 +9,7 @@ import { Card, Chip, Chips, GroupHeading, Row, Section, SkeletonLines } from '@/
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { openExercise } from '@/lib/exercise';
 import { clock } from '@/lib/format';
+import { keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
 import { getSpeech } from '@/lib/ports/speech';
 import { localDateKey, useAskCoach, useCoachNext, useUpdateGoal } from '@/lib/queries';
 import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
@@ -41,6 +42,8 @@ export default function Coach() {
   const speech = useMemo(() => getSpeech(), []);
 
   const [context, setContext] = useState('');
+
+  const keyboard = useKeyboardHeight();
 
   const coach = useCoachNext();
   const askCoach = useAskCoach();
@@ -95,12 +98,17 @@ export default function Coach() {
     <ScrollView
       testID="coach-scroll"
       style={{ flex: 1, backgroundColor: C.bg }}
+      // The context box is the last thing on this screen, so the keyboard covers it and
+      // whatever is under it. UIKit's own inset is what lets it scroll clear; on Android
+      // the padding does it (lib/keyboard.ts explains why never both).
+      automaticallyAdjustKeyboardInsets
       contentContainerStyle={{
         paddingHorizontal: SPACE.screen,
         paddingTop: insets.top + 8,
-        paddingBottom: insets.bottom + 60,
+        paddingBottom: insets.bottom + 60 + keyboardPadding(keyboard),
       }}
-      keyboardShouldPersistTaps="handled">
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="interactive">
       <Pressable
         onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}
         style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 8 }}>

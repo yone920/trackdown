@@ -9,6 +9,7 @@ import { isAcceptedUploadMime, ACCEPTED_UPLOAD_MIMES } from "../services/images.
 import type { FusionAnalyzer, FusionPhoto } from "../services/fusion/analyze.js";
 import { buildFusionContext } from "../services/fusion/context.js";
 import { ConfirmBody, NothingToSaveError, confirmLog } from "../services/fusion/confirm.js";
+import { FusionResultSchema, MAX_PARTS, type FusionResult } from "../services/fusion/schema.js";
 import { proposalForSpec } from "../services/goals/store.js";
 import { toProposedTimeline } from "../services/goals/proposal.js";
 
@@ -51,7 +52,30 @@ const AnalyzeFields = z.object({
 	 */
 	clarify_original: z.string().trim().max(2000).optional(),
 	clarify_question: z.string().trim().max(300).optional(),
+	/**
+	 * "Make a change" (docs/concept-v2.md §Principles 7 — NO FORMS). The parts the user is
+	 * looking at, plus what they said to change about them, as a JSON string because this
+	 * route is multipart. Sent instead of a fresh log: nothing is routed and nothing is
+	 * stored, each part is re-read by its own detail call and the review screen redraws.
+	 */
+	revise: z.string().max(20_000).optional(),
 });
+
+/**
+ * The body of `revise`. Two shapes, because the same instruction corrects two things: a
+ * pending preview (`results`) and one row already in the log, read back through the same
+ * public union (`record`). One part or several; the answer keeps their order.
+ */
+const ReviseBody = z
+	.object({
+		results: z.array(FusionResultSchema).min(1).max(MAX_PARTS).optional(),
+		/** One saved row as a result — the DayLog's "make a change". */
+		record: FusionResultSchema.optional(),
+		instruction: z.string().trim().min(1).max(500),
+	})
+	.refine((body) => (body.results?.length ?? 0) > 0 || body.record !== undefined, {
+		message: "Send the parts to change.",
+	});
 
 /** Turns multer's own errors into the status the client should act on. */
 function uploadPhotos(req: Request, res: Response, next: NextFunction): void {
@@ -90,7 +114,35 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 			res.status(400).json({ error: `Photos must be sent as the "photos" field.` });
 			return;
 		}
-		if (photos.length === 0 && !fields.text) {
+
+		// A revision is a correction to something already read, so it carries the parts
+		// rather than the words, and it never brings photos: the evidence it belongs to was
+		// stored on the round that produced those parts.
+		let revise: { results: FusionResult[]; instruction: string } | null = null;
+		if (fields.revise !== undefined) {
+			let raw: unknown;
+			try {
+				raw = JSON.parse(fields.revise);
+			} catch {
+				res.status(400).json({ error: "Invalid request.", issues: [{ path: ["revise"], message: "Not JSON." }] });
+				return;
+			}
+			const body = ReviseBody.safeParse(raw);
+			if (!body.success) {
+				res.status(400).json({ error: "Invalid request.", issues: body.error.issues });
+				return;
+			}
+			if (photos.length > 0) {
+				res.status(400).json({ error: "Say the change in words; the photos are already attached." });
+				return;
+			}
+			revise = {
+				results: body.data.results ?? [body.data.record!],
+				instruction: body.data.instruction,
+			};
+		}
+
+		if (photos.length === 0 && !fields.text && !revise) {
 			res.status(400).json({ error: "Send a photo or say something first." });
 			return;
 		}
@@ -129,11 +181,13 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 			base64: s.image.data.toString("base64"),
 		}));
 
-		const { results, photoParts } = await analyzer.analyze({
-			...(fields.text ? { text: fields.text } : {}),
-			photos: llmPhotos,
-			context,
-		});
+		const { results, photoParts } = revise
+			? { results: await analyzer.revise({ ...revise, context }), photoParts: [] as number[] }
+			: await analyzer.analyze({
+					...(fields.text ? { text: fields.text } : {}),
+					photos: llmPhotos,
+					context,
+				});
 
 		// The timeline is arithmetic, not language: whatever the model guessed is replaced
 		// by the projection from the user's own facts at the safe rates in concept-v2

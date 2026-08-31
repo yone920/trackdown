@@ -3369,3 +3369,207 @@ describe("places — what the room has been seen to contain", () => {
 		expect(buildCoachPrompt(inputs)).not.toContain("Seen at");
 	});
 });
+
+// ── "Make a change" — the review-and-tell flow (concept-v2 §Principles 7: NO FORMS) ──
+// The user never types into a field. They read back what was understood and TELL the app
+// what is wrong with it; `POST /api/log/analyze` takes the parts plus the instruction and
+// returns them revised, ready for the same confirm.
+
+describe("fusion — revising by telling it", () => {
+	let headers: Record<string, string>;
+	beforeAll(async () => {
+		headers = { Authorization: `Bearer ${await signUp("revise@example.com")}` };
+	});
+
+	const pending = {
+		kind: "activities" as const,
+		items: [
+			{
+				exercise: "Chest-Supported Row",
+				equipment: "chest-supported row machine",
+				description: "3 × 12 chest-supported row at 45 lb",
+				category: "strength",
+				muscle_groups: ["back"],
+				sets: 3,
+				reps: 12,
+				load_lb: 45,
+				duration_min: null,
+				distance_mi: null,
+				kcal: 120,
+				confidence: "low" as const,
+				sources: null,
+				refine: null,
+			},
+		],
+	};
+
+	/** What the detail call answers with — the same schema the analyze pipeline uses. */
+	const revisedItems = {
+		items: [
+			{
+				exercise: "Chest-Supported Row",
+				equipment: "chest-supported row machine",
+				description: "3 × 4 chest-supported row at 50 lb",
+				sets: 3,
+				reps: 4,
+				load_lb: 50,
+				duration_min: null,
+				distance_mi: null,
+				kcal: 120,
+				confidence: "high",
+			},
+		],
+		photo_fields: [],
+		photo_indexes: [],
+	};
+
+	it("applies a told change to the pending parts and returns them for the same confirm", async () => {
+		llm.outputs.push(revisedItems);
+		const res = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("tz_offset_min", "0")
+			.field(
+				"revise",
+				JSON.stringify({ results: [pending], instruction: "reps were 4 and it was 50 pounds" })
+			);
+
+		expect(res.status).toBe(200);
+		expect(res.body.results).toHaveLength(1);
+		expect(res.body.results[0].items[0]).toMatchObject({ sets: 3, reps: 4, load_lb: 50 });
+		// Nothing was routed: a revision is one focused call, not a fresh read.
+		expect(llm.requests.at(-1)!.schemaName).toBe("activities");
+		expect(llm.requests.at(-1)!.system).toContain("reps were 4 and it was 50 pounds");
+		// And no evidence was stored for a round that carried no photos.
+		expect(res.body.evidence).toEqual([]);
+
+		// The revised parts confirm exactly like an unrevised preview.
+		const saved = await request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({ client_id: randomUUID(), results: res.body.results, tz_offset_min: 0 });
+		expect(saved.status).toBe(201);
+		const activities = await request(app).get("/api/entries/movement").set(headers);
+		expect(activities.body[0]).toMatchObject({ sets: 3, reps: 4, load_lb: 50 });
+	});
+
+	it("takes one saved row as `record` — the DayLog's make-a-change", async () => {
+		llm.outputs.push({
+			description: "chicken and rice",
+			meal_type: "lunch",
+			kcal: 620,
+			protein_g: 45,
+			carbs_g: 60,
+			fat_g: 18,
+			fiber_g: 6,
+			items: [],
+			confidence: "high",
+			photo_fields: [],
+			photo_indexes: [],
+		});
+		const res = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("tz_offset_min", "0")
+			.field(
+				"revise",
+				JSON.stringify({
+					record: {
+						kind: "meal",
+						description: "chicken and rice",
+						meal_type: "dinner",
+						kcal: 620,
+						protein_g: 45,
+						carbs_g: 60,
+						fat_g: 18,
+						fiber_g: 6,
+						items: [],
+						confidence: "high",
+						sources: null,
+					},
+					instruction: "that meal was lunch not dinner",
+				})
+			);
+
+		expect(res.status).toBe(200);
+		// One part in, one part out — and `result` for the single-part shape the card draws.
+		expect(res.body.results).toHaveLength(1);
+		expect(res.body.result).toMatchObject({ kind: "meal", meal_type: "lunch" });
+	});
+
+	it("refuses a revision with no parts, no instruction, or photos attached", async () => {
+		const bad = async (body: unknown) =>
+			(
+				await request(app)
+					.post("/api/log/analyze")
+					.set(headers)
+					.field("tz_offset_min", "0")
+					.field("revise", JSON.stringify(body))
+			).status;
+		expect(await bad({ instruction: "make it lunch" })).toBe(400);
+		expect(await bad({ results: [pending], instruction: "   " })).toBe(400);
+		expect(
+			(
+				await request(app)
+					.post("/api/log/analyze")
+					.set(headers)
+					.field("revise", "not json")
+			).status
+		).toBe(400);
+		// A correction is words. The photos belong to the round that read them.
+		expect(
+			(
+				await request(app)
+					.post("/api/log/analyze")
+					.set(headers)
+					.field("revise", JSON.stringify({ results: [pending], instruction: "heavier" }))
+					.attach("photos", await png(200, 100), { filename: "x.jpg", contentType: "image/jpeg" })
+			).status
+		).toBe(400);
+	});
+
+	it("re-projects a revised goal's timeline, like any other preview", async () => {
+		llm.outputs.push({
+			spec: {
+				kind: "lose_fat",
+				title: "Get to 165 lb",
+				metrics: [
+					{ measure: "body_weight", scope: null, target: 165, unit: "lb", direction: "decrease", rate: null, by: null },
+				],
+				active_to: null,
+			},
+			facts: { current_weight_lb: 191, training_days: null, environment: null, age_years: null },
+		});
+		const res = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("tz_offset_min", "0")
+			.field(
+				"revise",
+				JSON.stringify({
+					results: [
+						{
+							kind: "goal",
+							spec: {
+								kind: "lose_fat",
+								title: "Get to 170 lb",
+								metrics: [
+									{ measure: "body_weight", scope: null, target: 170, unit: "lb", direction: "decrease", rate: null, by: null },
+								],
+								active_from: null,
+								active_to: null,
+							},
+							proposed_timeline: null,
+							facts: null,
+						},
+					],
+					instruction: "make it 165, not 170",
+				})
+			);
+
+		expect(res.status).toBe(200);
+		expect(res.body.results[0].spec.metrics[0].target).toBe(165);
+		// The date is arithmetic and the server owns it, on a revision as on a first read.
+		expect(res.body.results[0].proposed_timeline).not.toBeNull();
+	});
+});

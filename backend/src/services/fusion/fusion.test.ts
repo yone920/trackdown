@@ -8,6 +8,7 @@ import {
 	withRefinements,
 } from "./analyze.js";
 import { bestCandidate, stem, suggestRefinement, tokens } from "./refine.js";
+import { carryForward, compactPart, segmentKindFor } from "./revise.js";
 import { localDay, type FusionContext } from "./context.js";
 import { buildFusionSystemPrompt, buildPartDetailSystemPrompt } from "./prompt.js";
 import {
@@ -23,6 +24,7 @@ import {
 	WeightDetailOutputSchema,
 	expandSources,
 	toFusionResult,
+	type FusionResult,
 } from "./schema.js";
 import { createFakeLlm } from "../../test/fakes/llm.js";
 
@@ -901,5 +903,165 @@ describe("the refinement offer", () => {
 		if (kept.kind !== "activities") return;
 		expect(kept.items[0]).toMatchObject({ category: "mobility", muscle_groups: ["shoulders"] });
 		expect(kept.items[0]!.refine).not.toBeNull();
+	});
+});
+
+// ── "Make a change" ──────────────────────────────────────────────────────────────────
+// The review-and-tell flow (docs/concept-v2.md §Principles 7 — NO FORMS). The user is
+// looking at what was understood and TELLS the app what is wrong with it. No field is
+// typed into, and no new grammar is compiled: each part is re-read by its own detail call
+// with the part and the instruction in the prompt.
+
+describe("revising what was understood", () => {
+	const pending: FusionResult = {
+		kind: "activities",
+		items: [
+			{
+				exercise: "Chest-Supported Row",
+				equipment: "chest-supported row machine",
+				description: "3 × 12 chest-supported row at 45 lb",
+				category: "strength",
+				muscle_groups: ["back"],
+				sets: 3,
+				reps: 12,
+				load_lb: 45,
+				duration_min: null,
+				distance_mi: null,
+				kcal: 120,
+				confidence: "low",
+				sources: { exercise: "text", equipment: "text", sets: "text", reps: "text", load_lb: "text", duration_min: null, distance_mi: null, kcal: "text" },
+				refine: null,
+			},
+		],
+	};
+
+	it("names the detail call that answers for each kind, and nothing for a question", () => {
+		expect(segmentKindFor(pending)).toBe("activities");
+		expect(segmentKindFor({ kind: "weight", weight_lb: 181, confidence: "high", sources: null })).toBe("weight");
+		expect(segmentKindFor({ kind: "coach_context", text: "slept badly" })).toBe("statement");
+		expect(segmentKindFor({ kind: "preference", text: "keto", fields: null })).toBe("statement");
+		// A question is not a record; there is nothing in it to change.
+		expect(segmentKindFor({ kind: "unclear", question: "Which machine?" })).toBeNull();
+	});
+
+	it("shows the model the part without the bookkeeping it did not write", () => {
+		const shown = JSON.parse(compactPart(pending)) as { items: Record<string, unknown>[] };
+		expect(shown.items[0]).toMatchObject({ sets: 3, reps: 12, load_lb: 45, equipment: "chest-supported row machine" });
+		// Provenance and the refinement offer are the app's, not facts to revise.
+		expect(shown.items[0]).not.toHaveProperty("sources");
+		expect(shown.items[0]).not.toHaveProperty("refine");
+	});
+
+	it("keeps the muscle groups of a movement the change did not rename", () => {
+		const revised: FusionResult = {
+			kind: "activities",
+			items: [{ ...pending.items[0]!, category: null, muscle_groups: null, reps: 4, load_lb: 50 }],
+		};
+		const kept = carryForward(pending, revised);
+		if (kept.kind !== "activities") return;
+		expect(kept.items[0]).toMatchObject({ category: "strength", muscle_groups: ["back"], reps: 4, load_lb: 50 });
+	});
+
+	it("carries nothing forward onto a different movement", () => {
+		const swapped: FusionResult = {
+			kind: "activities",
+			items: [{ ...pending.items[0]!, exercise: "Lat Pulldown", category: null, muscle_groups: null }],
+		};
+		const kept = carryForward(pending, swapped);
+		if (kept.kind !== "activities") return;
+		expect(kept.items[0]!.category).toBeNull();
+		expect(kept.items[0]!.muscle_groups).toBeNull();
+	});
+
+	it("re-runs the part's own detail call with the part and the instruction in the prompt", async () => {
+		const llm = createFakeLlm();
+		llm.outputs.push({
+			items: [
+				{
+					exercise: "Chest-Supported Row",
+					equipment: "chest-supported row machine",
+					description: "3 × 4 chest-supported row at 50 lb",
+					sets: 3,
+					reps: 4,
+					load_lb: 50,
+					duration_min: null,
+					distance_mi: null,
+					kcal: 120,
+					confidence: "high",
+				},
+			],
+			photo_fields: [],
+			photo_indexes: [],
+		});
+
+		const [revised] = await createFusionAnalyzer(llm).revise({
+			results: [pending],
+			instruction: "reps were 4 and it was 50 pounds",
+			context,
+		});
+
+		// One call, on the schema the analyze pipeline already uses — no new union.
+		expect(llm.requests).toHaveLength(1);
+		expect(llm.requests[0]!.schemaName).toBe("activities");
+		const system = llm.requests[0]!.system;
+		expect(system).toContain("reps were 4 and it was 50 pounds");
+		expect(system).toContain('"sets":3');
+		expect(system).toContain("exactly as it is above");
+
+		expect(revised!.kind).toBe("activities");
+		if (revised!.kind !== "activities") return;
+		// The sets they did not mention survive; the muscle groups they never saw do too.
+		expect(revised!.items[0]).toMatchObject({
+			sets: 3,
+			reps: 4,
+			load_lb: 50,
+			category: "strength",
+			muscle_groups: ["back"],
+		});
+		expect(FusionResultSchema.safeParse(revised).success).toBe(true);
+	});
+
+	it("asks about every part at once and leaves a question alone", async () => {
+		const llm = createFakeLlm();
+		const meal: FusionResult = {
+			kind: "meal",
+			description: "chicken and rice",
+			meal_type: "dinner",
+			kcal: 620,
+			protein_g: 45,
+			carbs_g: 60,
+			fat_g: 18,
+			fiber_g: 6,
+			items: [],
+			confidence: "medium",
+			sources: null,
+		};
+		llm.outputs.push(
+			{
+				description: "chicken and rice",
+				meal_type: "lunch",
+				kcal: 620,
+				protein_g: 45,
+				carbs_g: 60,
+				fat_g: 18,
+				fiber_g: 6,
+				items: [],
+				confidence: "high",
+				photo_fields: [],
+				photo_indexes: [],
+			},
+			{ weight_lb: 181, confidence: "high", photo_fields: [], photo_indexes: [] }
+		);
+
+		const revised = await createFusionAnalyzer(llm).revise({
+			results: [meal, { kind: "weight", weight_lb: 181, confidence: "high", sources: null }, { kind: "unclear", question: "Which machine?" }],
+			instruction: "that meal was lunch not dinner",
+			context,
+		});
+
+		expect(revised.map((result) => result.kind)).toEqual(["meal", "weight", "unclear"]);
+		expect(revised[0]).toMatchObject({ meal_type: "lunch" });
+		// The weigh-in was asked and came back as it was; the question was never asked at all.
+		expect(llm.requests.map((request) => request.schemaName)).toEqual(["meal", "weigh_in"]);
 	});
 });

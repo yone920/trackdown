@@ -262,6 +262,86 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 		expect(statement.fields?.place_kind).toBe("gym");
 	}, 90_000);
 
+	// "Make a change" (concept-v2 §Principles 7 — NO FORMS). The user is looking at what was
+	// understood and says what is wrong with it. Two things this proves that a fake cannot:
+	// the model actually applies the instruction to the part it was handed, and — the part
+	// that matters — it leaves everything the user did NOT mention exactly as it was. A
+	// revision that quietly re-estimates the numbers beside the one it changed is worse than
+	// a form.
+	it("applies a told change to a workout and leaves the rest of it alone", async () => {
+		const pending = {
+			kind: "activities" as const,
+			items: [
+				{
+					exercise: "Chest-Supported Row",
+					equipment: "chest-supported row machine",
+					description: "3 × 12 chest-supported row at 45 lb",
+					category: "strength" as const,
+					muscle_groups: ["back"],
+					sets: 3,
+					reps: 12,
+					load_lb: 45,
+					duration_min: null,
+					distance_mi: null,
+					kcal: 120,
+					confidence: "low" as const,
+					sources: null,
+					refine: null,
+				},
+			],
+		};
+		const [revised] = await analyzer().revise({
+			results: [pending],
+			instruction: "reps were 4 and it was 50 pounds",
+			context,
+		});
+
+		expect(revised!.kind).toBe("activities");
+		if (revised!.kind !== "activities") return;
+		const item = revised!.items[0]!;
+		// The two facts they corrected.
+		expect(item.reps).toBe(4);
+		expect(item.load_lb).toBeCloseTo(50, 0);
+		// And the one they did not: three sets is still three sets, on the same movement,
+		// on the same machine.
+		expect(item.sets).toBe(3);
+		expect((item.exercise ?? "").toLowerCase()).toContain("row");
+		expect((item.equipment ?? "").toLowerCase()).toContain("machine");
+		// The muscle groups the detail call is never asked for survive the round trip.
+		expect(item.muscle_groups).toEqual(["back"]);
+	}, 90_000);
+
+	// The other half of the same contract, on a different kind: a meal's slot is a fact the
+	// user can only ever change by saying so.
+	it("moves a meal to the sitting the user says it was", async () => {
+		const [revised] = await analyzer().revise({
+			results: [
+				{
+					kind: "meal",
+					description: "chicken, rice and broccoli",
+					meal_type: "dinner",
+					kcal: 620,
+					protein_g: 45,
+					carbs_g: 60,
+					fat_g: 18,
+					fiber_g: 6,
+					items: [],
+					confidence: "medium",
+					sources: null,
+				},
+			],
+			instruction: "that meal was lunch not dinner",
+			context,
+		});
+
+		expect(revised!.kind).toBe("meal");
+		if (revised!.kind !== "meal") return;
+		expect(revised!.meal_type).toBe("lunch");
+		// Everything else is untouched: the instruction was about the slot, not the plate.
+		expect(revised!.kcal).toBe(620);
+		expect(revised!.description.toLowerCase()).toContain("chicken");
+	}, 90_000);
+
 	// The clarify round: the question is remembered, so "yes" resolves instead of looping.
 	it("resolves a bare answer against the question it was asked", async () => {
 		const { results } = await analyzer().analyze({
