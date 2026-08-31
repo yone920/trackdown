@@ -54,14 +54,13 @@ Eating sections organised as on Day (below), with a dashed placeholder row for t
 meal. Coach button (`accent` pill): "What should I do today?" → "…tomorrow?" once today's workout
 is logged. Tabs + `+`.
 
-### Log (modal from `+`, also from chips)
+### Log (modal from `+`, also from chips) — NO FORMS (concept-v2 principle 7)
 Title `disp` 34 "What did you do?"; transcript/typed text area (`disp` 20) with attached photo
 thumbnails; three 76px controls Photo / Speak / Type (Speak is the primary, `ink` filled);
 helper line "Say it, snap it, or type it — any mix. Same for food, weight, goals." Below: the
 **confirm card** for whatever was recognised (exercise / meal / weight / goal / coach context):
 eyebrow "RECOGNIZED · <kind>", confidence chip (`good` high / `mute` medium / `accent` low),
-title, sources line ("machine from photo, load from your voice"), editable fields in a 3-col grid
-(`disp` 18 values), buttons Save (`ink` pill) and Add more. In Expo Go, Speak is hidden if the
+title, sources line ("machine from photo, load from your voice"), a read-only review of what was understood; corrections are TOLD via the same input ("Make a change" returns to the panel), never edited in fields. Primary button label: **Log** → review page → **Log it** / **Make a change**. In Expo Go, Speak is hidden if the
 speech port reports unavailable.
 
 ### Days (tab)
