@@ -87,6 +87,159 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-08-31 — "assisted" is not a spelling of "chin-up" (`fix-exercise-qualifiers`)
+
+**The report.** The user said **"assisted chin up with 55 pounds"**. It was saved as a plain
+**Chin-Up at 55 lb**.
+
+Two failures, and the second is the expensive one. The catalogue had no Assisted Chin-Up, so
+the name resolved to the nearest thing it did have and the qualifier went on the floor. And
+because the qualifier went, the number changed meaning: on an assisted machine 55 lb is the
+**help the machine gives** — easier than a bodyweight rep — and it was recorded as 55 lb of
+load hanging off a belt, which is much harder. The progression then pointed the wrong way for
+ever: the rule is "two good sessions, add a plate", and adding a plate of *assistance* is
+getting worse at chin-ups, not better.
+
+#### A — a match has to account for every word
+
+`services/exerciseMatch.ts` is new and pure, and it holds the whole rule:
+
+> A catalogue match is accepted only when every meaningful word of the phrase is accounted
+> for by the matched entry's own name **or one of its aliases** — and never when the phrase
+> carries a QUALIFIER the entry does not carry.
+
+- **`QUALIFIERS`** is the maintained list: assisted, machine/band assisted, banded, weighted,
+  incline, decline, close-grip, wide-grip, neutral-grip, reverse-grip, underhand, overhand,
+  single-arm, one-arm, single-leg, one-leg, unilateral, seated, standing, kneeling, lying,
+  smith, smith machine, deficit, paused, pause, tempo, eccentric, isometric, suspended,
+  elevated, negative. Multi-word ones match as adjacent words and the longest wins, so
+  "machine assisted" is one qualifier and not two.
+- **Aliases count as the entry's own words.** "dips" is nowhere inside "Chest Dip"; it is
+  still one of the things it is called. That is why the accounting is against the union of
+  the name and every alias, and why nothing the catalogue deliberately offers is refused —
+  a test walks every name and alias in `data/exercises.json` and finds each one.
+- **A refusal is not a failure.** The phrase is stored verbatim with `exercise_id` null, which
+  best-effort logging has supported since `field-fixes-best-effort-places`. The catalogue
+  normalises; it does not decide what the user is allowed to have done.
+- **Where it applies:** `lookupExercises` in `services/entries.ts`, the one matcher behind the
+  fusion confirm, the direct `POST /api/entries/movement`, the `PATCH` correction and the
+  coach's Do-list link. It now reads the whole catalogue (a curated list in the low hundreds)
+  and decides in TypeScript, because "every meaningful word is accounted for" written in SQL
+  would be a worse copy of the same code.
+- **And the refinement chip**, which turned out to be the *other* nearest-name matcher:
+  `suggestRefinement` would have offered "Was it a Chin-Up?" for those words. It reads a
+  rambling description loosely on purpose, so only the qualifier half of the rule applies to
+  it (`missingQualifiers`) — it may still guess, it may never guess a qualifier away. It also
+  says "an Assisted Chin-Up" now; the assisted family made the article visible.
+
+#### B — the assisted family, and a flag for what the number means
+
+`data/exercises.json` gains **Assisted Chin-Up**, **Assisted Pull-Up** and **Assisted Dip** —
+their parents' muscles, aliases for the ways people say them ("machine assisted…", and
+"banded pull up" as an alias of Assisted Pull-Up), and equipment `assisted_machine`.
+
+`load_direction` is the new catalogue flag (**migration `0013`**: a `text` column defaulting
+to `'resistance'` with a check constraint, and seed support; optional in the JSON, so only the
+three entries that are not the default say anything). Note on the equipment token: the file's
+convention is snake_case (`smith_machine`, `pullup_bar`), so it is `assisted_machine` rather
+than a spaced "assisted machine" — and deliberately *not* one of `STACK_EQUIPMENT`, so the
+step stays a flat 5 lb rather than 5 % of a stack.
+
+#### C — progression, with the sign it deserves
+
+`prescribeLoads` takes a `loadDirection` map and every rule runs through two helpers,
+`harder()` and `easier()`, instead of `+ step` / `- step`:
+
+| history | resistance | assistance |
+|---|---|---|
+| two sessions at target reps | `step_up`, +5 lb | `step_up`, **−5 lb** ("one step LESS help") |
+| two sessions short of target | `step_down`, −5 lb | `step_down`, **+5 lb** ("one step MORE help") |
+| restart after a fortnight | one step under | one step **more help** |
+| "same" logic | unchanged | unchanged |
+
+`daysSinceLastStep` follows the same flip: "never more than one step a week" is a rule about
+*progress*, so on an assisted machine the step it watches for is the number going down. The
+floor differs too — a resistance load never drops below one step, an assistance load stops at
+**0**, which is the goal (no help left is an unassisted rep).
+
+The coach is told, twice and only when it matters: each prescribed load prints as "55 lb of
+assistance (help, not resistance — less is stronger)", and `buildRules` adds an **ASSISTED
+MACHINES** line to the rules block *only* when one is in today's list.
+
+#### D — the delta, and the colour it is drawn in
+
+`DeltaVsLast` gains **`sentiment`** (`good` / `watch` / `neutral`) beside `direction`.
+`direction` says which way the number went; `sentiment` says whether that was progress, and on
+an assisted machine those are opposites. `computeDay` reads the day's exceptions from the
+catalogue in one small query (only the non-`resistance` rows, since resistance is the default
+on both sides) and hands them to `withDeltas`. Only `load_lb` flips — an extra set is progress
+on any machine.
+
+Both screens' `deltaColor` now takes the delta and reads `sentiment`, falling back to
+`direction` so a response from an older build still renders. **"−5 lb" on an assisted chin-up
+is green.**
+
+#### E — and the reader is told, in one line
+
+`describeVocabulary` prints the qualifier rule next to the catalogue it would otherwise be
+tempted to snap to: keep the user's qualifiers, never rename a variation to the plain version
+or to another variation, keep their own phrase when the exact variation is not in the list. It
+travels with the vocabulary, so the focused per-part call carries it too.
+
+**Nothing rewrites existing rows.** The migration adds a column to `exercise_catalog` and
+touches `activities` not at all. **The user's existing chin-up row is theirs to correct** —
+tap it, or say "that was an assisted chin-up" through Make a change, and it re-points at the
+new catalogue entry. A back-fill was considered and refused: this branch cannot know which
+past "Chin-Up" rows were assisted and which were real, and guessing at somebody's training
+history is worse than one wrong row they can already see and fix.
+
+**Decisions**
+
+- **`load_direction` on the catalogue, not on the activity.** Which way a load points is a
+  fact about the movement. On the row it could be contradicted by a correction, and there is
+  no honest answer to "an assisted chin-up whose load is resistance".
+- **`sentiment` rather than colouring by exercise in the app.** The app never has to know what
+  an assisted machine is; the server, which has the catalogue, answers the question once.
+- **The guard can only ever refuse.** It adds no fuzziness of its own — punctuation, case,
+  word order within an alias, plurals, and nothing else. There is no "nearest name", because a
+  nearest name is what saved this log wrong.
+
+**Tests** — 477 passing, 2 skipped in `backend` (was 445/2, with the key set so the contract
+tests run); 109 passing in the app (was 108).
+
+- `src/services/exerciseMatch.test.ts` (new, 15): the reported phrase resolving to Assisted
+  Chin-Up; **the same phrase against a catalogue with the assisted family removed returning
+  null** — the verbatim-keep path, pinned; qualifier reading including the longest-first rule;
+  aliases counting as the entry's words; a two-word qualifier assembled out of two different
+  aliases still refused; the variations we do not have (`deficit deadlift`, `paused bench
+  press`, `smith machine bench press`) refused rather than snapped; and every name and alias
+  in the catalogue found as itself.
+- `src/app.test.ts` (+4), on the exact sentence: analyze → confirm saving **"Assisted
+  Chin-Up", not "Chin-Up", with 55 still 55** and an `exercise_id` whose catalogue row is
+  `load_direction: assistance`; a second row 5 lb lighter reading `-5 lb` / `down` / **good**
+  on the day; the coach prompt carrying "of assistance" and the ASSISTED MACHINES rule; and
+  `deficit deadlift` / `paused bench press` kept verbatim on both insert and PATCH while
+  `assisted dips` resolves.
+- `src/services/coach/rules.test.ts` (+7): each row of the table above, the once-a-week rule
+  keyed on a *drop* in assistance, the floor at 0, the rules line present only when an
+  assisted machine is in the list — and the same history with no flag stepping the wrong way,
+  which is the test that says the catalogue does the work.
+- `src/services/day/day.test.ts` (+4) and `src/services/fusion/fusion.test.ts` (+2): the
+  sentiment for both directions of both kinds of load, sets not flipping, the map reaching
+  `withDeltas`, the prompt line, and the chip refusing to strip a qualifier.
+- `__tests__/day.test.tsx` (+1): "−5 lb" drawn in `C.good` with `sentiment: 'good'` and in
+  `C.accent` with `'watch'`.
+
+**Deferred**
+
+- **No back-fill**, per above.
+- **The qualifier list is a list.** It is not a taxonomy of every variation anyone will ever
+  say, and it does not need to be: an unknown qualifier fails the word-accounting rule anyway
+  and the phrase is kept verbatim. The list exists so that a *generous alias* can never
+  quietly open the door back up.
+- **`Assisted Dip` borrows Chest Dip's muscles**, not Triceps Dip's — the assisted machine is
+  the parallel-bar one.
+
 ### 2026-08-31 — a log you can take back, and a day that stops asking for dinner (`field-fixes-delete-no-expectations`)
 
 Two changes with one idea under them, which is now **concept-v2 §Principles 8**: the app is a

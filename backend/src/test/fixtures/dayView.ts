@@ -52,6 +52,7 @@ export function dayViewFixture(overrides: Partial<DayView> = {}): DayView {
 					delta_vs_last: {
 						text: "+5 lb",
 						direction: "up",
+						sentiment: "good",
 						field: "load_lb",
 						load_lb: 5,
 						sets: 0,

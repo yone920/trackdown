@@ -1,3 +1,5 @@
+import { normalizeExerciseName } from "./exerciseMatch.js";
+
 // Matching our exercise catalogue against free-exercise-db.
 //
 // Pure, and separate from the script that downloads things, because *which picture goes
@@ -53,17 +55,10 @@ export interface CatalogRow {
  */
 const AMBIGUOUS_SOURCE_NAMES = new Set(["Air Bike"]);
 
-/** Case, punctuation and parenthesised asides gone; "&" spelled out; one space between words. */
-export function normalizeExerciseName(name: string): string {
-	return name
-		.toLowerCase()
-		.replace(/&/g, " and ")
-		.replace(/['’]/g, "")
-		.replace(/\([^)]*\)/g, " ")
-		.replace(/[^a-z0-9]+/g, " ")
-		.trim()
-		.replace(/\s+/g, " ");
-}
+// One normaliser, shared with the write path's matcher (services/exerciseMatch.ts): a
+// dataset name and a spoken name have to be flattened the same way or the aliases that fix
+// one stop fixing the other. Re-exported so this module's own API is unchanged.
+export { normalizeExerciseName };
 
 function singularise(normalized: string): string | null {
 	const words = normalized.split(" ");

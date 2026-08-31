@@ -227,6 +227,89 @@ describe("prescribeLoads — the numbers the model is not allowed to invent", ()
 	});
 });
 
+describe("prescribeLoads — an assisted machine, where the load is the help", () => {
+	// The field report (migration 0013). 55 lb on an assisted chin-up machine is 55 lb of
+	// help: more of it is easier, and getting stronger is the number coming down. Every
+	// rule below is the resistance rule with its sign flipped, and nothing else changes.
+	const ASSISTED = { "assisted chin-up": "assistance" as const };
+
+	function assisted(date: string, options: Omit<LiftOptions, "exercise" | "muscles"> = {}) {
+		return lift(date, { ...options, exercise: "Assisted Chin-Up", muscles: ["lats"] });
+	}
+
+	function prescribe(activities: ReturnType<typeof activity>[]): Prescription {
+		return only(prescribeLoads(featuresFor(activities), { loadDirection: ASSISTED }), "Assisted Chin-Up");
+	}
+
+	it("takes five pounds OFF once the reps are proved", () => {
+		const item = prescribe([
+			assisted(daysAgo(1), { load: 55 }),
+			assisted(daysAgo(8), { load: 55 }),
+			assisted(daysAgo(15), { load: 60 }),
+		]);
+		expect(item).toMatchObject({ rule: "step_up", load_lb: 50, load_direction: "assistance" });
+		expect(item.why).toContain("one step LESS help, 50 lb");
+	});
+
+	it("would have stepped the same history the wrong way without the catalogue flag", () => {
+		const item = only(
+			prescribeLoads(
+				featuresFor([assisted(daysAgo(1), { load: 55 }), assisted(daysAgo(8), { load: 55 }), assisted(daysAgo(15), { load: 60 })])
+			),
+			"Assisted Chin-Up"
+		);
+		// No loadDirection given: read as resistance, and 55 lb of help becomes 60. This is
+		// the test that says `load_direction` is what does the work, not the name.
+		expect(item).toMatchObject({ rule: "step_up", load_lb: 60, load_direction: "resistance" });
+	});
+
+	it("adds help rather than removing it after two sessions short of target", () => {
+		const item = prescribe([
+			assisted(daysAgo(2), { load: 55, reps: 5 }),
+			assisted(daysAgo(6), { load: 55, reps: 6 }),
+			assisted(daysAgo(13), { load: 55, reps: 8 }),
+		]);
+		expect(item).toMatchObject({ rule: "step_down", load_lb: 60 });
+		expect(item.why).toContain("MORE help");
+	});
+
+	it("comes back with more help after a fortnight, not less", () => {
+		const item = prescribe([assisted(daysAgo(16), { load: 55 }), assisted(daysAgo(23), { load: 55 })]);
+		expect(item).toMatchObject({ rule: "restart", load_lb: 60, sets: 2 });
+		expect(item.why).toContain("MORE help");
+	});
+
+	it("counts a drop in assistance as the step that a week must pass after", () => {
+		// 60 → 55 four days ago is progress here, so the once-a-week rule applies to it.
+		const item = prescribe([assisted(daysAgo(1), { load: 55 }), assisted(daysAgo(4), { load: 55 }), assisted(daysAgo(9), { load: 60 })]);
+		expect(item).toMatchObject({ rule: "hold", load_lb: 55 });
+		expect(item.why).toContain("never more than one step a week");
+	});
+
+	it("stops at nothing rather than going negative — no help left is a bodyweight rep", () => {
+		const item = prescribe([
+			assisted(daysAgo(1), { load: 5 }),
+			assisted(daysAgo(8), { load: 5 }),
+			assisted(daysAgo(15), { load: 10 }),
+		]);
+		expect(item.load_lb).toBe(0);
+	});
+
+	it("says so in the rules the prompt is handed, and only when one is in today's list", () => {
+		const withAssisted = buildRules({
+			features: featuresFor([assisted(daysAgo(1), { load: 55 }), assisted(daysAgo(8), { load: 55 })]),
+			goals: [],
+			loadDirection: ASSISTED,
+		});
+		const line = withAssisted.statements.find((statement) => statement.startsWith("ASSISTED MACHINES"));
+		expect(line).toContain("Assisted Chin-Up");
+		expect(line).toContain("More pounds is EASIER");
+
+		const withoutAssisted = buildRules({ features: featuresFor([lift(daysAgo(1)), lift(daysAgo(8))]), goals: [] });
+		expect(withoutAssisted.statements.some((statement) => statement.startsWith("ASSISTED MACHINES"))).toBe(false);
+	});
+});
+
 describe("prescribeLoads — a stated load, when the log has nothing", () => {
 	const stated = [
 		{ exercise: "Bench Press", load_lb: 165, reps: 5 },

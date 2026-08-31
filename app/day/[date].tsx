@@ -20,7 +20,7 @@ import { openExercise } from '@/lib/exercise';
 import { clock, dateLabel, grams, kcal, slotLabel } from '@/lib/format';
 import { localDateKey, useDay, useDeleteRecord } from '@/lib/queries';
 import { C, FONT, SPACE, TABULAR } from '@/lib/theme';
-import type { DayActivity, DayView, MacroLine, MealSlot, Verdict } from '@/lib/types';
+import type { DayActivity, DayView, DeltaVsLast, MacroLine, MealSlot, Verdict } from '@/lib/types';
 
 // A closed day (docs/design-system.md §Day; concept-v2 §The two day views: "Day is a
 // reading, not a replay"). The verdict against the goal that was active *that* day, the
@@ -413,7 +413,7 @@ function ActivityRow({
       deleteLabel={activity.exercise ?? activity.description}
       divider={!last}>
       {activity.delta_vs_last ? (
-        <Sub style={{ marginTop: 3, color: deltaColor(activity.delta_vs_last.direction) }}>
+        <Sub style={{ marginTop: 3, color: deltaColor(activity.delta_vs_last) }}>
           {activity.delta_vs_last.text}
         </Sub>
       ) : null}
@@ -422,9 +422,16 @@ function ActivityRow({
   );
 }
 
-function deltaColor(direction: 'up' | 'down' | 'same' | 'new'): string {
-  if (direction === 'up') return C.good;
-  if (direction === 'down') return C.accent;
+/**
+ * Green for progress, amber for a step back, quiet for neither. Read from `sentiment`, not
+ * from which way the number went: on an assisted machine the load is the help the machine
+ * gives, so "-5 lb" is less help and is the good news. `direction` is the fallback for a
+ * response from a build before the field existed.
+ */
+function deltaColor(delta: DeltaVsLast): string {
+  const sentiment = delta.sentiment ?? (delta.direction === 'up' ? 'good' : delta.direction === 'down' ? 'watch' : 'neutral');
+  if (sentiment === 'good') return C.good;
+  if (sentiment === 'watch') return C.accent;
   return C.mute;
 }
 

@@ -769,6 +769,17 @@ describe("the prompt's best-effort policy", () => {
 		expect(buildPartDetailSystemPrompt(context, "activities")).toContain('put the\nmachine in "equipment"');
 	});
 
+	it("tells the reader to keep the user's qualifiers, beside the catalogue it would drop them for", () => {
+		expect(prompt).toContain("KEEP THE USER'S QUALIFIERS");
+		for (const qualifier of ["Assisted", "close-grip", "single-arm", "smith"]) {
+			expect(prompt).toContain(qualifier);
+		}
+		expect(prompt).toContain("never rename a variation to the plain version");
+		expect(prompt).toContain("keep the user's own phrase");
+		// The rule travels with the vocabulary, so the focused per-part call carries it too.
+		expect(buildPartDetailSystemPrompt(context, "activities")).toContain("KEEP THE USER'S QUALIFIERS");
+	});
+
 	it("says nothing about a clarify round when there is no question outstanding", () => {
 		expect(prompt).not.toContain("ANSWER TO A QUESTION");
 	});
@@ -821,6 +832,30 @@ describe("the refinement offer", () => {
 		expect(suggestRefinement(item, catalog)).toBeNull();
 		// An alias counts as naming it: the save resolves it either way.
 		expect(suggestRefinement({ ...item, exercise: "seal row" }, catalog)).toBeNull();
+	});
+
+	it("never offers to take a qualifier off what the user said", () => {
+		// The field report, one step earlier: with no Assisted Chin-Up to offer, the chip
+		// would have said "Was it a Chin-Up?" — a leading question towards the wrong lift.
+		const plain = [{ name: "Chin-Up", aliases: ["chinup", "chin up"], category: "strength", primary_muscles: ["lats"] }];
+		expect(
+			suggestRefinement(
+				{ exercise: "assisted chin up", equipment: "assist machine", description: "chin ups at 55 lb", confidence: "low" },
+				plain
+			)
+		).toBeNull();
+
+		// The assisted entry itself is still a fair offer for the same words.
+		const withAssisted = [
+			...plain,
+			{ name: "Assisted Chin-Up", aliases: ["assisted chin up"], category: "strength", primary_muscles: ["lats"] },
+		];
+		expect(
+			suggestRefinement(
+				{ exercise: "chin up on the assist machine", equipment: null, description: "55 lb", confidence: "low" },
+				withAssisted
+			)
+		).toEqual({ question: "Was it an Assisted Chin-Up?", exercise: "Assisted Chin-Up" });
 	});
 
 	it("offers nothing when the reader was sure", () => {

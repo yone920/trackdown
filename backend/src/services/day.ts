@@ -1,4 +1,5 @@
 import type pg from "pg";
+import type { LoadDirection } from "../db/exercises.js";
 import {
 	addDays,
 	boundsOf,
@@ -528,12 +529,25 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 					)
 				).rows.map(toActivity);
 
+	// Which way each of the day's loads points (migration 0013). It decides the delta's
+	// sentiment and nothing else: on an assisted machine "−5 lb" is the good news. Only the
+	// exceptions are read back, because resistance is the default on both sides.
+	const loadDirections: Record<string, LoadDirection> = {};
+	if (exerciseNames.length > 0) {
+		const { rows } = await db.query<{ name: string; load_direction: LoadDirection }>(
+			`SELECT name, load_direction FROM exercise_catalog
+			  WHERE load_direction <> 'resistance' AND lower(name) = ANY($1::text[])`,
+			[exerciseNames]
+		);
+		for (const row of rows) loadDirections[row.name.trim().toLowerCase()] = row.load_direction;
+	}
+
 	const blockOf = new Map<string, string>();
 	for (const block of blocks) for (const id of block.activity_ids) blockOf.set(id, block.id);
 
 	// Evidence is attached below; until then these are the activities with their block and delta.
 	const items: (DayActivity & { block_id: string | null; delta_vs_last: DeltaVsLast | null })[] = [
-		...withDeltas(dayActivities, history).map(({ activity, delta_vs_last }) => ({
+		...withDeltas(dayActivities, history, loadDirections).map(({ activity, delta_vs_last }) => ({
 			...activity,
 			block_id: activity.id ? (blockOf.get(activity.id) ?? null) : null,
 			delta_vs_last,

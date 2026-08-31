@@ -169,6 +169,11 @@ function describeVocabulary(context: FusionContext): string {
 		);
 		sections.push(`Exercise catalogue — canonical name (things people call it):\n${bullet(entries)}`);
 	}
+	// The qualifier rule, where the catalogue is (services/exerciseMatch.ts enforces the
+	// same thing on the way in). A field report: "assisted chin up" came back as "Chin-Up".
+	sections.push(
+		"KEEP THE USER'S QUALIFIERS. Assisted, incline, decline, close-grip, wide-grip, single-arm, single-leg, seated, standing, smith, deficit, paused, banded and the like name a DIFFERENT movement — never drop one to reach a catalogue name, and never rename a variation to the plain version or to another variation. If the exact variation is not in the list above, keep the user's own phrase."
+	);
 	return sections.join("\n\n");
 }
 

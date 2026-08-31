@@ -1,3 +1,4 @@
+import { DEFAULT_LOAD_DIRECTION, type LoadDirection } from "../../db/exercises.js";
 import type { ReferenceLoad } from "../fusion/schema.js";
 import type { CoachFeatures, ExerciseFeature, ExerciseSession, MuscleFeature } from "./features.js";
 
@@ -69,6 +70,13 @@ export interface Prescription {
 	why: string;
 	/** Null for a `reference` prescription: this log has never seen the exercise done. */
 	days_since: number | null;
+	/**
+	 * What `load_lb` MEANS (migration 0013). On "assistance" it is the help the machine
+	 * gives, so the same rules run with the sign flipped: progress is less of it. The
+	 * prompt is told, because a coach that says "up to 60 lb" on an assisted chin-up has
+	 * told the user to get worse at it.
+	 */
+	load_direction: LoadDirection;
 }
 
 /**
@@ -144,6 +152,8 @@ export interface BuildRulesInput {
 	goals: CoachGoal[];
 	/** Equipment per exercise from the catalogue, keyed by lower-cased name. */
 	equipment?: Record<string, string[]>;
+	/** `load_direction` per exercise from the catalogue, keyed the same way (migration 0013). */
+	loadDirection?: Record<string, LoadDirection>;
 	/** What the user said they bring with them, when they have said anything. */
 	background?: TrainingBackground;
 }
@@ -182,6 +192,33 @@ export function stepFor(exercise: string, load: number | null, equipment?: Recor
 	return PLATE_STEP_LB;
 }
 
+/** Which way this exercise's load points; anything the catalogue has not said is resistance. */
+export function directionFor(exercise: string, directions?: Record<string, LoadDirection>): LoadDirection {
+	return directions?.[exercise.trim().toLowerCase()] ?? DEFAULT_LOAD_DIRECTION;
+}
+
+/**
+ * The two moves every progression rule is made of, with the one sign that matters in them.
+ *
+ * On a barbell, harder is more weight. On an assisted machine the number is the help, so
+ * harder is *less* of it — and the floor is 0, which is the whole point: no help left is a
+ * bodyweight chin-up, which is where an assisted chin-up is trying to get to. A resistance
+ * load never goes below one step, because an empty bar is not a prescription.
+ */
+function harder(load: number, step: number, direction: LoadDirection): number {
+	return direction === "assistance" ? Math.max(0, load - step) : load + step;
+}
+
+function easier(load: number, step: number, direction: LoadDirection): number {
+	return direction === "assistance" ? load + step : Math.max(step, load - step);
+}
+
+/** "55 lb" on a barbell; "55 lb of assistance" on a machine that is helping. */
+function say(load: number | null, direction: LoadDirection): string {
+	if (load == null) return direction === "assistance" ? "the assistance" : "the load";
+	return direction === "assistance" ? `${load} lb of assistance` : `${load} lb`;
+}
+
 /**
  * The rep scheme the user is working to: the best sets × reps they have actually completed
  * **at the load they are on now**. Taken from their own logs rather than from a number in
@@ -212,13 +249,19 @@ function hitTarget(session: ExerciseSession, scheme: { sets: number | null; reps
 	return true;
 }
 
-/** Days since the load last went up; null when it never has in the window. */
-function daysSinceLastStep(feature: ExerciseFeature): number | null {
+/**
+ * Days since the load last got HARDER; null when it never has in the window. On an
+ * assisted machine that is the number going down, which is why the direction has to reach
+ * this far: "never more than one step a week" is a rule about progress, not about a sign.
+ */
+function daysSinceLastStep(feature: ExerciseFeature, direction: LoadDirection): number | null {
 	const sessions = feature.sessions; // newest first
+	const progressed = (newer: number, older: number): boolean =>
+		direction === "assistance" ? newer < older : newer > older;
 	for (let i = 0; i < sessions.length - 1; i += 1) {
 		const newer = sessions[i] as ExerciseSession;
 		const older = sessions[i + 1] as ExerciseSession;
-		if (newer.load_lb != null && older.load_lb != null && newer.load_lb > older.load_lb) {
+		if (newer.load_lb != null && older.load_lb != null && progressed(newer.load_lb, older.load_lb)) {
 			return feature.days_since + (i === 0 ? 0 : daysBetweenSessions(sessions, 0, i));
 		}
 	}
@@ -347,18 +390,27 @@ export function prescribeLoads(
 	features: CoachFeatures,
 	{
 		equipment,
+		loadDirection,
 		gap,
 		referenceLoads = [],
-	}: { equipment?: Record<string, string[]>; gap?: GapRule; referenceLoads?: readonly ReferenceLoad[] } = {}
+	}: {
+		equipment?: Record<string, string[]>;
+		/** Catalogue `load_direction` per exercise, keyed by lower-cased name (migration 0013). */
+		loadDirection?: Record<string, LoadDirection>;
+		gap?: GapRule;
+		referenceLoads?: readonly ReferenceLoad[];
+	} = {}
 ): Prescription[] {
 	const resolvedGap = gap ?? gapRule(features.days_since_last_workout);
 	const gapLevel = resolvedGap.level;
 
 	const logged = features.exercises.map((feature) => {
+		const direction = directionFor(feature.exercise, loadDirection);
 		const base = {
 			exercise: feature.exercise,
 			muscle_groups: feature.muscle_groups,
 			days_since: feature.days_since,
+			load_direction: direction,
 		};
 
 		if (feature.category === "cardio") {
@@ -383,12 +435,15 @@ export function prescribeLoads(
 		if (gapLevel === "restart" && current != null) {
 			return {
 				...base,
-				load_lb: Math.max(step, current - step),
+				load_lb: easier(current, step, direction),
 				sets: sets == null ? null : Math.max(2, sets - 1),
 				reps,
 				minutes: null,
 				rule: "restart" as const,
-				why: `Coming back after ${feature.days_since} days: one step under the ${current} lb last logged, a set fewer.`,
+				why:
+					direction === "assistance"
+						? `Coming back after ${feature.days_since} days: one step MORE help than the ${current} lb last logged, a set fewer.`
+						: `Coming back after ${feature.days_since} days: one step under the ${current} lb last logged, a set fewer.`,
 			};
 		}
 
@@ -412,7 +467,10 @@ export function prescribeLoads(
 				reps,
 				minutes: null,
 				rule: "ease_back" as const,
-				why: `Easing back in after ${gap?.days ?? features.days_since_last_workout} days: same ${current ?? "load"} lb, one set fewer.`,
+				why:
+					direction === "assistance"
+						? `Easing back in after ${gap?.days ?? features.days_since_last_workout} days: same ${say(current, direction)}, one set fewer.`
+						: `Easing back in after ${gap?.days ?? features.days_since_last_workout} days: same ${current ?? "load"} lb, one set fewer.`,
 			};
 		}
 
@@ -430,12 +488,15 @@ export function prescribeLoads(
 		if (missedTwice && current != null) {
 			return {
 				...base,
-				load_lb: Math.max(step, current - step),
+				load_lb: easier(current, step, direction),
 				sets,
 				reps,
 				minutes: null,
 				rule: "step_down" as const,
-				why: `Two sessions short of ${scheme.reps ?? "target"} reps at ${current} lb — drop one step and build it back.`,
+				why:
+					direction === "assistance"
+						? `Two sessions short of ${scheme.reps ?? "target"} reps at ${say(current, direction)} — one step MORE help and build it back.`
+						: `Two sessions short of ${scheme.reps ?? "target"} reps at ${current} lb — drop one step and build it back.`,
 			};
 		}
 
@@ -447,22 +508,28 @@ export function prescribeLoads(
 				reps,
 				minutes: null,
 				rule: "hold" as const,
-				why: `Last session came up short of ${scheme.reps ?? "target"} reps — same load again.`,
+				why: `Last session came up short of ${scheme.reps ?? "target"} reps — same ${
+					direction === "assistance" ? "assistance" : "load"
+				} again.`,
 			};
 		}
 
-		const sinceStep = daysSinceLastStep(feature);
+		const sinceStep = daysSinceLastStep(feature, direction);
 		const steppedThisWeek = sinceStep != null && sinceStep < MIN_DAYS_BETWEEN_STEPS;
 
 		if (hits >= SESSIONS_AT_TARGET_BEFORE_STEP && current != null && !steppedThisWeek) {
+			const next = harder(current, step, direction);
 			return {
 				...base,
-				load_lb: current + step,
+				load_lb: next,
 				sets,
 				reps,
 				minutes: null,
 				rule: "step_up" as const,
-				why: `${hits} sessions at ${scheme.sets ?? "all"} × ${scheme.reps ?? "target"} with ${current} lb — up one step to ${current + step} lb.`,
+				why:
+					direction === "assistance"
+						? `${hits} sessions at ${scheme.sets ?? "all"} × ${scheme.reps ?? "target"} with ${say(current, direction)} — one step LESS help, ${next} lb. Progress here is the number coming down.`
+						: `${hits} sessions at ${scheme.sets ?? "all"} × ${scheme.reps ?? "target"} with ${current} lb — up one step to ${next} lb.`,
 			};
 		}
 
@@ -474,12 +541,16 @@ export function prescribeLoads(
 			minutes: null,
 			rule: "hold" as const,
 			why: steppedThisWeek
-				? `The load went up ${sinceStep} days ago — never more than one step a week, so hold ${current ?? "it"} lb.`
-				: `${hits} of ${SESSIONS_AT_TARGET_BEFORE_STEP} sessions at target reps — hold ${current ?? "the load"} lb until it is two.`,
+				? direction === "assistance"
+					? `The assistance came down ${sinceStep} days ago — never more than one step a week, so hold ${say(current, direction)}.`
+					: `The load went up ${sinceStep} days ago — never more than one step a week, so hold ${current ?? "it"} lb.`
+				: direction === "assistance"
+					? `${hits} of ${SESSIONS_AT_TARGET_BEFORE_STEP} sessions at target reps — hold ${say(current, direction)} until it is two.`
+					: `${hits} of ${SESSIONS_AT_TARGET_BEFORE_STEP} sessions at target reps — hold ${current ?? "the load"} lb until it is two.`,
 		};
 	});
 
-	return [...logged, ...prescribeFromReferences(logged, referenceLoads, resolvedGap, equipment)];
+	return [...logged, ...prescribeFromReferences(logged, referenceLoads, resolvedGap, equipment, loadDirection)];
 }
 
 /**
@@ -497,7 +568,8 @@ function prescribeFromReferences(
 	logged: readonly Prescription[],
 	references: readonly ReferenceLoad[],
 	gap: GapRule,
-	equipment?: Record<string, string[]>
+	equipment?: Record<string, string[]>,
+	loadDirection?: Record<string, LoadDirection>
 ): Prescription[] {
 	if (references.length === 0) return [];
 	const known = new Set(logged.map((item) => item.exercise.trim().toLowerCase()));
@@ -511,18 +583,22 @@ function prescribeFromReferences(
 		const stated = reference.load_lb;
 		const easing = gap.level === "restart" && gap.days != null;
 		const step = stepFor(reference.exercise, stated, equipment);
+		const direction = directionFor(reference.exercise, loadDirection);
 		out.push({
 			exercise: reference.exercise,
 			muscle_groups: [],
-			load_lb: easing ? Math.max(step, stated - step) : stated,
+			load_lb: easing ? easier(stated, step, direction) : stated,
 			sets: easing ? Math.max(2, REFERENCE_SETS - 1) : REFERENCE_SETS,
 			reps: reference.reps,
 			minutes: null,
 			rule: "reference",
 			why: easing
-				? `Stated, not logged: ${stated} lb${reference.reps ? ` for ${reference.reps}` : ""}. Coming back after ${gap.days} days, so one step under it and a set fewer.`
-				: `Stated, not logged: the user says they lift ${stated} lb${reference.reps ? ` for ${reference.reps}` : ""}. Start there and let the log take over.`,
+				? `Stated, not logged: ${say(stated, direction)}${reference.reps ? ` for ${reference.reps}` : ""}. Coming back after ${gap.days} days, so one step ${
+						direction === "assistance" ? "more help" : "under it"
+					} and a set fewer.`
+				: `Stated, not logged: the user says they lift ${say(stated, direction)}${reference.reps ? ` for ${reference.reps}` : ""}. Start there and let the log take over.`,
 			days_since: null,
+			load_direction: direction,
 		});
 	}
 	return out;
@@ -600,12 +676,19 @@ export function selectNudge(
 	return { action: null, subject: "No outstanding action. Make the nudge the one thing that would most improve the next week." };
 }
 
-export function buildRules({ features, goals, equipment, background = NO_BACKGROUND }: BuildRulesInput): CoachRules {
+export function buildRules({
+	features,
+	goals,
+	equipment,
+	loadDirection,
+	background = NO_BACKGROUND,
+}: BuildRulesInput): CoachRules {
 	const gap = gapRule(features.days_since_last_workout);
 	const recovery = recoveryRule(features.muscles);
 	const cardio = cardioRule(features);
 	const prescriptions = prescribeLoads(features, {
 		...(equipment ? { equipment } : {}),
+		...(loadDirection ? { loadDirection } : {}),
 		gap,
 		referenceLoads: background.reference_loads,
 	});
@@ -619,11 +702,25 @@ export function buildRules({ features, goals, equipment, background = NO_BACKGRO
 			features.training_days_target ? ` against a plan of ${features.training_days_target}/week` : ""
 		}.`,
 		"Loads, sets and reps are prescribed below and are not yours to change: copy them exactly for any exercise you choose from the list. An exercise that is not on the list has no history, so give it no load — describe it and let the user pick the weight.",
+		assistanceStatement(prescriptions),
 		backgroundStatement(features, background),
 		`Nudge: ${nudge.subject}`,
 	].filter((line): line is string => line !== null);
 
 	return { gap, recovery, cardio, prescriptions, nudge, statements };
+}
+
+/**
+ * The one line the model needs when an assisted machine is in today's list. Only printed
+ * when there is one, because a rule about a case that is not in front of it is a rule it
+ * can misapply.
+ */
+function assistanceStatement(prescriptions: readonly Prescription[]): string | null {
+	const assisted = prescriptions.filter((item) => item.load_direction === "assistance");
+	if (assisted.length === 0) return null;
+	return `ASSISTED MACHINES — ${assisted
+		.map((item) => item.exercise)
+		.join(", ")}: the load on these is the HELP the machine gives, not resistance. More pounds is EASIER, and getting stronger means the number goes DOWN towards a bodyweight rep. Say it that way ("50 lb of assistance, one plate less help than last time"); never call it "lighter" or congratulate a bigger number, and never tell the user to add weight to one.`;
 }
 
 /**

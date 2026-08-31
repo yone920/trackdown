@@ -354,6 +354,46 @@ describe("delta_vs_last", () => {
 		const [only] = withDeltas([activity({ logged_at: at("12:00"), exercise: null })], []);
 		expect(only?.delta_vs_last).toBeNull();
 	});
+
+	const assisted = (partial: Partial<DayActivity>) =>
+		activity({ logged_at: at("18:00"), exercise: "Assisted Chin-Up", sets: 3, reps: 8, load_lb: 55, ...partial });
+
+	it("reads a heavier bar as progress and a lighter one as the thing to look at", () => {
+		expect(deltaVsLast(bench({ load_lb: 140 }), bench({}))).toMatchObject({ direction: "up", sentiment: "good" });
+		expect(deltaVsLast(bench({ load_lb: 125 }), bench({}))).toMatchObject({ direction: "down", sentiment: "watch" });
+		expect(deltaVsLast(bench({}), bench({}))).toMatchObject({ direction: "same", sentiment: "neutral" });
+		expect(deltaVsLast(bench({}), null)).toMatchObject({ direction: "new", sentiment: "neutral" });
+	});
+
+	it("reads five pounds LESS assistance as the good news — the field report, on the screen", () => {
+		expect(deltaVsLast(assisted({ load_lb: 50 }), assisted({}), "assistance")).toMatchObject({
+			text: "-5 lb",
+			direction: "down",
+			sentiment: "good",
+		});
+		expect(deltaVsLast(assisted({ load_lb: 60 }), assisted({}), "assistance")).toMatchObject({
+			text: "+5 lb",
+			direction: "up",
+			sentiment: "watch",
+		});
+		// The same rows with no catalogue flag: read as resistance, and the colours flip.
+		expect(deltaVsLast(assisted({ load_lb: 50 }), assisted({})).sentiment).toBe("watch");
+	});
+
+	it("only flips the load — an extra set is progress on any machine", () => {
+		expect(deltaVsLast(assisted({ sets: 4 }), assisted({}), "assistance")).toMatchObject({
+			field: "sets",
+			text: "+1 set",
+			sentiment: "good",
+		});
+	});
+
+	it("takes the direction per exercise from the catalogue map", () => {
+		const [row] = withDeltas([assisted({ load_lb: 50, logged_at: at("19:00") })], [assisted({})], {
+			"assisted chin-up": "assistance",
+		});
+		expect(row?.delta_vs_last).toMatchObject({ text: "-5 lb", sentiment: "good" });
+	});
 });
 
 describe("status thresholds", () => {
