@@ -234,6 +234,65 @@ describe('Day', () => {
     expect(screen.getByText('chicken and rice')).toBeTruthy();
   });
 
+  // The field report (2026-08-31): after the profile was wiped the protein, carb and fat
+  // bars all drew a full-width empty groove — grams ÷ a target nobody set is a zero-width
+  // fill, which reads as broken rather than as unset.
+  describe('a macro with no target', () => {
+    const withMacros = (macros: Partial<(typeof CLOSED)['macros']>) => {
+      const day = JSON.parse(JSON.stringify(CLOSED)) as typeof CLOSED;
+      day.macros = { ...day.macros, ...macros };
+      mockApi.mockImplementation((path: string) =>
+        path.startsWith('/api/day/') ? Promise.resolve(day) : Promise.resolve(null),
+      );
+    };
+
+    it('draws the bar as it always did when a target exists', async () => {
+      withMacros({
+        protein_g: { eaten: 120, target: 160, note: 'under' },
+        carbs_g: { eaten: 130, target: 200, note: 'under' },
+        fat_g: { eaten: 55, target: 70, note: 'under' },
+      });
+      renderDay();
+      await waitFor(() => expect(screen.getByText('Protein')).toBeTruthy());
+      expect(screen.getByTestId('macro-track-Protein')).toBeTruthy();
+      expect(screen.getByTestId('macro-track-Carbs')).toBeTruthy();
+      expect(screen.queryByTestId('macro-hint')).toBeNull();
+    });
+
+    it('draws no track at all, and says why once, when nothing is set', async () => {
+      withMacros({
+        protein_g: { eaten: 120, target: null, note: null },
+        carbs_g: { eaten: 130, target: null, note: null },
+        fat_g: { eaten: 55, target: null, note: null },
+      });
+      renderDay();
+      await waitFor(() => expect(screen.getByText('Protein')).toBeTruthy());
+      expect(screen.queryByTestId('macro-track-Protein')).toBeNull();
+      expect(screen.queryByTestId('macro-track-Carbs')).toBeNull();
+      expect(screen.queryByTestId('macro-track-Fat')).toBeNull();
+      // The grams are still drawn: they are measured.
+      expect(screen.getByText('120 g')).toBeTruthy();
+      expect(screen.getByTestId('macro-hint').props.children).toBe(
+        'No targets set — tell me your protein and carb aims and these become bars.',
+      );
+    });
+
+    it('mixes: the one with a target keeps its bar, and the line names the rest', async () => {
+      withMacros({
+        protein_g: { eaten: 120, target: 160, note: 'under' },
+        carbs_g: { eaten: 130, target: null, note: null },
+        fat_g: { eaten: 55, target: null, note: null },
+      });
+      renderDay();
+      await waitFor(() => expect(screen.getByText('Protein')).toBeTruthy());
+      expect(screen.getByTestId('macro-track-Protein')).toBeTruthy();
+      expect(screen.queryByTestId('macro-track-Carbs')).toBeNull();
+      expect(screen.getByTestId('macro-hint').props.children).toBe(
+        'No target for carbs and fat — tell me what you are aiming for and these become bars.',
+      );
+    });
+  });
+
   it('shows the body numbers and the footer', async () => {
     renderDay();
     await waitFor(() => expect(screen.getByText('Body')).toBeTruthy());

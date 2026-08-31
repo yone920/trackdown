@@ -5,12 +5,14 @@ import {
 	computeFeatures,
 	isCardio,
 	WEEK_DAYS,
+	type CardioFeature,
 	type CoachFeatures,
 	type CoverageEntry,
 	type ExerciseFeature,
 	type ExerciseSession,
 } from "../coach/features.js";
 import {
+	cardioNextMinutes,
 	prescribeLoads,
 	gapRule,
 	SESSIONS_AT_TARGET_BEFORE_STEP,
@@ -35,6 +37,18 @@ import { addDays, localDay, type IsoDate } from "../localTime.js";
 //
 // Pure below `loadBoard`: features + prescriptions in, board out, so the whole thing is
 // tested on fixtures with no database.
+//
+// **Lifts and cardio are two sections, not one list** (field report 2026-08-31: an Incline
+// Treadmill Walk sat in the Lifts section reading "20 min next", between two barbell rows).
+// The activity's own category decides which one it lands in, and the reason is not only that
+// a treadmill is not a lift: the two progress by different arithmetic. A lift steps by a
+// plate when two sessions hit the scheme; cardio steps by the *week's* minutes against the
+// plan's target and does not care what happened on Tuesday. One list cannot say both, and
+// the row that tried said "20 min next" — which is not a step at all, it is last time.
+//
+// Mobility lands in neither. A stretch has no load to progress and no weekly target to
+// chase; what it has is a place on the coverage ledger, which already says how long it has
+// been since the last one.
 
 /** Bars go back this far — "sessions/week (last 4–8 wks)". Eight weeks, in whole weeks. */
 export const BOARD_WEEKS = 8;
@@ -93,6 +107,56 @@ export interface BoardLift {
 	next: BoardNextStep;
 }
 
+/** One point on a cardio row's sparkline: what that day's session was made of. */
+export interface BoardCardioPoint {
+	date: IsoDate;
+	duration_min: number | null;
+	distance_mi: number | null;
+	pace_min_mi: number | null;
+}
+
+/**
+ * The next step for one cardio activity. Minutes, never a load — the field report's row
+ * said "20 min next" beside two lifts and that number was simply the last session repeated.
+ */
+export interface BoardCardioNext {
+	rule: "cardio";
+	/** Null when the week is already at its target: there is nothing to step toward. */
+	minutes: number | null;
+	/** "22 min next", "Hold 20 min". */
+	text: string;
+	eta: string | null;
+	why: string;
+}
+
+/**
+ * One row per cardio activity the log knows about. Deliberately not a `BoardLift` with the
+ * pounds left blank: nothing here has a load, a set or a rep, so nothing here can print
+ * "lb" by accident.
+ */
+export interface BoardCardioRow {
+	exercise: string;
+	exercise_id: string | null;
+	category: ActivityCategory | null;
+	last_date: IsoDate;
+	days_since: number;
+	sessions: number;
+	/** The last session's own figures. Distance and pace are null when nobody measured. */
+	duration_min: number | null;
+	distance_mi: number | null;
+	pace_min_mi: number | null;
+	/** The fastest pace in the window, for the row to be measured against. */
+	best_pace_min_mi: number | null;
+	/** "20 min · 1.2 mi · 16.7 min/mi" — minutes, distance, pace. Never "lb". */
+	summary_text: string;
+	/** Minutes, or pace when the sessions carried a distance: "+5 min in four weeks". */
+	delta_text: string | null;
+	/** Pace only. See `cardioSentiment`: a shorter walk is not a step backwards. */
+	sentiment: "good" | "watch" | "neutral";
+	series: BoardCardioPoint[];
+	next: BoardCardioNext;
+}
+
 export interface BoardFrequency {
 	weeks: { start: IsoDate; sessions: number }[];
 	sessions_this_week: number;
@@ -120,6 +184,24 @@ export interface BoardCardio {
 	/** The most recent paced session, and the fastest in the window. Null with no distance. */
 	last: { date: IsoDate; pace_min_mi: number; distance_mi: number } | null;
 	best: { date: IsoDate; pace_min_mi: number; distance_mi: number } | null;
+	/**
+	 * The new array (field report 2026-08-31): one row per cardio activity, the sibling of
+	 * `lifts`.
+	 *
+	 * It hangs here rather than at the top level because `board.cardio` was already an
+	 * object with the weekly bars in it, and turning that key into an array would have been
+	 * a red screen on every phone still running the previous build — the one shape rule this
+	 * repo has (docs/agent-brief.md: "keep response shapes stable for screens already
+	 * built"). `lifts` narrowing to strength is safe in the same way round: an older app
+	 * draws one row fewer, which is the fix.
+	 */
+	activities: BoardCardioRow[];
+	/**
+	 * True when a goal named the weekly minutes, rather than the WHO's 150 standing in. It
+	 * is the difference between a section with nothing in it and a section a user asked for
+	 * and has not fed yet — the first is hidden, the second says so quietly.
+	 */
+	target_stated: boolean;
 }
 
 export interface BoardBody {
@@ -195,6 +277,114 @@ export function sentimentOf(feature: ExerciseFeature, direction: LoadDirection):
 	if (feature.trend_lb == null || feature.trend_lb === 0) return "neutral";
 	const better = direction === "assistance" ? feature.trend_lb < 0 : feature.trend_lb > 0;
 	return better ? "good" : "watch";
+}
+
+// ---------------------------------------------------------------------------
+// Cardio words
+// ---------------------------------------------------------------------------
+
+/** Which section a logged exercise belongs in. The activity's own category decides. */
+export function sectionOf(feature: ExerciseFeature): "lifts" | "cardio" | "none" {
+	if (feature.category === "cardio") return "cardio";
+	// Stretching progresses by neither a plate nor a weekly minute; the ledger has it.
+	if (feature.category === "mobility") return "none";
+	// Nothing said. The same honest guess `isCardio` makes about an uncategorised row —
+	// minutes with no sets is cardio-shaped — with a load ruling it out, because a number
+	// in pounds is a lift's number whatever else the row is missing.
+	if (feature.category == null) return looksLikeCardio(feature) ? "cardio" : "lifts";
+	return "lifts";
+}
+
+function looksLikeCardio(feature: ExerciseFeature): boolean {
+	return (
+		feature.sessions.every((session) => session.sets == null && session.load_lb == null) &&
+		feature.sessions.some((session) => (session.duration_min ?? 0) > 0)
+	);
+}
+
+/** Minutes per mile, when both halves of the fraction are there. */
+export function paceMinMi(durationMin: number | null, distanceMi: number | null): number | null {
+	if (durationMin == null || durationMin <= 0) return null;
+	if (distanceMi == null || distanceMi <= 0) return null;
+	return round(durationMin / distanceMi, 2);
+}
+
+/** "20 min · 1.2 mi · 16.7 min/mi" — as much of it as the session actually measured. */
+export function cardioSummary(point: BoardCardioPoint): string {
+	const parts = [
+		point.duration_min == null ? null : `${Math.round(point.duration_min)} min`,
+		point.distance_mi == null ? null : `${number(point.distance_mi)} mi`,
+		point.pace_min_mi == null ? null : `${number(point.pace_min_mi)} min/mi`,
+	].filter((part): part is string => part != null);
+	return parts.length === 0 ? "—" : parts.join(" · ");
+}
+
+/**
+ * What has changed over the window — pace first, because it is the one cardio figure that
+ * means the same thing on every session. Minutes are reported and not judged: see below.
+ */
+export function cardioDelta(series: readonly BoardCardioPoint[]): { text: string | null; sentiment: "good" | "watch" | "neutral" } {
+	if (series.length < 2) return { text: series.length === 1 ? "First session" : null, sentiment: "neutral" };
+	const first = series[0] as BoardCardioPoint;
+	const last = series[series.length - 1] as BoardCardioPoint;
+
+	if (first.pace_min_mi != null && last.pace_min_mi != null) {
+		const moved = round(last.pace_min_mi - first.pace_min_mi);
+		if (moved === 0) return { text: "Same pace as four weeks ago", sentiment: "neutral" };
+		// Fewer minutes per mile is faster, so the sign is the other way round from a load.
+		return moved < 0
+			? { text: `${number(Math.abs(moved))} min/mi faster`, sentiment: "good" }
+			: { text: `${number(moved)} min/mi slower`, sentiment: "watch" };
+	}
+
+	if (first.duration_min != null && last.duration_min != null) {
+		const moved = round(last.duration_min - first.duration_min);
+		if (moved === 0) return { text: "Same as four weeks ago", sentiment: "neutral" };
+		// Neutral on purpose. A shorter walk on a Tuesday is not a step backwards: cardio
+		// volume is a WEEKLY quantity, the weekly bars above already say whether the week is
+		// short, and colouring one session amber for being twenty minutes instead of thirty
+		// would be judging the user for a fact the plan does not measure that way.
+		return { text: `${moved > 0 ? "+" : "−"}${number(Math.abs(moved))} min in four weeks`, sentiment: "neutral" };
+	}
+
+	return { text: null, sentiment: "neutral" };
+}
+
+/**
+ * The next step for one cardio activity: the week's shortfall against the plan's target,
+ * capped at +10 % on this activity's own last session, in the words of a row.
+ *
+ * The number is `cardioNextMinutes` — the same function the brief's cardio line is made of
+ * — so the tab and the coach cannot disagree about how fast cardio is allowed to grow. What
+ * this does not do is ask `prescribeLoads`, whose cardio branch reports the last duration
+ * and says so in its own `why` ("cardio volume follows the week, not the session"). That is
+ * a description of what happened; a board row has to say what to do next.
+ */
+export function cardioNextFor(feature: ExerciseFeature, cardio: CardioFeature): BoardCardioNext {
+	const last = feature.last.duration_min;
+	const said = last == null ? null : `${Math.round(last)} min`;
+	const week = `${cardio.minutes_this_week} of ${cardio.weekly_target_min} min this week`;
+
+	const minutes = cardioNextMinutes(cardio.short_by_min, last);
+	if (minutes == null) {
+		return {
+			rule: "cardio",
+			minutes: null,
+			text: said ? `Hold ${said}` : "Minutes follow the week, not the session",
+			eta: null,
+			why: `${week} — the week is already there, so there is nothing to add.`,
+		};
+	}
+
+	return {
+		rule: "cardio",
+		minutes,
+		text: `${minutes} min next`,
+		eta: null,
+		why: said
+			? `${week}, ${cardio.short_by_min} short. One safe step on the last ${said} is ${minutes} min (+10 %, capped by the shortfall).`
+			: `${week}, ${cardio.short_by_min} short. Nothing timed yet, so ${minutes} min is where this starts.`,
+	};
 }
 
 /** Typical days between this exercise's sessions — how the "in ~N weeks" is arrived at. */
@@ -335,7 +525,7 @@ function sessionsAtTarget(feature: ExerciseFeature, target: { sets: number | nul
 // The board
 // ---------------------------------------------------------------------------
 
-function thinned(points: BoardPoint[]): BoardPoint[] {
+function thinned<T>(points: T[]): T[] {
 	if (points.length <= MAX_SERIES_POINTS) return points;
 	// Newest kept: a sparkline is about where the load is going, not where it started.
 	return points.slice(points.length - MAX_SERIES_POINTS);
@@ -365,6 +555,8 @@ export interface BuildBoardInput {
 	/** Catalogue ids by lower-cased exercise name, so a row can open its sheet. */
 	exerciseIds?: Record<string, string | null>;
 	trainingDaysTarget?: number | null;
+	/** True when a goal named the weekly cardio minutes rather than the WHO default. */
+	cardioTargetStated?: boolean;
 }
 
 /** Features + prescriptions in, board out. No SQL, no clock, no provider. */
@@ -374,6 +566,7 @@ export function buildBoard({
 	catalog = EMPTY_CATALOG_FACTS,
 	exerciseIds = {},
 	trainingDaysTarget = null,
+	cardioTargetStated = false,
 }: BuildBoardInput): TrainingBoard {
 	const gap = gapRule(features.days_since_last_workout);
 	// The coach's own call, with the coach's own inputs. Reference loads are deliberately
@@ -388,7 +581,7 @@ export function buildBoard({
 		prescriptions.map((item) => [item.exercise.trim().toLowerCase(), item])
 	);
 
-	const lifts: BoardLift[] = features.exercises.map((feature) => {
+	const lifts: BoardLift[] = features.exercises.filter((feature) => sectionOf(feature) === "lifts").map((feature) => {
 		const key = feature.exercise.trim().toLowerCase();
 		const direction = catalog.loadDirection[key] ?? "resistance";
 		const prescription = byExercise.get(key);
@@ -427,12 +620,71 @@ export function buildBoard({
 		};
 	});
 
+	const distances = distanceIndex(facts);
+	const cardio: BoardCardioRow[] = features.exercises
+		.filter((feature) => sectionOf(feature) === "cardio")
+		.map((feature) => cardioRowOf(feature, features.cardio, distances, exerciseIds));
+
 	return {
 		date: facts.date,
 		lifts,
 		frequency: frequencyOf(facts, features, trainingDaysTarget),
-		cardio: cardioOf(facts, features),
+		cardio: cardioOf(facts, features, cardio, cardioTargetStated),
 		body: bodyOf(facts, features),
+	};
+}
+
+/** Miles per exercise per day, summed — the one figure `ExerciseFeature` does not carry. */
+function distanceIndex(facts: DayFacts): Map<string, number> {
+	const index = new Map<string, number>();
+	for (const activity of facts.activities) {
+		const name = activity.exercise?.trim().toLowerCase();
+		if (!name || activity.distance_mi == null) continue;
+		const key = `${name}|${activity.date}`;
+		index.set(key, (index.get(key) ?? 0) + activity.distance_mi);
+	}
+	return index;
+}
+
+function cardioRowOf(
+	feature: ExerciseFeature,
+	cardio: CardioFeature,
+	distances: Map<string, number>,
+	exerciseIds: Record<string, string | null>
+): BoardCardioRow {
+	const key = feature.exercise.trim().toLowerCase();
+	// Oldest first: a chart is read left to right.
+	const points: BoardCardioPoint[] = [...feature.sessions].reverse().map((session) => {
+		const distance = distances.get(`${key}|${session.date}`) ?? null;
+		return {
+			date: session.date,
+			duration_min: session.duration_min == null ? null : round(session.duration_min),
+			distance_mi: distance == null ? null : round(distance, 2),
+			pace_min_mi: paceMinMi(session.duration_min, distance),
+		};
+	});
+	// The delta reads the whole window and the sparkline reads the tail of it: "in four
+	// weeks" has to be four weeks even when only the last twelve dots are drawn.
+	const delta = cardioDelta(points);
+	const last = points[points.length - 1] as BoardCardioPoint;
+	const paces = points.map((point) => point.pace_min_mi).filter((pace): pace is number => pace != null);
+
+	return {
+		exercise: feature.exercise,
+		exercise_id: exerciseIds[key] ?? null,
+		category: feature.category,
+		last_date: feature.last.date,
+		days_since: feature.days_since,
+		sessions: feature.sessions.length,
+		duration_min: last.duration_min,
+		distance_mi: last.distance_mi,
+		pace_min_mi: last.pace_min_mi,
+		best_pace_min_mi: paces.length === 0 ? null : Math.min(...paces),
+		summary_text: cardioSummary(last),
+		delta_text: delta.text,
+		sentiment: delta.sentiment,
+		series: thinned(points),
+		next: cardioNextFor(feature, cardio),
 	};
 }
 
@@ -470,7 +722,12 @@ function frequencyOf(
 	};
 }
 
-function cardioOf(facts: DayFacts, features: CoachFeatures): BoardCardio {
+function cardioOf(
+	facts: DayFacts,
+	features: CoachFeatures,
+	activities: BoardCardioRow[],
+	targetStated: boolean
+): BoardCardio {
 	const end = facts.date;
 	const window = facts.activities.filter(
 		(activity) => inLastWeeks(activity.date, end, BOARD_WEEKS) && isCardio(activity)
@@ -503,14 +760,14 @@ function cardioOf(facts: DayFacts, features: CoachFeatures): BoardCardio {
 		short_by_min: features.cardio.short_by_min,
 		last,
 		best,
+		activities,
+		target_stated: targetStated,
 	};
 }
 
 /** Minutes per mile for one activity, when it has both halves of the fraction. */
 function paceOf(activity: FactActivity): number | null {
-	if (activity.distance_mi == null || activity.distance_mi <= 0) return null;
-	if (activity.duration_min == null || activity.duration_min <= 0) return null;
-	return round(activity.duration_min / activity.distance_mi, 2);
+	return paceMinMi(activity.duration_min, activity.distance_mi);
 }
 
 function bodyOf(facts: DayFacts, features: CoachFeatures): BoardBody {
@@ -580,7 +837,14 @@ export async function loadBoard(db: Queryable, userId: string, { tzOffsetMin, no
 		names.map((name) => [name.trim().toLowerCase(), matches.get(name.trim().toLowerCase())?.id ?? null])
 	);
 
-	return buildBoard({ features, facts, catalog, exerciseIds, trainingDaysTarget });
+	return buildBoard({
+		features,
+		facts,
+		catalog,
+		exerciseIds,
+		trainingDaysTarget,
+		cardioTargetStated: cardioTargetMin != null,
+	});
 }
 
 /** Re-exported so a caller can say what "this week" means without importing features.ts. */

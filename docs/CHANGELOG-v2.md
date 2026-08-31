@@ -87,6 +87,129 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-08-31 — a treadmill between two barbells, and three charts of nothing (`fix-board-split`)
+
+Three screenshots from the phone, all of them the same mistake in different clothes: a
+screen drawing a shape it had no numbers for.
+
+#### A — Lifts and Cardio are two sections (`services/training/board.ts`)
+
+**"Incline Treadmill Walk · 20 min next"** was a row in the **Lifts** section, between two
+barbell rows. The placement is the smaller half of it. The larger half is that "20 min next"
+is not a next step at all — it is last time, repeated, because `prescribeLoads`' cardio
+branch reports `last.duration_min` and says so in its own `why`: *cardio volume follows the
+week, not the session.* That is a true sentence about a number that had no business being
+called "next".
+
+So the board splits, **by the activity's own category**:
+
+- **`lifts`** keeps its field name and its shape, and now holds strength only. An assisted
+  machine is still a lift (it has a load, and less help is progress); "other" and an
+  uncategorised row with a load are lifts too.
+- **`cardio.activities`** is the new array — one row per cardio activity, carrying the last
+  session's `duration_min`, its `distance_mi` and `pace_min_mi` when anybody measured them,
+  the fastest pace in the window, a trend series and a `summary_text` of *"20 min · 1.2 mi ·
+  16.7 min/mi"*. It is **not** a `BoardLift` with the pounds left blank: there is no load, set
+  or rep on the type, so nothing on a cardio row can print "lb" by accident.
+- **Mobility goes in neither.** A stretch has no load to progress and no weekly target to
+  chase. What it has is a place on the coverage ledger, which already says how long it has
+  been.
+- An **uncategorised** row is read by its shape — minutes with no sets and no load is
+  cardio, the same honest guess `isCardio` already makes for the weekly bars.
+
+**The next step is the week, not the session.** `cardioNextMinutes(shortByMin, lastMinutes)`
+is new in `services/coach/rules.ts` and both callers use it: the brief's cardio line and the
+board's row. The shortfall against the plan's weekly target, capped at **+10 % on this
+activity's own last session**, floored at ten minutes. The field row now reads **"22 min
+next"** (20 min logged, 130 short of 150); a week already at its target reads **"Hold 20
+min"**.
+
+#### B — the Progress tab, in two sections
+
+**Lifts** and **Cardio**, each with its own units. A cardio row draws minutes, miles and a
+pace and never a pound; its sparkline is minutes. The delta line judges **pace only** —
+"1 min/mi faster" is green — and reports minutes without a verdict, because a shorter walk on
+a Tuesday is not a step backwards: cardio volume is a weekly quantity and the weekly bars
+above are where a short week is actually said.
+
+**Cardio is hidden entirely** when there is nothing in it and nobody asked for any: a section
+of zeroes on the screen of somebody who lifts and does not run is the app inventing a
+shortfall. When a *goal* named the weekly minutes (`cardio.target_stated`) and nothing has
+been logged, it says so in one quiet line instead.
+
+#### C — one weigh-in is not a flat line (`lib/progress-sections.ts`)
+
+A goal with a single weigh-in drew **110 px of empty box** with a dashed target across it and
+**"No movement yet"** underneath. Nothing had moved because nothing *can* move with one
+point, and the sentence blamed the user for arithmetic.
+
+- Under two readings the chart is `sparse`: a **44 px strip**, the dot against its target, no
+  room reserved for a projection that cannot be drawn. `TrendLine` now marks a series of one
+  finite value with a dot — a path with a single moveto draws nothing.
+- **"No movement yet" is replaced by what was measured and what to do**: *"One weigh-in so
+  far (212.0 lb · Mon, Aug 31). Weigh in a few mornings and your trend appears."* The nouns
+  come from the measure — weigh-ins for `body_weight`, sessions for a lift, runs for a pace,
+  days for the eating measures, readings for the Health ones.
+- With **no readings at all**: no chart, and *"Log a weigh-in to start the line."*
+
+#### D — a bar with no target is not a bar (`app/day/[date].tsx`)
+
+After the profile was wiped, the Eating card drew three full-width **empty grooves**: grams ÷
+a target nobody set is a zero-width fill, and an empty bar reads as *nothing eaten* rather
+than as *nothing set*. A macro with no target now draws **no track at all** — the label and
+the grams, which are measured — and the group carries one quiet line: *"No targets set — tell
+me your protein and carb aims and these become bars."* Mixed is normal and reads as *"No
+target for carbs and fat — …"*, with protein keeping its bar.
+
+**Decisions**
+
+- **The new array hangs off `cardio` rather than replacing it.** `board.cardio` was already
+  an object with the weekly bars in it, and turning that key into an array would be a red
+  screen on every phone still on the previous build (`docs/agent-brief.md`: keep response
+  shapes stable for screens already built). `lifts` narrowing to strength is safe the other
+  way round — an older app simply draws one row fewer, which *is* the fix. `activities` and
+  `target_stated` are optional on the app's type for one release: an older server not sending
+  them is not the same as sending an empty list.
+- **The board rounds its cardio step to the minute; the brief still rounds to five.** A
+  session plan is written in fives; a row about one treadmill is not, and "22 min next"
+  rounded to 20 is the progression quietly not happening. Both numbers come out of the same
+  function, so they cannot disagree about the rate.
+- **`prescribeLoads` is unchanged** and still emits its cardio prescription for the coach.
+  The board no longer reads it: a description of what happened is not a next step.
+- **The zero-reading line is only the action.** The standing line two rows up already says
+  "Nothing measured yet"; saying it twice on one card is the empty-bar problem in words.
+- No new dependencies. No migration. No model-facing schema changed.
+
+**Tests** — 613 passing, 2 skipped in `backend` (was 600/2); 209 passing in the app (was 195).
+
+- `src/services/training/board.test.ts` (+12): the mixed fixture split — assisted chin-ups
+  and bench in `lifts`, a walk and a run in `cardio.activities`, yoga in neither and on the
+  ledger; an uncategorised row read by its shape, with a load ruling it out; a row's minutes,
+  distance, pace and `summary_text` with no "lb" in it, and the same row with no distance at
+  all; pace judged and minutes not; the +10 % step (`22 min next`), the hold, the cap at the
+  shortfall, the ten-minute floor, the half-hour start for a row nothing has timed; and the
+  board's step against `buildRules`' own cardio line.
+- `src/app.test.ts` (+1, one amended): the run out of `lifts` and into `cardio.activities`
+  over the wire, with its 33-minute step and `target_stated: false`.
+- `__tests__/progress.test.tsx` (+8): the cardio row drawn in its own card, out of the lifts,
+  with "22 min next" and no pound anywhere in it; the section hidden on an account with no
+  cardio and no cardio goal; the quiet line when a goal asked; the one-weigh-in card on a
+  44 px strip with its explanatory line; the no-reading card with no chart; and two readings
+  unchanged at 110 px.
+- `__tests__/progress-sections.test.ts` (+4): the sparse chart and its `projection` of nulls;
+  the wording per measure; the no-reading line; and the two-point card untouched.
+- `__tests__/day.test.tsx` (+3): the bar when a target exists, no track and one hint line when
+  none does, and the mixed case naming carbs and fat.
+
+**Deferred**
+
+- **Cardio rows have no eta.** A lift's hold can say "~1–2 wks" because the sessions to go are
+  countable; cardio's horizon is the week itself, which the bars already draw.
+- **`best_pace_min_mi` is carried and not yet drawn.** The section's own "best" line covers
+  the account; a per-row personal best is a design question, not a bug.
+- **Nothing reconciles a walk logged as "strength".** The split trusts the category on the
+  row; a miscategorised activity is a correction, and corrections have a home now.
+
 ### 2026-08-31 — 398 g of carbohydrate, and a correction nobody kept (`wp-meal-accuracy`)
 
 Photographed and spoken into the Log sheet: tuna, two eggs, a quarter of an onion, one

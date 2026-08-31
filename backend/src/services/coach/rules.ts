@@ -477,6 +477,27 @@ export function recoveryRule(muscles: readonly MuscleFeature[]): RecoveryRule {
 	};
 }
 
+/**
+ * The next cardio session's minutes: the week's shortfall, capped at one safe step on the
+ * last session (+10 %), floored so that nothing shorter than a walk is ever "prescribed".
+ * Null when the week is already at its target — there is nothing to step toward.
+ *
+ * One function, two callers, for the same reason `prescribeLoads` has two: the brief says
+ * how long today's cardio should be and the training board says it on the row for the
+ * machine it is about (services/training/board.ts). If they ever disagreed it would be a
+ * bug in here rather than a difference of opinion between two screens.
+ *
+ * Rounded to the minute. `cardioRule` rounds its own answer to the nearest five afterwards,
+ * because a session plan is written in fives and a row about one treadmill is not: "22 min
+ * next" is the step the +10 % actually asks for, and rounding it to 20 is the progression
+ * quietly not happening.
+ */
+export function cardioNextMinutes(shortByMin: number, lastMinutes: number | null): number | null {
+	if (shortByMin <= 0) return null;
+	const ceiling = lastMinutes == null ? DEFAULT_CARDIO_MINUTES : Math.ceil(lastMinutes * CARDIO_GROWTH);
+	return Math.max(MIN_CARDIO_MINUTES, Math.min(Math.round(shortByMin), ceiling));
+}
+
 /** "Cardio prescribed by weekly minutes vs the plan, not by yesterday." */
 export function cardioRule(features: CoachFeatures): CardioRule {
 	const { cardio } = features;
@@ -489,8 +510,8 @@ export function cardioRule(features: CoachFeatures): CardioRule {
 	const base = features.exercises.find((exercise) => exercise.category === "cardio")?.last.duration_min ?? null;
 	// One session's safe step: +10 % on what they last did, and never the whole shortfall
 	// at once if that would be a jump (concept-v2's cardio rate).
-	const ceiling = base == null ? DEFAULT_CARDIO_MINUTES : Math.max(MIN_CARDIO_MINUTES, round5(base * CARDIO_GROWTH));
-	const minutes = Math.max(MIN_CARDIO_MINUTES, Math.min(round5(cardio.short_by_min), ceiling));
+	const step = cardioNextMinutes(cardio.short_by_min, base) as number;
+	const minutes = Math.max(MIN_CARDIO_MINUTES, round5(step));
 	return {
 		minutes_today: minutes,
 		text: `Cardio: ${cardio.minutes_this_week} of ${cardio.weekly_target_min} min this week, ${cardio.short_by_min} short. If today includes cardio, prescribe ${minutes} min — the shortfall capped at one safe step (+10 % on the last session).`,

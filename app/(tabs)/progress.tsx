@@ -31,7 +31,7 @@ import {
 } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, SPACE, TABULAR } from '@/lib/theme';
-import type { BoardLift, GoalRecord, GoalWithProgress, TrainingBoard } from '@/lib/types';
+import type { BoardCardioRow, BoardLift, GoalRecord, GoalWithProgress, TrainingBoard } from '@/lib/types';
 
 // Progress — "what am I chasing, and where do I stand" (user decision 2026-08-31).
 //
@@ -41,11 +41,13 @@ import type { BoardLift, GoalRecord, GoalWithProgress, TrainingBoard } from '@/l
 //
 //   1. **The goals**, each with where it started, where it is, where it finishes, and
 //      whether the rate gets there by the day the user named.
-//   2. **The lifts board** — one row per regularly logged exercise, whether or not any
-//      goal is about it, with the next step from the SAME progression engine the coach
-//      uses (`GET /api/training/board` → services/coach/rules.ts).
+//   2. **The lifts board** — one row per regularly logged *strength* exercise, whether or
+//      not any goal is about it, with the next step from the SAME progression engine the
+//      coach uses (`GET /api/training/board` → services/coach/rules.ts).
 //   3. **How often** you train, and what you have been training.
-//   4. **Cardio** against the plan's intent.
+//   4. **Cardio** — its own rows, in minutes and miles, and the week against the plan's
+//      intent. Split out of the lifts board on 2026-08-31: a treadmill walk was drawn
+//      between two barbell rows, and the two progress by different arithmetic.
 //   5. **The body**, when no weight goal already owns that line.
 //
 // The plan the coach reads — how you train, how you eat, constraints, the account — is not
@@ -193,6 +195,10 @@ export default function Progress() {
   );
 }
 
+/** The goal card's chart, and what it collapses to with one reading and no trend. */
+const FULL_CHART = 110;
+const SPARSE_CHART = 44;
+
 /** No goal is a legitimate state, not an error (concept-v2 §Goals). */
 function NoGoal({ onTell }: { onTell: () => void }) {
   return (
@@ -299,15 +305,23 @@ function GoalBlock({
       </Sub>
 
       {card.chart ? (
-        <View style={{ marginTop: 14 }}>
+        <View
+          testID={`goal-chart-${goal.id}`}
+          style={{ marginTop: 14, height: card.chart.sparse ? SPARSE_CHART : FULL_CHART }}>
           <TrendLine
-            height={110}
+            height={card.chart.sparse ? SPARSE_CHART : FULL_CHART}
             target={card.chart.target}
-            series={[
-              { values: card.chart.values, color: card.judge ? C.accent : C.ink, width: 2 },
-              // The dotted continuation: where this rate lands, not a promise.
-              { values: card.chart.projection, color: C.dim, width: 1.5, dashed: true },
-            ]}
+            series={
+              card.chart.sparse
+                ? // One reading: the dot and the target it is measured against. There is no
+                  // projection from a single point and no reason to reserve the room for one.
+                  [{ values: card.chart.values, color: card.judge ? C.accent : C.ink, width: 2 }]
+                : [
+                    { values: card.chart.values, color: card.judge ? C.accent : C.ink, width: 2 },
+                    // The dotted continuation: where this rate lands, not a promise.
+                    { values: card.chart.projection, color: C.dim, width: 1.5, dashed: true },
+                  ]
+            }
           />
         </View>
       ) : null}
@@ -553,10 +567,24 @@ function Frequency({ board, judge }: { board: TrainingBoard | null; judge: boole
   );
 }
 
+/**
+ * Cardio, which used to be half of the Lifts section (field report 2026-08-31: an Incline
+ * Treadmill Walk reading "20 min next" sat between two barbell rows). Its own section, its
+ * own rows, its own units: minutes, miles and a pace, and never a pound.
+ *
+ * Hidden entirely when there is nothing in it *and* nobody asked for any. A section of
+ * zeroes on the screen of somebody who lifts and does not run is the app inventing a
+ * shortfall — but a user whose goal names weekly minutes has asked the question, and for
+ * them an empty section is an answer.
+ */
 function Cardio({ board, judge }: { board: TrainingBoard | null; judge: boolean }) {
   const cardio = board?.cardio ?? null;
+  const rows = cardio?.activities ?? [];
   const columns = cardio ? cardioColumns(cardio.weeks, cardio.weekly_target_min, judge) : null;
-  const nothing = !cardio || cardio.weeks.every((week) => week.minutes === 0);
+  const noMinutes = !cardio || cardio.weeks.every((week) => week.minutes === 0);
+  const nothing = noMinutes && rows.length === 0;
+
+  if (nothing && !cardio?.target_stated) return null;
 
   return (
     <Section
@@ -564,35 +592,93 @@ function Cardio({ board, judge }: { board: TrainingBoard | null; judge: boolean 
       summary={cardio && !nothing ? `${cardio.minutes_this_week} of ${cardio.weekly_target_min} min` : null}>
       {nothing ? (
         <Card testID="cardio-empty">
-          <Sub>No cardio logged in the last eight weeks.</Sub>
+          <Sub>
+            Nothing logged yet — {cardio!.weekly_target_min} min a week is what the goal asks for.
+          </Sub>
         </Card>
       ) : (
-        <Card testID="cardio">
-          <Eyebrow>Minutes a week</Eyebrow>
-          <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 4 }}>
-            <Disp size={30} style={TABULAR}>
-              {cardio!.minutes_this_week}
-            </Disp>
-            <Sub style={{ marginLeft: 6, fontFamily: FONT.medium, fontSize: 12 }}>
-              of {cardio!.weekly_target_min} min this week
-            </Sub>
-          </View>
-          {columns ? (
-            <View style={{ marginTop: 12 }}>
-              <Columns columns={columns.columns} color={judge ? C.accent : C.mute} height={70} />
+        <>
+          <Card testID="cardio">
+            <Eyebrow>Minutes a week</Eyebrow>
+            <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 4 }}>
+              <Disp size={30} style={TABULAR}>
+                {cardio!.minutes_this_week}
+              </Disp>
+              <Sub style={{ marginLeft: 6, fontFamily: FONT.medium, fontSize: 12 }}>
+                of {cardio!.weekly_target_min} min this week
+              </Sub>
             </View>
+            {columns ? (
+              <View style={{ marginTop: 12 }}>
+                <Columns columns={columns.columns} color={judge ? C.accent : C.mute} height={70} />
+              </View>
+            ) : null}
+            {cardio!.last ? (
+              <Sub testID="cardio-pace" style={[{ marginTop: 12 }, TABULAR]}>
+                Last: {cardio!.last.pace_min_mi.toFixed(1)} min/mi over {cardio!.last.distance_mi} mi
+                {cardio!.best && cardio!.best.date !== cardio!.last.date
+                  ? ` · best ${cardio!.best.pace_min_mi.toFixed(1)}`
+                  : ''}
+              </Sub>
+            ) : null}
+          </Card>
+          {rows.length > 0 ? (
+            <Card style={{ marginTop: 10, paddingVertical: 4 }} testID="cardio-board">
+              {rows.map((row, index) => (
+                <CardioRow key={row.exercise} row={row} last={index === rows.length - 1} />
+              ))}
+            </Card>
           ) : null}
-          {cardio!.last ? (
-            <Sub testID="cardio-pace" style={[{ marginTop: 12 }, TABULAR]}>
-              Last: {cardio!.last.pace_min_mi.toFixed(1)} min/mi over {cardio!.last.distance_mi} mi
-              {cardio!.best && cardio!.best.date !== cardio!.last.date
-                ? ` · best ${cardio!.best.pace_min_mi.toFixed(1)}`
-                : ''}
-            </Sub>
-          ) : null}
-        </Card>
+        </>
       )}
     </Section>
+  );
+}
+
+/** A lift's row, in cardio's units. Minutes, distance and pace — there is no load here. */
+function CardioRow({ row, last }: { row: BoardCardioRow; last: boolean }) {
+  const router = useRouter();
+  const values = row.series
+    .map((point) => point.duration_min)
+    .filter((minutes): minutes is number => minutes != null);
+  const color = row.sentiment === 'good' ? C.good : row.sentiment === 'watch' ? C.accent : C.mute;
+
+  return (
+    <View
+      testID={`cardio-${row.exercise}`}
+      style={{ paddingVertical: 12, borderBottomWidth: last ? 0 : 1, borderBottomColor: C.line }}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+        <View style={{ flex: 1, paddingRight: 12 }}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`${row.exercise} — how it is done`}
+            onPress={() => openExercise(router, { id: row.exercise_id, name: row.exercise })}
+            style={{ alignSelf: 'flex-start' }}>
+            <Body style={{ textDecorationLine: 'underline', textDecorationColor: C.track }}>
+              {row.exercise}
+            </Body>
+          </Pressable>
+          <Sub testID={`cardio-sub-${row.exercise}`} style={[{ marginTop: 3 }, TABULAR]}>
+            {[row.summary_text, row.days_since === 0 ? 'today' : `${row.days_since}d ago`]
+              .filter(Boolean)
+              .join(' · ')}
+          </Sub>
+          {row.delta_text ? (
+            <Sub testID={`cardio-delta-${row.exercise}`} style={{ marginTop: 3, color }}>
+              {row.delta_text}
+            </Sub>
+          ) : null}
+        </View>
+        {values.length > 0 ? (
+          <View style={{ width: 76, paddingTop: 4 }}>
+            <Sparkline points={values} height={34} color={C.dim} />
+          </View>
+        ) : null}
+      </View>
+      <Sub testID={`cardio-next-${row.exercise}`} style={{ marginTop: 6, color: C.ink }}>
+        {row.next.text}
+      </Sub>
+    </View>
   );
 }
 

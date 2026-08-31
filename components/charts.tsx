@@ -253,6 +253,21 @@ export function TrendLine({
               strokeLinejoin="round"
             />
           ))}
+          {/* A line of one point is a path that draws nothing. One reading is still a fact,
+              so it gets a dot — the same mark the sparkline puts on its latest value. */}
+          {series.map((line, index) => {
+            const at = line.values.findIndex((v) => v != null && Number.isFinite(v));
+            const only = line.values.filter((v) => v != null && Number.isFinite(v)).length === 1;
+            return only ? (
+              <Circle
+                key={`dot-${index}`}
+                cx={x(at)}
+                cy={y(line.values[at] as number)}
+                r={3}
+                fill={line.color ?? C.ink}
+              />
+            ) : null;
+          })}
         </Svg>
       )}
     </View>
