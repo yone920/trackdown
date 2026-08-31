@@ -1,7 +1,7 @@
 import type { Brief, CoachBriefInputs, CoachPort } from "../../ports/coach.js";
 import type { LlmPort } from "../../ports/llm.js";
 import { buildCoachPrompt } from "../../services/coach/prompt.js";
-import { COACH_BRIEF_SCHEMA_NAME, CoachBriefSchema } from "../../services/coach/schema.js";
+import { clampBrief, COACH_BRIEF_SCHEMA_NAME, CoachBriefSchema } from "../../services/coach/schema.js";
 
 // The default CoachPort: one structured call on whichever model LlmPort was built with
 // (COACH_LLM_PROVIDER / LLM_MODEL_COACH — Sonnet by default, per docs/build-plan.md).
@@ -22,18 +22,26 @@ export function createLlmCoach(llm: LlmPort): CoachPort {
 	return {
 		model: llm.model,
 		async brief(inputs: CoachBriefInputs): Promise<Brief> {
-			return llm.parseStructured({
-				system: buildCoachPrompt(inputs),
-				schema: CoachBriefSchema,
-				schemaName: COACH_BRIEF_SCHEMA_NAME,
-				maxTokens: MAX_TOKENS,
-				messages: [
-					{
-						role: "user",
-						content: "What should I do today? Answer from the facts above, and copy the prescribed numbers exactly.",
-					},
-				],
-			});
+			const ask = () =>
+				llm.parseStructured({
+					system: buildCoachPrompt(inputs),
+					schema: CoachBriefSchema,
+					schemaName: COACH_BRIEF_SCHEMA_NAME,
+					maxTokens: MAX_TOKENS,
+					messages: [
+						{
+							role: "user",
+							content: "What should I do today? Answer from the facts above, and copy the prescribed numbers exactly.",
+						},
+					],
+				});
+			try {
+				return clampBrief(await ask());
+			} catch (error) {
+				// One retry: a malformed structured output is usually a one-off sample.
+				console.warn("⚠️  Coach brief failed once, retrying:", error instanceof Error ? error.message.split("\n")[0] : error);
+				return clampBrief(await ask());
+			}
 		},
 	};
 }

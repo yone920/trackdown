@@ -26,7 +26,7 @@ export type WorkoutType = (typeof WORKOUT_TYPES)[number];
 
 const BriefExerciseSchema = z.object({
 	/** The exercise's catalogue name, as it appears in the prescriptions. */
-	name: z.string().trim().min(1).max(60),
+	name: z.string().trim().min(1),
 	/** Copied from the prescription. Null for cardio and bodyweight work. */
 	load_lb: z.number().min(0).max(2000).nullable(),
 	sets: z.number().int().min(1).max(12).nullable(),
@@ -34,18 +34,41 @@ const BriefExerciseSchema = z.object({
 	/** Cardio and holds. Null for a lift. */
 	minutes: z.number().int().min(1).max(300).nullable(),
 	/** One short clause: why this movement, or how to run it. */
-	note: z.string().trim().max(120).nullable(),
+	note: z.string().trim().nullable(),
 });
+
+// Free text carries no maximum: the model occasionally runs a clause long, and a length cap
+// here fails the whole brief AFTER generation (the caps do not reach the decoding grammar).
+// clampBrief() below trims instead — a long note is a trim, never an error.
+const clamp = (value: string, max: number) => (value.length > max ? value.slice(0, max - 1).trimEnd() + "\u2026" : value);
+
+export function clampBrief<T extends {
+	headline: string; why: string; nudge: string;
+	workout: { targets: string[]; exercises: { name: string; note: string | null }[] };
+	nutrition: { ideas: string[]; why: string };
+}>(brief: T): T {
+	brief.headline = clamp(brief.headline, 140);
+	brief.why = clamp(brief.why, 600);
+	brief.nudge = clamp(brief.nudge, 280);
+	brief.workout.targets = brief.workout.targets.map((t) => clamp(t, 40));
+	for (const ex of brief.workout.exercises) {
+		ex.name = clamp(ex.name, 80);
+		if (ex.note) ex.note = clamp(ex.note, 160);
+	}
+	brief.nutrition.ideas = brief.nutrition.ideas.map((i) => clamp(i, 100));
+	brief.nutrition.why = clamp(brief.nutrition.why, 400);
+	return brief;
+}
 
 export const CoachBriefSchema = z.object({
 	/** The title sentence: "Push day — shoulders and back". */
-	headline: z.string().trim().min(1).max(120),
+	headline: z.string().trim().min(1),
 	/** Two or three sentences of reasoning from the facts given. */
-	why: z.string().trim().min(1).max(500),
+	why: z.string().trim().min(1),
 	workout: z.object({
 		type: z.enum(WORKOUT_TYPES),
 		/** Muscle groups or "cardio"/"recovery" — what today is for. */
-		targets: z.array(z.string().trim().min(1).max(30)).max(4),
+		targets: z.array(z.string().trim().min(1)).max(4),
 		/** 4–6 on a training day; empty on a rest day. */
 		exercises: z.array(BriefExerciseSchema).max(6),
 	}),
@@ -54,11 +77,11 @@ export const CoachBriefSchema = z.object({
 		protein_g: z.number().int().min(0).max(500),
 		carbs_max_g: z.number().int().min(0).max(1000).nullable(),
 		/** Two or three meals that fit the diet style. */
-		ideas: z.array(z.string().trim().min(1).max(80)).max(3),
-		why: z.string().trim().min(1).max(300),
+		ideas: z.array(z.string().trim().min(1)).max(3),
+		why: z.string().trim().min(1),
 	}),
 	/** The single most useful thing, in one sentence. */
-	nudge: z.string().trim().min(1).max(240),
+	nudge: z.string().trim().min(1),
 });
 
 export type CoachBriefOutput = z.infer<typeof CoachBriefSchema>;

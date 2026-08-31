@@ -75,7 +75,7 @@ export function coachRouter(pool: pg.Pool, coach: CoachPort, readings: DayReadin
 			if (error instanceof CoachUnavailableError) {
 				// No brief at all and no way to make one: say so rather than 500. The Coach
 				// screen shows the retry, and every other screen is unaffected.
-				res.status(503).json({ error: `The coach is unavailable right now: ${error.message}` });
+				res.status(503).json({ error: `The coach is unavailable right now: ${(error.message.split("\n")[0] ?? error.message).slice(0, 160)}` });
 				return;
 			}
 			throw error;

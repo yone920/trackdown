@@ -251,3 +251,5 @@ export function buildCoachPrompt(inputs: CoachBriefInputs): string {
 
 	return `${SYSTEM}\n\n${sections.filter(Boolean).join("\n\n")}`;
 }
+
+// (clamping note: free text is trimmed post-parse; see schema.clampBrief)
