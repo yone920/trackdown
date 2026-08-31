@@ -87,7 +87,9 @@ describe('ConfirmCard', () => {
     expect(screen.getByTestId('activity-reps-0')).toHaveTextContent('10');
     expect(screen.getByTestId('activity-load-0')).toHaveTextContent('40');
     expect(screen.getByText(/from the photo/)).toBeTruthy();
-    expect(screen.getByText('high')).toBeTruthy();
+    // The chip says what it is about. A bare "HIGH" beside a meal was read as "high
+    // calories" by a real user (2026-08-31); only the low one is asking for anything.
+    expect(screen.getAllByText('High confidence').length).toBeGreaterThan(0);
   });
 
   it('leaves out the facts nobody read, rather than drawing a blank field', () => {
@@ -231,5 +233,16 @@ describe('the machine, and the offer to name the movement', () => {
     };
     render(<ConfirmCard result={named} onChange={noop} />);
     expect(screen.queryByTestId('activity-refine-0')).toBeNull();
+  });
+});
+
+describe('the confidence chip says what it is about', () => {
+  it('spells out each level, and asks for the eye only on the low one', () => {
+    render(<ConfirmCard result={{ ...meal, confidence: 'low' }} />);
+    expect(screen.getByText('Low confidence — check me')).toBeTruthy();
+
+    screen.rerender(<ConfirmCard result={{ ...meal, confidence: 'medium' }} />);
+    expect(screen.getByText('Medium confidence')).toBeTruthy();
+    expect(screen.queryByText('Low confidence — check me')).toBeNull();
   });
 });

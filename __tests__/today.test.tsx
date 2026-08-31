@@ -252,7 +252,7 @@ describe('Today', () => {
     expect(screen.getByText('Delete?')).toBeTruthy();
     expect(calls.some((call) => call.method === 'DELETE')).toBe(false);
 
-    fireEvent.press(screen.getByTestId('row-activity-a1-delete-yes'));
+    fireEvent.press(screen.getByTestId('row-activity-a1-delete-confirm'));
     await waitFor(() => expect(screen.getByText('Nothing yet')).toBeTruthy());
 
     expect(calls).toContainEqual({ path: '/api/entries/movement/a1', method: 'DELETE' });
@@ -266,14 +266,15 @@ describe('Today', () => {
     renderToday();
     await waitFor(() => expect(screen.getByText('eggs and toast')).toBeTruthy());
 
-    // Armed, then taken back: nothing is sent.
+    // Armed, then taken back by a scroll — there is no cancel button beside the pill, and
+    // that is the point of the redesign (components/kit.tsx §DeleteControl).
     fireEvent.press(screen.getByTestId('row-meal-m1-delete'));
-    fireEvent.press(screen.getByTestId('row-meal-m1-delete-no'));
+    fireEvent(screen.getByTestId('today-scroll'), 'scrollBeginDrag', { nativeEvent: {} });
     expect(screen.queryByText('Delete?')).toBeNull();
     expect(calls.some((call) => call.method === 'DELETE')).toBe(false);
 
     fireEvent.press(screen.getByTestId('row-meal-m1-delete'));
-    fireEvent.press(screen.getByTestId('row-meal-m1-delete-yes'));
+    fireEvent.press(screen.getByTestId('row-meal-m1-delete-confirm'));
     await waitFor(() => expect(screen.getByText('Nothing eaten yet today.')).toBeTruthy());
     expect(calls).toContainEqual({ path: '/api/entries/meals/m1', method: 'DELETE' });
   });
@@ -342,5 +343,51 @@ describe('Today', () => {
     await waitFor(() => expect(screen.getByText(/700 under/)).toBeTruthy());
     expect(screen.getByText('Log dinner')).toBeTruthy();
     expect(screen.getByText('Weigh in')).toBeTruthy();
+  });
+});
+
+// Reported 2026-08-31: a row read "Lat Pulldown" over "4 × 15 lat pulldown at 60 lb" — the
+// name twice and the numbers about to be shown again. The sub-line is structured facts
+// (lib/row-facts.ts), and the sentence only when it still says something.
+describe('Today — a row never repeats itself', () => {
+  const lift = (over: Partial<DayActivity>): DayActivity => ({
+    id: 'a9',
+    logged_at: '2026-08-30T08:10:00.000Z',
+    description: '4 × 15 lat pulldown at 60 lb',
+    exercise: 'Lat Pulldown',
+    exercise_id: null,
+    equipment: null,
+    category: 'strength',
+    muscle_groups: ['lats'],
+    sets: 4,
+    reps: 15,
+    load_lb: 60,
+    duration_min: null,
+    distance_mi: null,
+    kcal: 90,
+    source: 'manual',
+    confidence: 'high',
+    block_id: null,
+    delta_vs_last: null,
+    evidence: [],
+    ...over,
+  });
+
+  const show = (activity: DayActivity) => {
+    serve({ day: makeDay({ items: { meals: [], activities: [activity], weights: [] }, earned: 90 }) });
+    renderToday();
+  };
+
+  it('prints the facts once, and not the sentence they came from', async () => {
+    show(lift({}));
+    await waitFor(() => expect(screen.getByText('Lat Pulldown')).toBeTruthy());
+    expect(screen.getByText('4 × 15 · 60 lb')).toBeTruthy();
+    expect(screen.queryByText('4 × 15 lat pulldown at 60 lb')).toBeNull();
+  });
+
+  it('keeps the words when they carry something the fields cannot', async () => {
+    show(lift({ description: '4 × 15 lat pulldown at 60 lb, last set was ugly' }));
+    await waitFor(() => expect(screen.getByText('Lat Pulldown')).toBeTruthy());
+    expect(screen.getByText(/last set was ugly/)).toBeTruthy();
   });
 });

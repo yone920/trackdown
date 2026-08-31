@@ -3,11 +3,11 @@ import { router } from 'expo-router';
 import { Pressable, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { IconDays, IconGoals, IconPlus, IconProgress, IconToday, type IconProps } from '@/components/icons';
+import { IconAvatar, IconDays, IconPlus, IconProgress, IconToday, type IconProps } from '@/components/icons';
 import { Eyebrow } from '@/components/type';
-import { C, RADIUS, SPACE } from '@/lib/theme';
+import { C, SPACE } from '@/lib/theme';
 
-// Today · Days · Progress · Goals, 84 high, stroke icons at 1.8, inactive `dim`
+// Today · Days · Progress · You, 84 high, stroke icons at 1.8, inactive `dim`
 // (docs/design-system.md §Tokens). Written by hand rather than configured, because the
 // floating `+` sits above it and the two have to agree about where the bar ends.
 
@@ -15,14 +15,12 @@ const ICONS: Record<string, (p: IconProps) => React.ReactElement> = {
   index: IconToday,
   days: IconDays,
   progress: IconProgress,
-  goals: IconGoals,
 };
 
 const LABELS: Record<string, string> = {
   index: 'Today',
   days: 'Days',
   progress: 'Progress',
-  goals: 'Goals',
 };
 
 export function TabBar({ state, navigation }: BottomTabBarProps) {
@@ -64,6 +62,17 @@ export function TabBar({ state, navigation }: BottomTabBarProps) {
           </Pressable>
         );
       })}
+      {/* You is a stack screen rather than a tab (app/you.tsx): it is one screen deep from
+          two places — this button and the avatar on Today — and nothing about it wants a
+          tab's own navigation stack. The bar still reads Today · Days · Progress · You. */}
+      <Pressable
+        accessibilityRole="button"
+        testID="tab-you"
+        onPress={() => router.push('/you')}
+        style={{ flex: 1, alignItems: 'center', gap: 5 }}>
+        <IconAvatar size={22} color={C.dim} />
+        <Eyebrow style={{ color: C.dim, fontSize: 10, letterSpacing: 1.2 }}>You</Eyebrow>
+      </Pressable>
     </View>
     </View>
   );

@@ -16,6 +16,7 @@ import type {
   GoalsView,
   IsoDate,
   Profile,
+  TrainingBoard,
   WeekView,
 } from './types';
 
@@ -36,7 +37,7 @@ export function localDateKey(d: Date = new Date()): IsoDate {
 
 /** Everything a confirmed log can have changed. One list, so no screen goes stale. */
 export function invalidateAfterLog(qc: ReturnType<typeof useQueryClient>): void {
-  for (const key of ['day', 'week', 'days', 'goals', 'profile', 'coach'])
+  for (const key of ['day', 'week', 'days', 'goals', 'profile', 'coach', 'training'])
     qc.invalidateQueries({ queryKey: [key] });
 }
 
@@ -127,6 +128,21 @@ export function useGoalProgress(id: string | null) {
       api<GoalProgress & { today: IsoDate }>(`/api/goals/${id}/progress`, {
         query: { tz: tzOffsetMin() },
       }),
+  });
+}
+
+/**
+ * GET /api/training/board — one row per regularly-logged exercise, with the coach's own
+ * next step on it, plus frequency, cardio and the weigh-ins (user decision 2026-08-31 —
+ * the Progress tab, training first class).
+ *
+ * A read of what was logged plus one call into the progression rules: no model, nothing
+ * cached on the server, so a tab may fetch it on open.
+ */
+export function useTrainingBoard() {
+  return useQuery({
+    queryKey: ['training', 'board'],
+    queryFn: () => api<TrainingBoard>('/api/training/board', { query: { tz: tzOffsetMin() } }),
   });
 }
 

@@ -9,9 +9,9 @@ import DayLog from '@/app/day/[date]/log';
 import ExerciseSheet from '@/app/exercise/[id]';
 import LogSheet from '@/app/log';
 import Days from '@/app/(tabs)/days';
-import Goals from '@/app/(tabs)/goals';
 import Progress from '@/app/(tabs)/progress';
 import Today from '@/app/(tabs)/index';
+import You from '@/app/you';
 import { STATUS_BAR_MIN } from '@/lib/screen';
 import { makeDay, makeWeek } from './fixtures';
 
@@ -64,6 +64,14 @@ beforeEach(() => {
     if (path === '/api/profile') return Promise.resolve({ id: 'u', stated_at: {}, targets: {} });
     if (path.startsWith('/api/days')) return Promise.resolve({ days: [], next_before: null });
     if (path.startsWith('/api/coach')) return Promise.resolve({ brief: null, nudge: null, goals: [] });
+    if (path === '/api/training/board')
+      return Promise.resolve({
+        date: '2026-08-29',
+        lifts: [],
+        frequency: { weeks: [], sessions_this_week: 0, average_per_week: 0, training_days_target: null, muscles: [] },
+        cardio: { weeks: [], minutes_this_week: 0, weekly_target_min: 150, short_by_min: 150, last: null, best: null },
+        body: { latest: null, latest_date: null, avg_7d: null, trend_per_week: null, series: [] },
+      });
     return Promise.resolve(null);
   });
 });
@@ -73,7 +81,7 @@ const SCREENS: [name: string, Screen: () => React.ReactElement, testID: string][
   ['Today', Today, 'today-scroll'],
   ['Days', Days, 'days-list'],
   ['Progress', Progress, 'progress-scroll'],
-  ['Goals', Goals, 'goals-scroll'],
+  ['You', You, 'you-scroll'],
   ['Coach', Coach, 'coach-scroll'],
   ['Log', LogSheet, 'log-scroll'],
   ['Day', Day, 'day-scroll'],

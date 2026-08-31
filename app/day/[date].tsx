@@ -11,11 +11,12 @@ import {
   IconHeart,
   IconShare,
 } from '@/components/icons';
-import { Card, Chip, GroupHeading, Row, Section, Skeleton, SkeletonLines } from '@/components/kit';
+import { Card, Chip, dismissDeletes, GroupHeading, Row, Section, Skeleton, SkeletonLines } from '@/components/kit';
 import { ReadingCard } from '@/components/reading-card';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { addDays } from '@/lib/days-weeks';
 import { openExercise } from '@/lib/exercise';
+import { activitySubLine } from '@/lib/row-facts';
 import { clock, dateLabel, grams, kcal, slotLabel } from '@/lib/format';
 import { localDateKey, useDay, useDeleteRecord } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
@@ -56,6 +57,7 @@ export default function Day() {
     <ScrollView
       testID="day-scroll"
       style={{ flex: 1, backgroundColor: C.bg }}
+      onScrollBeginDrag={dismissDeletes}
       contentContainerStyle={{
         paddingHorizontal: SPACE.screen,
         paddingTop: insets.top + 8,
@@ -384,9 +386,6 @@ function ActivityRow({
   onDelete?: () => void;
 }) {
   const router = useRouter();
-  const load = activity.load_lb == null ? null : `${activity.load_lb} lb`;
-  const shape =
-    activity.sets != null && activity.reps != null ? `${activity.sets} × ${activity.reps}` : null;
   return (
     <Row
       testID={activity.id ? `row-activity-${activity.id}` : undefined}
@@ -398,15 +397,9 @@ function ActivityRow({
           : undefined
       }
       // The machine belongs on this line and not in the title: the movement is what the
-      // week is compared on, and the kit is what the row is recognised by.
-      sub={[
-        activity.equipment,
-        shape,
-        load,
-        activity.duration_min == null ? null : `${activity.duration_min} min`,
-      ]
-        .filter(Boolean)
-        .join(' · ')}
+      // week is compared on, and the kit is what the row is recognised by. Structured
+      // facts only — never the raw sentence the title already says (lib/row-facts.ts).
+      sub={activitySubLine(activity)}
       right={activity.kcal > 0 ? kcal(activity.kcal) : null}
       onPress={onPress}
       onDelete={onDelete}

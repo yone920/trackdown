@@ -163,3 +163,62 @@ describe('correcting a row that is already in the log', () => {
     });
   });
 });
+
+// Reported 2026-08-31: the record screen quoted the words and showed none of the photos
+// the record was made from — half the evidence. And the order was wrong: the quote (which
+// can be a paragraph) sat above the thing the user came to look at.
+describe('the record, and how it came to be recorded', () => {
+  const WITH_PHOTOS: DayLogEntry = {
+    ...ENTRY,
+    icon: 'camera',
+    evidence: [
+      { id: 'ev-1', kind: 'photo', text: null, mime: 'image/jpeg', width: 1280, height: 960 },
+      { id: 'ev-2', kind: 'photo', text: null, mime: 'image/jpeg', width: 1280, height: 960 },
+      { id: 'ev-3', kind: 'transcript', text: 'chest supported row…', mime: null, width: null, height: null },
+    ],
+  };
+
+  const serveEntry = (entry: DayLogEntry) =>
+    mockApi.mockImplementation(async (path: string) =>
+      path.startsWith('/api/day/') ? { date: '2026-08-29', entries: [entry] } : {},
+    );
+
+  it('draws the photos the record was made from, under the record', async () => {
+    serveEntry(WITH_PHOTOS);
+    renderSheet();
+    await waitFor(() => expect(screen.getByTestId('record-photos')).toBeTruthy());
+
+    // Two photos, and the transcript is not one of them.
+    expect(screen.getByTestId('evidence-ev-1')).toBeTruthy();
+    expect(screen.getByTestId('evidence-ev-2')).toBeTruthy();
+    expect(screen.queryByTestId('evidence-ev-3')).toBeNull();
+
+    // Tapping one opens it full size; nothing here removes it.
+    expect(screen.queryByTestId('evidence-ev-1-remove')).toBeNull();
+    fireEvent.press(screen.getByTestId('evidence-ev-1'));
+    expect(screen.getByTestId('photo-full')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('photo-close'));
+    await waitFor(() => expect(screen.queryByTestId('photo-full')).toBeNull());
+  });
+
+  it('puts the record first and the provenance below it', async () => {
+    serveEntry(WITH_PHOTOS);
+    renderSheet();
+    await waitFor(() => expect(screen.getByTestId('record-provenance')).toBeTruthy());
+
+    expect(screen.getByText('How this was recorded')).toBeTruthy();
+    expect(screen.getByText(/^You said: /)).toBeTruthy();
+    // The quote is inside the provenance section, not above the card.
+    const provenance = screen.getByTestId('record-provenance');
+    expect(provenance.findAllByType('Text' as never).some((node: { props: { children?: unknown } }) =>
+      String(node.props.children).startsWith('You said'),
+    )).toBe(true);
+  });
+
+  it('says so plainly when there were no words at all', async () => {
+    serveEntry({ ...WITH_PHOTOS, raw_text: null });
+    renderSheet();
+    await waitFor(() => expect(screen.getByTestId('record-provenance')).toBeTruthy());
+    expect(screen.getByText(/Logged without words/)).toBeTruthy();
+  });
+});

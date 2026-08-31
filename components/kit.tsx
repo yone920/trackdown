@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Pressable, View, type ViewProps, type ViewStyle } from 'react-native';
+import { ActivityIndicator, Animated, Easing, Pressable, View, type ViewProps, type ViewStyle } from 'react-native';
 
-import { IconCheck, IconClose } from '@/components/icons';
+import { IconClose } from '@/components/icons';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
 
@@ -170,13 +170,39 @@ export function Chips({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** How long an armed control waits before it gives up and goes back to being an ✕. */
+export const DELETE_ARM_MS = 3000;
+/** Both states are at least this tall and wide: 44 pt is the smallest honest target. */
+export const DELETE_TARGET = 44;
+
 /**
- * The ✕ on a logged row, and the confirm it turns into.
+ * Every control that is currently armed, so that arming one — or a scroll, or a tap
+ * anywhere else — puts the others back. Module-level because "elsewhere" is by definition
+ * not inside this component.
+ */
+const armedControls = new Set<() => void>();
+
+/** Put every armed delete back to its ✕. Called on scroll and on any other row's tap. */
+export function dismissDeletes(): void {
+  const armed = [...armedControls];
+  armedControls.clear();
+  for (const disarm of armed) disarm();
+}
+
+/**
+ * The ✕ on a logged row, and the one control it turns into.
  *
- * One tap arms it — the row keeps its words and grows a "Delete? ✓ ✕" on the right — and
- * the second tap deletes. No Alert, no sheet, no swipe gesture and no new dependency: the
- * question is asked where the answer will land, which is the row itself. The buttons are
- * drawn at 28 px and reach 44 with `hitSlop`, so arming a row does not change its height.
+ * It used to arm into "Delete? ✓ ✕" — three targets in the width of a thumb, two of them
+ * a tick and a cross that mean opposite things and look alike. Reported 2026-08-31: the
+ * targets were too small and the two marks were confusable. So it is **one morphing
+ * control**: at rest a single ✕ with 44 pt of target, and armed the same spot becomes one
+ * wide pill reading "Delete?" — the whole pill is the target and there is nothing beside
+ * it to hit by mistake. Tapping the pill deletes.
+ *
+ * Getting out of it is everything except that pill: a tap anywhere else on the screen, a
+ * scroll, another row's ✕, or three seconds of nothing. A destructive action should be
+ * easy to abandon and hard to do by accident, and this is what that looks like when the
+ * cancel button is *not* sitting next to the confirm one.
  */
 export function DeleteControl({
   label,
@@ -189,12 +215,20 @@ export function DeleteControl({
   testID?: string;
 }) {
   const [armed, setArmed] = useState(false);
-  const box = {
-    width: 28,
-    height: 28,
-    alignItems: 'center' as const,
-    justifyContent: 'center' as const,
-  };
+
+  useEffect(() => {
+    if (!armed) return;
+    const disarm = () => setArmed(false);
+    armedControls.add(disarm);
+    const timer = setTimeout(() => {
+      armedControls.delete(disarm);
+      setArmed(false);
+    }, DELETE_ARM_MS);
+    return () => {
+      armedControls.delete(disarm);
+      clearTimeout(timer);
+    };
+  }, [armed]);
 
   if (!armed) {
     return (
@@ -203,38 +237,43 @@ export function DeleteControl({
         accessibilityRole="button"
         accessibilityLabel={`Delete ${label}`}
         hitSlop={8}
-        onPress={() => setArmed(true)}
-        style={box}>
-        <IconClose size={15} color={C.dim} />
+        onPress={() => {
+          // One armed control at a time: two open questions on one screen is one too many.
+          dismissDeletes();
+          setArmed(true);
+        }}
+        style={{
+          width: DELETE_TARGET - 16,
+          height: DELETE_TARGET - 16,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}>
+        <IconClose size={16} color={C.dim} />
       </Pressable>
     );
   }
 
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-      <Sub style={{ color: C.dim, marginRight: 2 }}>Delete?</Sub>
-      <Pressable
-        testID={testID ? `${testID}-yes` : undefined}
-        accessibilityRole="button"
-        accessibilityLabel={`Delete ${label}, confirm`}
-        hitSlop={8}
-        onPress={() => {
-          setArmed(false);
-          onDelete();
-        }}
-        style={box}>
-        <IconCheck size={16} color={C.accent} />
-      </Pressable>
-      <Pressable
-        testID={testID ? `${testID}-no` : undefined}
-        accessibilityRole="button"
-        accessibilityLabel={`Keep ${label}`}
-        hitSlop={8}
-        onPress={() => setArmed(false)}
-        style={box}>
-        <IconClose size={16} color={C.mute} />
-      </Pressable>
-    </View>
+    <Pressable
+      testID={testID ? `${testID}-confirm` : undefined}
+      accessibilityRole="button"
+      accessibilityLabel={`Delete ${label}, tap to confirm`}
+      hitSlop={6}
+      onPress={() => {
+        setArmed(false);
+        onDelete();
+      }}
+      style={{
+        minWidth: 92,
+        height: 32,
+        paddingHorizontal: 14,
+        borderRadius: RADIUS.pill,
+        backgroundColor: C.accent,
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}>
+      <Body style={{ fontFamily: FONT.semi, fontSize: 12, color: C.bg }}>Delete?</Body>
+    </Pressable>
   );
 }
 
@@ -331,7 +370,11 @@ export function Row({
       testID={testID ? `${testID}-open` : undefined}
       accessibilityRole="button"
       accessibilityLabel={pressLabel ?? `${title} — open to correct`}
-      onPress={onPress}
+      onPress={() => {
+        // A tap anywhere that is not the armed pill is an answer of "no" (DeleteControl).
+        dismissDeletes();
+        onPress();
+      }}
       style={({ opacity: 1 })}>
       {body}
     </Pressable>
@@ -368,5 +411,57 @@ export function GroupHeading({
         </View>
       ) : null}
     </View>
+  );
+}
+
+/**
+ * The one big button on a screen — the thing the screen is FOR.
+ *
+ * The Log sheet's "Log" used to be a `Chip`, the same size and shape as "From library"
+ * beside it, and greyed while it was disabled: reported 2026-08-31 as unfindable ("the
+ * user cannot tell what to press"). A primary action is not a chip. This is the Today
+ * coach button's weight — full width, 56 pt, `accent` with a `bg` label — and it keeps
+ * that shape in every state: disabled is the same button at reduced opacity, and pending
+ * is the same button with a spinner in it. It never shrinks back into a chip.
+ */
+export function BigButton({
+  label,
+  onPress,
+  disabled = false,
+  pending = false,
+  pendingLabel,
+  testID,
+}: {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  /** Draws the spinner and `pendingLabel`; the button stays exactly where it was. */
+  pending?: boolean;
+  pendingLabel?: string;
+  testID?: string;
+}) {
+  return (
+    <Pressable
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: disabled || pending }}
+      accessibilityLabel={label}
+      onPress={onPress}
+      disabled={disabled || pending}
+      style={{
+        height: 56,
+        borderRadius: RADIUS.pill,
+        backgroundColor: C.accent,
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'row',
+        gap: 10,
+        opacity: disabled ? 0.45 : 1,
+      }}>
+      {pending ? <ActivityIndicator color={C.bg} size="small" /> : null}
+      <Disp size={20} weight="semi" style={{ color: C.bg }}>
+        {pending ? (pendingLabel ?? label) : label}
+      </Disp>
+    </Pressable>
   );
 }

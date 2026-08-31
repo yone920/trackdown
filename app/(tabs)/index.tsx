@@ -6,11 +6,12 @@ import { DayArc } from '@/components/day-arc';
 import { EvidenceThumbs } from '@/components/evidence';
 import { GoalBanner } from '@/components/goal-banner';
 import { IconAvatar } from '@/components/icons';
-import { Card, Chip, Chips, GroupHeading, Row, Section } from '@/components/kit';
+import { Card, Chip, Chips, dismissDeletes, GroupHeading, Row, Section } from '@/components/kit';
 import { MetricCard } from '@/components/metric-card';
 import { ReadingCard } from '@/components/reading-card';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { openExercise } from '@/lib/exercise';
+import { activitySubLine } from '@/lib/row-facts';
 import { clock, dateEyebrow, dateLabel, grams, kcal, slotLabel } from '@/lib/format';
 import { localDateKey, useDay, useDeleteRecord, useGoals, useProfile, useWeek } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
@@ -117,6 +118,7 @@ export default function Today() {
     <ScrollView
       testID="today-scroll"
       style={{ flex: 1, backgroundColor: C.bg }}
+      onScrollBeginDrag={dismissDeletes}
       contentContainerStyle={{
         paddingHorizontal: SPACE.screen,
         paddingTop: insets.top + 12,
@@ -133,8 +135,9 @@ export default function Today() {
           </Disp>
         </View>
         <Pressable
-          accessibilityLabel="Account"
-          onPress={() => router.push('/goals')}
+          testID="today-you"
+          accessibilityLabel="You"
+          onPress={() => router.push('/you')}
           style={{
             width: 40,
             height: 40,
@@ -155,7 +158,7 @@ export default function Today() {
           title={goal?.title ?? null}
           sub={goalSubtitle(goal?.metrics ?? [], goal?.progress?.percent ?? null)}
           percent={goal?.progress?.percent ?? null}
-          onPress={() => router.push('/goals')}
+          onPress={() => router.push('/progress')}
         />
       </View>
 
@@ -260,7 +263,7 @@ export default function Today() {
                               })
                           : undefined
                       }
-                      sub={activity.exercise ? activity.description : null}
+                      sub={activitySubLine(activity)}
                       right={activity.kcal > 0 ? kcal(activity.kcal) : null}
                       onPress={activity.id ? () => correct('activity', activity.id as string) : undefined}
                       onDelete={
@@ -296,7 +299,11 @@ export default function Today() {
                             openExercise(router, { id: activity.exercise_id, name: activity.exercise })
                         : undefined
                     }
-                    sub={activity.source === 'health' ? 'From Health' : null}
+                    sub={
+                      activity.source === 'health'
+                        ? ['From Health', activitySubLine(activity)].filter(Boolean).join(' · ')
+                        : activitySubLine(activity)
+                    }
                     right={activity.kcal > 0 ? kcal(activity.kcal) : null}
                     onPress={activity.id ? () => correct('activity', activity.id as string) : undefined}
                     onDelete={

@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, TextInput, useWindowDimensions, View } from 'react-native';
 
 import { Control } from '@/components/control';
 import { IconCamera, IconChevronLeft, IconKeyboard, IconMic } from '@/components/icons';
@@ -8,7 +8,7 @@ import { Card, Chip, Chips, GroupHeading, Row, Section, SkeletonLines } from '@/
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { openExercise } from '@/lib/exercise';
 import { clock } from '@/lib/format';
-import { keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
+import { composeMaxHeight, keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
 import { getSpeech } from '@/lib/ports/speech';
 import { localDateKey, useAskCoach, useCoachNext, useUpdateGoal } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
@@ -44,6 +44,7 @@ export default function Coach() {
   const [context, setContext] = useState('');
 
   const keyboard = useKeyboardHeight();
+  const window = useWindowDimensions();
 
   const coach = useCoachNext();
   const askCoach = useAskCoach();
@@ -293,6 +294,9 @@ export default function Coach() {
           multiline
           style={{
             minHeight: 70,
+            // Capped for the same reason as the Log sheet's box: a compose box that grows
+            // for ever ends with its caret under the keyboard (lib/keyboard.ts).
+            maxHeight: composeMaxHeight(window.height, insets.top),
             fontFamily: FONT.medium,
             fontSize: 15,
             color: C.ink,

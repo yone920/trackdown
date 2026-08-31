@@ -94,17 +94,32 @@ function Fact({
   );
 }
 
-function ConfidenceChip({ level }: { level: Confidence }) {
+/**
+ * What the chip says, in words. It used to print the wire value — a bare "HIGH" beside a
+ * meal, which a user read as "high calories" (reported 2026-08-31). It is about how sure
+ * the *reading* was, and only the low one is asking for anything.
+ */
+export const CONFIDENCE_LABEL: Record<Confidence, string> = {
+  high: 'High confidence',
+  medium: 'Medium confidence',
+  low: 'Low confidence — check me',
+};
+
+function ConfidenceChip({ level, testID }: { level: Confidence; testID?: string }) {
+  const color = CONFIDENCE_COLOR[level];
   return (
     <View
+      testID={testID}
       style={{
         borderRadius: 12,
         paddingHorizontal: 10,
         paddingVertical: 4,
         borderWidth: 1,
-        borderColor: CONFIDENCE_COLOR[level],
+        borderColor: level === 'high' ? C.track : color,
       }}>
-      <Eyebrow style={{ color: CONFIDENCE_COLOR[level], fontSize: 10 }}>{level}</Eyebrow>
+      <Sub style={{ color, fontSize: 11, fontFamily: level === 'low' ? FONT.semi : FONT.medium }}>
+        {CONFIDENCE_LABEL[level]}
+      </Sub>
     </View>
   );
 }
@@ -183,7 +198,7 @@ export function ConfirmCard({
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <Eyebrow>{eyebrow ?? `Recognized · ${KIND_LABEL[result.kind]}`}</Eyebrow>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          {'confidence' in result ? <ConfidenceChip level={result.confidence} /> : null}
+          {'confidence' in result ? <ConfidenceChip level={result.confidence} testID={`${testID}-confidence`} /> : null}
           {onRemove ? (
             <Pressable
               accessibilityLabel={`Remove this ${KIND_LABEL[result.kind]}`}
@@ -205,7 +220,7 @@ export function ConfirmCard({
                 <Disp size={22} style={{ flex: 1 }}>
                   {item.exercise ?? item.description}
                 </Disp>
-                <ConfidenceChip level={item.confidence} />
+                <ConfidenceChip level={item.confidence} testID={`activity-confidence-${index}`} />
               </View>
               {/* The machine, when they named one. It reads as the sub-line because it is
                   how the row is recognised when the movement is only a guess. */}

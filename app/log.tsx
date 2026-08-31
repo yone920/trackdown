@@ -1,6 +1,5 @@
 import * as Crypto from 'expo-crypto';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Image } from 'expo-image';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
@@ -8,17 +7,19 @@ import {
   Pressable,
   ScrollView,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 
 import { ConfirmCard, type DateChoice } from '@/components/confirm-card';
 import { Control } from '@/components/control';
+import { EvidenceThumbs, LocalThumbs } from '@/components/evidence';
 import { IconCamera, IconClose, IconKeyboard, IconMic } from '@/components/icons';
-import { Card, Chip, Chips, Skeleton, SkeletonLines } from '@/components/kit';
-import { Body, Disp, Sub } from '@/components/type';
+import { BigButton, Card, Chip, Chips, Skeleton, SkeletonLines } from '@/components/kit';
+import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { ApiError } from '@/lib/api';
 import { recordToResult, resultToPatch, type EditKind } from '@/lib/edit-record';
-import { keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
+import { composeMaxHeight, footerLift, keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
 import { MAX_PHOTOS, pickPhotos, takePhoto, type LocalPhoto } from '@/lib/photos';
 import { getSpeech } from '@/lib/ports/speech';
 import { useAnalyze, useConfirm, useDayLog, usePatchRecord } from '@/lib/queries';
@@ -105,6 +106,9 @@ export default function LogSheet() {
   const confirm = useConfirm();
   const patch = usePatchRecord();
   const keyboard = useKeyboardHeight();
+  const window = useWindowDimensions();
+  // A compose box that grows for ever buries its own caret under the keyboard.
+  const maxHeight = composeMaxHeight(window.height, insets.top);
 
   // Edit mode reads the row back from the same endpoint the DayLog drew it with, rather
   // than being handed it through navigation params: a screen that trusts its params is a
@@ -303,6 +307,95 @@ export default function LogSheet() {
   const savable = results.filter((result) => result.kind !== 'unclear');
   const busy = confirm.isPending || patch.isPending;
 
+  const makeAChange = () => {
+    setRevising(true);
+    setText('');
+    setError(null);
+    setStep('say');
+  };
+
+  /**
+   * What the pinned bar holds. One dominant button and, beside it, the small things.
+   *
+   * The rule the bug was: the primary action is a *button*, at one size, in every state.
+   * Disabled is the same button at reduced opacity and pending is the same button with a
+   * spinner in it — it never becomes a chip, and it is never the same shape as "From
+   * library" (reported 2026-08-31).
+   */
+  type Action = {
+    label: string;
+    onPress: () => void;
+    disabled?: boolean;
+    pending?: boolean;
+    pendingLabel?: string;
+    testID?: string;
+  };
+
+  const primary: Action | null =
+    step === 'say'
+      ? {
+          testID: 'log-submit',
+          label: revising ? 'Change it' : 'Log',
+          pendingLabel: revising ? 'Changing…' : 'Reading…',
+          pending: analyze.isPending,
+          disabled: !canSubmit,
+          onPress: submit,
+        }
+      : editing
+        ? changed
+          ? {
+              testID: 'confirm-save',
+              label: 'Save changes',
+              pendingLabel: 'Saving…',
+              pending: busy,
+              onPress: () => void saveEdit(),
+            }
+          : // Nothing has been changed yet, so telling it what to change IS the action.
+            { testID: 'log-make-change', label: 'Make a change', disabled: busy, onPress: makeAChange }
+        : savable.length > 0
+          ? {
+              testID: 'confirm-save',
+              label: savable.length > 1 ? `Log all ${savable.length}` : 'Log it',
+              pendingLabel: 'Saving…',
+              pending: busy,
+              onPress: () => void save(false),
+            }
+          : null;
+
+  const secondary: Action[] =
+    step === 'say'
+      ? revising
+        ? [
+            {
+              testID: 'revise-cancel',
+              label: 'Never mind',
+              disabled: analyze.isPending,
+              onPress: () => {
+                setRevising(false);
+                setText('');
+                setStep('review');
+              },
+            },
+          ]
+        : photos.length < MAX_PHOTOS
+          ? [{ label: 'From library', onPress: () => void addPhotos('library') }]
+          : []
+      : [
+          ...(editing && !changed
+            ? []
+            : [{ testID: 'log-make-change', label: 'Make a change', disabled: busy, onPress: makeAChange }]),
+          ...(editing
+            ? []
+            : [
+                {
+                  testID: 'confirm-add-more',
+                  label: 'Add more',
+                  disabled: busy,
+                  onPress: () => (savable.length === 0 ? reset() : void save(true)),
+                },
+              ]),
+        ];
+
   return (
     // The keyboard, and the bug that hid the input behind it (lib/keyboard.ts): on iOS the
     // ScrollView's own `automaticallyAdjustKeyboardInsets` does the work, because inside a
@@ -344,17 +437,20 @@ export default function LogSheet() {
                 : 'What did you do?'}
         </Disp>
 
+        {/* The record itself is the headline; on a fresh log this line is the instruction.
+            What the user *said* is provenance and it goes below the card (user decision
+            2026-08-31) — it can be a paragraph, and it is not what they came to look at. */}
         {step === 'review' ? (
           <Sub style={{ marginTop: 10, lineHeight: 18 }}>
             {editing
-              ? editEntry?.raw_text
-                ? `You said: “${editEntry.raw_text}”`
-                : 'Tell me what to change; the words that were recorded stay as they were.'
+              ? 'Tell me what to change; the words that were recorded stay as they were.'
               : savable.length > 1
                 ? `${savable.length} things. Drop what you did not mean, then log them all at once.`
                 : 'Log it, or tell me what to change.'}
           </Sub>
         ) : null}
+
+        {step === 'review' && !editing ? <LocalThumbs testID="review-photos" photos={photos} /> : null}
 
         {/* ── Say it ─────────────────────────────────────────────────────────────── */}
         {step === 'say' ? (
@@ -385,6 +481,7 @@ export default function LogSheet() {
               style={{
                 marginTop: 18,
                 minHeight: 110,
+                maxHeight,
                 fontFamily: FONT.dispSemi,
                 fontSize: 20,
                 lineHeight: 26,
@@ -395,27 +492,14 @@ export default function LogSheet() {
               }}
             />
 
-            {photos.length === 0 ? null : (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ gap: 8, paddingTop: 12 }}>
-                {photos.map((photo) => (
-                  <Pressable
-                    key={photo.uri}
-                    onPress={() => setPhotos((current) => current.filter((p) => p.uri !== photo.uri))}
-                    style={{
-                      width: 64,
-                      height: 64,
-                      borderRadius: RADIUS.thumb,
-                      overflow: 'hidden',
-                      backgroundColor: C.track,
-                    }}>
-                    <Image source={{ uri: photo.uri }} style={{ width: '100%', height: '100%' }} contentFit="cover" />
-                  </Pressable>
-                ))}
-              </ScrollView>
-            )}
+            {/* The ✕ badge is the only thing that removes a photo. Tapping the image
+                itself used to delete it with no affordance at all, which is how a user
+                found out (reported 2026-08-31); now it opens the photo. */}
+            <LocalThumbs
+              testID="log-photos"
+              photos={photos}
+              onRemove={(uri) => setPhotos((current) => current.filter((photo) => photo.uri !== uri))}
+            />
 
             {/* Photo · Speak · Type. A revision is words, so there is nothing to photograph. */}
             <View style={{ flexDirection: 'row', gap: 12, marginTop: 18 }}>
@@ -441,31 +525,6 @@ export default function LogSheet() {
               {speech.available ? '' : ' (Speaking needs the dev build; typing and photos work here.)'}
             </Sub>
 
-            <View style={{ marginTop: 14 }}>
-              <Chips>
-                <Chip
-                  testID="log-submit"
-                  label={analyze.isPending ? (revising ? 'Changing…' : 'Reading…') : revising ? 'Change it' : 'Log'}
-                  variant="primary"
-                  onPress={submit}
-                  disabled={!canSubmit}
-                />
-                {revising ? (
-                  <Chip
-                    testID="revise-cancel"
-                    label="Never mind"
-                    onPress={() => {
-                      setRevising(false);
-                      setText('');
-                      setStep('review');
-                    }}
-                    disabled={analyze.isPending}
-                  />
-                ) : photos.length < MAX_PHOTOS ? (
-                  <Chip label="From library" onPress={() => void addPhotos('library')} />
-                ) : null}
-              </Chips>
-            </View>
           </View>
         ) : null}
 
@@ -513,56 +572,84 @@ export default function LogSheet() {
 
             {error ? <Sub style={{ marginTop: 14, color: C.accent }}>{error}</Sub> : null}
 
-            <View style={{ marginTop: 18 }}>
-              <Chips>
-                {editing ? (
-                  changed ? (
-                    <Chip
-                      testID="confirm-save"
-                      label={busy ? 'Saving…' : 'Save changes'}
-                      variant="primary"
-                      onPress={() => void saveEdit()}
-                      disabled={busy}
-                    />
-                  ) : null
-                ) : savable.length > 0 ? (
-                  <Chip
-                    testID="confirm-save"
-                    label={busy ? 'Saving…' : savable.length > 1 ? `Log all ${savable.length}` : 'Log it'}
-                    variant="primary"
-                    onPress={() => void save(false)}
-                    disabled={busy}
-                  />
-                ) : null}
-                <Chip
-                  testID="log-make-change"
-                  label="Make a change"
-                  variant={editing && !changed ? 'primary' : 'secondary'}
-                  onPress={() => {
-                    setRevising(true);
-                    setText('');
-                    setError(null);
-                    setStep('say');
-                  }}
-                  disabled={busy}
-                />
-                {editing ? null : (
-                  <Chip
-                    testID="confirm-add-more"
-                    label="Add more"
-                    onPress={() => (savable.length === 0 ? reset() : void save(true))}
-                    disabled={busy}
-                  />
-                )}
-              </Chips>
-            </View>
-
             <Body style={{ marginTop: 16, color: C.mute, fontSize: 13, lineHeight: 19 }}>
               Nothing to type: tell me what is wrong and I will read it again.
             </Body>
+
+            {/* How it came to be recorded, quietly, under the record. A vertical list of
+                provenance entries — the words first, with whatever was photographed
+                attached to them. Corrections will append here as further entries when the
+                server starts emitting them; the shape is a list so that costs no redesign
+                (user decision 2026-08-31). */}
+            {editing && editEntry ? (
+              <View testID="record-provenance" style={{ marginTop: 26 }}>
+                <Eyebrow>How this was recorded</Eyebrow>
+                <View
+                  style={{
+                    marginTop: 12,
+                    borderLeftWidth: 2,
+                    borderLeftColor: C.track,
+                    paddingLeft: 12,
+                  }}>
+                  <Sub style={{ lineHeight: 19 }}>
+                    {editEntry.raw_text
+                      ? `You said: “${editEntry.raw_text}”`
+                      : 'Logged without words — from a photo, or from Health.'}
+                  </Sub>
+                  {/* A record's photos are the other half of what it says: a transcript
+                      with no picture of the tuna label is half the evidence (reported
+                      2026-08-31). Tap one to see it full size. Nothing here removes
+                      anything — a saved photo is part of a saved record. */}
+                  <EvidenceThumbs testID="record-photos" photos={editEntry.evidence} zoomable />
+                </View>
+              </View>
+            ) : null}
           </View>
         ) : null}
       </ScrollView>
+
+      {/* The action bar is pinned rather than scrolled: the thing the sheet is FOR must
+          never be somewhere the user has to dismiss the keyboard to reach (reported
+          2026-08-31). On iOS it is lifted by the keyboard's own height — the ScrollView's
+          `automaticallyAdjustKeyboardInsets` moves the content, not a sibling below it —
+          and on Android the KeyboardAvoidingView has already shrunk the container. */}
+      <View
+        testID="log-actions"
+        style={{
+          paddingHorizontal: SPACE.screen,
+          paddingTop: 12,
+          paddingBottom: insets.bottom + 12,
+          marginBottom: footerLift(keyboard),
+          borderTopWidth: 1,
+          borderTopColor: C.line,
+          backgroundColor: C.bg,
+        }}>
+        {primary ? (
+          <BigButton
+            testID={primary.testID}
+            label={primary.label}
+            pending={primary.pending}
+            pendingLabel={primary.pendingLabel}
+            disabled={primary.disabled}
+            onPress={primary.onPress}
+          />
+        ) : null}
+        {secondary.length > 0 ? (
+          <View style={{ marginTop: primary ? 12 : 0 }}>
+            <Chips>
+              {secondary.map((chip) => (
+                <Chip
+                  key={chip.label}
+                  testID={chip.testID}
+                  label={chip.label}
+                  onPress={chip.onPress}
+                  disabled={chip.disabled}
+                />
+              ))}
+            </Chips>
+          </View>
+        ) : null}
+      </View>
     </KeyboardAvoidingView>
   );
 }
