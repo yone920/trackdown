@@ -196,6 +196,26 @@ describe('the log sheet', () => {
     expect(parts.some((part) => part.name === 'text')).toBe(false);
   });
 
+  it('confirms with the words that were said, not with the instruction that changed them', async () => {
+    mockUpload.mockResolvedValueOnce(analyzed([meal]));
+    mockApi.mockResolvedValue({ kind: 'meal', kinds: ['meal'], replayed: false });
+    renderSheet();
+    await logIt('chicken and rice');
+
+    fireEvent.press(screen.getByTestId('log-make-change'));
+    mockUpload.mockResolvedValueOnce(analyzed([{ ...meal, kcal: 700 }]));
+    fireEvent.changeText(screen.getByTestId('log-text'), 'make it 700 calories');
+    fireEvent.press(screen.getByTestId('log-submit'));
+
+    await waitFor(() => expect(screen.getByTestId('meal-kcal')).toHaveTextContent('700'));
+    fireEvent.press(screen.getByTestId('confirm-save'));
+
+    await waitFor(() => expect(mockApi).toHaveBeenCalled());
+    const [, options] = mockApi.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    // The DayLog quotes this back at the user. It is the log, not the correction.
+    expect(options.body.text).toBe('chicken and rice');
+  });
+
   it('lets a change be abandoned without losing what was read', async () => {
     mockUpload.mockResolvedValue(analyzed([meal]));
     renderSheet();
