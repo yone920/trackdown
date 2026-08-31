@@ -1,13 +1,13 @@
 import { useRouter } from 'expo-router';
 import { useMemo } from 'react';
 import { ActivityIndicator, FlatList, Pressable, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { IconChevronRight } from '@/components/icons';
 import { Card, Chip } from '@/components/kit';
 import { Disp, Eyebrow, Sub } from '@/components/type';
 import { groupByWeek, weekdayLabel, type WeekGroup } from '@/lib/days-weeks';
 import { useDaysPages, useGoals, useWeek } from '@/lib/queries';
+import { useScreenInsets } from '@/lib/screen';
 import { C, RADIUS, SPACE, TABULAR } from '@/lib/theme';
 import type { DayRow, Verdict } from '@/lib/types';
 
@@ -37,7 +37,7 @@ function flatten(groups: WeekGroup[]): Item[] {
 
 export default function Days() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const insets = useScreenInsets();
 
   const days = useDaysPages();
   const week = useWeek();

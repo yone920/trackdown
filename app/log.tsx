@@ -10,7 +10,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ConfirmCard, type DateChoice } from '@/components/confirm-card';
 import { Control } from '@/components/control';
@@ -23,6 +22,7 @@ import { keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
 import { MAX_PHOTOS, pickPhotos, takePhoto, type LocalPhoto } from '@/lib/photos';
 import { getSpeech } from '@/lib/ports/speech';
 import { useAnalyze, useConfirm, useDayLog, usePatchRecord } from '@/lib/queries';
+import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
 import type { FusionResult } from '@/lib/types';
 
@@ -61,7 +61,7 @@ type Step = 'say' | 'review';
 
 export default function LogSheet() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const insets = useScreenInsets();
   const params = useLocalSearchParams<{
     hint?: string;
     editDate?: string;

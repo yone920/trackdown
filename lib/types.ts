@@ -426,7 +426,12 @@ export type ProfileTargets = {
   carbs_g: number | null;
   fat_g: number | null;
   fiber_g: number | null;
-  source: 'computed' | 'stated' | 'none';
+  /**
+   * Where `eat_target` came from: derived from the TDEE inputs, stated by the user, the
+   * `daily_calorie_target` column's own DEFAULT that nobody chose, or nothing at all
+   * (backend services/tdee.ts §TargetSource).
+   */
+  source: 'derived' | 'stated' | 'default' | 'none';
   tracking_only: boolean;
   eatback: string;
   weight_lb: number | null;

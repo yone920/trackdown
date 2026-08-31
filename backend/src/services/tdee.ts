@@ -294,7 +294,29 @@ export interface TdeeProfile {
 	/** Stated macro targets beat the computed ones — the user said these out loud. */
 	protein_g: number | null;
 	carbs_max_g: number | null;
+	/**
+	 * field → when the user last said it (migration 0004). Read here for one reason:
+	 * `daily_calorie_target` has a column DEFAULT of 2100, so the number being there is
+	 * no evidence at all that anybody chose it. `stated_at.daily_calorie_target` is the
+	 * only thing that separates "you told me 2100" from "the column says 2100".
+	 */
+	stated_at: Record<string, string> | null;
 }
+
+/**
+ * Where the day's calorie target came from — provenance, not arithmetic.
+ *
+ *   * `derived`  — worked out from the TDEE inputs (sex, birth year, height, activity,
+ *                  and a weigh-in). The number moves with the body.
+ *   * `stated`   — the user said a number out loud and `stated_at` records the day.
+ *   * `default`  — nobody has said anything and there is nothing to derive from, so the
+ *                  target is the `daily_calorie_target` column's own DEFAULT of 2100.
+ *   * `none`     — not even that: there is no target at all.
+ *
+ * `default` used to be reported as `stated`, and the Goals screen therefore said "From
+ * stated" over a 2100 nobody had ever mentioned (field report 2026-08-31).
+ */
+export type TargetSource = "derived" | "stated" | "default" | "none";
 
 export interface DayTargets {
 	/** Maintenance calories, or null when the profile cannot produce them. */
@@ -305,8 +327,8 @@ export interface DayTargets {
 	deficit: number | null;
 	safeFloor: number | null;
 	macros: Macros | null;
-	/** Where `target` came from, so the UI can say "your target" vs "your plan's". */
-	source: "computed" | "stated" | "none";
+	/** Where `target` came from, so the UI can say which of the four it is. */
+	source: TargetSource;
 	/** Set when the profile excludes the user from deficit advice (concept-v2: track, don't prescribe). */
 	trackingOnly: boolean;
 }
@@ -316,9 +338,12 @@ export interface DayTargets {
  *
  * `weightLb` is the day's best known body weight (the day's weigh-in, else the most recent
  * one before it): the target moves with the body it is computed for. Without a weight —
- * or without sex/height/birth year/activity — there is no TDEE, and the profile's stated
- * `daily_calorie_target` is used instead. With neither, the day simply has no target and
- * its status is `none`; a made-up target would be judged against, which is worse.
+ * or without sex/height/birth year/activity — there is no TDEE, and `daily_calorie_target`
+ * is used instead. With neither, the day simply has no target and its status is `none`; a
+ * made-up target would be judged against, which is worse.
+ *
+ * `source` says which of those happened, and it distinguishes a number the user gave from
+ * the column's DEFAULT — see `TargetSource`.
  */
 export function computeDayTargets(
 	profile: TdeeProfile | null,
@@ -336,7 +361,10 @@ export function computeDayTargets(
 	};
 	if (!profile) return none;
 
-	const stated = profile.daily_calorie_target ?? null;
+	const fallback = profile.daily_calorie_target ?? null;
+	// The column has a DEFAULT (2100), so its value alone says nothing about who chose
+	// it. Only a `stated_at` entry does.
+	const userSaidIt = profile.stated_at?.daily_calorie_target != null;
 	const complete =
 		profile.sex != null &&
 		profile.birth_year != null &&
@@ -345,9 +373,14 @@ export function computeDayTargets(
 		weightLb != null;
 
 	if (!complete) {
-		return stated == null
+		return fallback == null
 			? none
-			: { ...none, target: stated, source: "stated", macros: statedMacros(profile, stated) };
+			: {
+					...none,
+					target: fallback,
+					source: userSaidIt ? "stated" : "default",
+					macros: statedMacros(profile, fallback),
+				};
 	}
 
 	const rec = buildRecommendation({
@@ -370,7 +403,7 @@ export function computeDayTargets(
 		deficit: target - rec.tdee.tdee,
 		safeFloor: rec.safeFloor,
 		macros: overrideMacros(profile, rec.macros),
-		source: "computed",
+		source: "derived",
 		trackingOnly: rec.mode === "tracking_only",
 	};
 }

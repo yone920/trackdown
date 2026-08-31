@@ -1,6 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ActivityIndicator, Pressable, ScrollView, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { EvidenceThumbs } from '@/components/evidence';
 import { IconCamera, IconChevronLeft, IconHeart, IconKeyboard, IconMic } from '@/components/icons';
@@ -9,6 +8,7 @@ import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { openExercise } from '@/lib/exercise';
 import { clock, dateLabel } from '@/lib/format';
 import { localDateKey, useDayLog, useDeleteRecord, type DeleteKind } from '@/lib/queries';
+import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, SPACE, TABULAR } from '@/lib/theme';
 import type { DayLogEntry, DayLogIcon } from '@/lib/types';
 
@@ -26,7 +26,7 @@ const ICONS: Record<DayLogIcon, (p: { size?: number; color?: string }) => React.
 
 export default function DayLog() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const insets = useScreenInsets();
   const params = useLocalSearchParams<{ date?: string }>();
   const date = typeof params.date === 'string' && params.date ? params.date : localDateKey();
 

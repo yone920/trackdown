@@ -2104,10 +2104,17 @@ describe("profile — the plan and what it works out to", () => {
 
 	it("derives the targets the app used to compute for itself", async () => {
 		// Without sex/height/birth year there is no TDEE, and none is invented: the target
-		// falls back to the v1 `daily_calorie_target` the profile row is created with.
+		// falls back to the v1 `daily_calorie_target` the profile row is created with —
+		// which is the column's DEFAULT, not a number this user ever said, so the
+		// provenance is `default` and the Goals screen says so (field report 2026-08-31).
 		const empty = await request(app).get("/api/profile").set(headers);
-		expect(empty.body.targets).toMatchObject({ tdee: null, source: "stated" });
+		expect(empty.body.targets).toMatchObject({ tdee: null, source: "default" });
 		expect(empty.body.targets.eat_target).toBe(empty.body.daily_calorie_target);
+		expect(empty.body.stated_at.daily_calorie_target).toBeUndefined();
+
+		// Say the number out loud and the same value becomes `stated`.
+		const said = await request(app).patch("/api/profile").set(headers).send({ daily_calorie_target: 2100 });
+		expect(said.body.targets).toMatchObject({ eat_target: 2100, source: "stated" });
 
 		await request(app)
 			.patch("/api/profile")
@@ -2122,7 +2129,7 @@ describe("profile — the plan and what it works out to", () => {
 
 		const res = await request(app).get(`/api/profile?tz=${tz}`).set(headers);
 		expect(res.status).toBe(200);
-		expect(res.body.targets).toMatchObject({ source: "computed", tracking_only: false, weight_lb: 200, date: today });
+		expect(res.body.targets).toMatchObject({ source: "derived", tracking_only: false, weight_lb: 200, date: today });
 		expect(res.body.targets.tdee).toBeGreaterThan(2500);
 		expect(res.body.targets.eat_target).toBeLessThan(res.body.targets.tdee);
 		expect(res.body.targets.deficit).toBe(res.body.targets.eat_target - res.body.targets.tdee);

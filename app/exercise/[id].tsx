@@ -1,7 +1,6 @@
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Linking, Pressable, ScrollView, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { IconChevronLeft } from '@/components/icons';
 import { Card, Section, Skeleton, SkeletonLines } from '@/components/kit';
@@ -9,6 +8,7 @@ import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { authHeaders, exerciseMediaUrl } from '@/lib/api';
 import { formVideoUrl, NO_EXERCISE_ID } from '@/lib/exercise';
 import { useExercise } from '@/lib/queries';
+import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
 
 // The exercise sheet: what the movement is, in pictures and in words.
@@ -53,7 +53,7 @@ function words(value: string): string {
 
 export default function ExerciseSheetScreen() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const insets = useScreenInsets();
   const params = useLocalSearchParams<{ id?: string; name?: string }>();
 
   const id = typeof params.id === 'string' && params.id ? params.id : NO_EXERCISE_ID;

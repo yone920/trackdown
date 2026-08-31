@@ -1,6 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Pressable, ScrollView, Share, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Bar } from '@/components/charts';
 import { EvidenceThumbs } from '@/components/evidence';
@@ -19,6 +18,7 @@ import { addDays } from '@/lib/days-weeks';
 import { openExercise } from '@/lib/exercise';
 import { clock, dateLabel, grams, kcal, slotLabel } from '@/lib/format';
 import { localDateKey, useDay, useDeleteRecord } from '@/lib/queries';
+import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, SPACE, TABULAR } from '@/lib/theme';
 import type { DayActivity, DayView, DeltaVsLast, MacroLine, MealSlot, Verdict } from '@/lib/types';
 
@@ -42,7 +42,7 @@ const VERDICT_COLOR: Record<Verdict, string> = {
 
 export default function Day() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const insets = useScreenInsets();
   const params = useLocalSearchParams<{ date?: string }>();
   const today = localDateKey();
   const date = typeof params.date === 'string' && params.date ? params.date : today;

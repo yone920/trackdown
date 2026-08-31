@@ -1,7 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Switch, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Ring } from '@/components/charts';
 import { IconChevronDown, IconChevronUp, IconGoals } from '@/components/icons';
@@ -10,8 +9,9 @@ import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { signOut, useSession } from '@/lib/auth';
 import { dateLabel } from '@/lib/format';
 import { useGoals, useProfile, useReorderGoals, useUpdateGoal } from '@/lib/queries';
+import { useScreenInsets } from '@/lib/screen';
 import { C, RADIUS, SPACE, TABULAR } from '@/lib/theme';
-import type { GoalMetric, GoalRecord, GoalWithProgress, Profile } from '@/lib/types';
+import type { GoalMetric, GoalRecord, GoalWithProgress, Profile, ProfileTargets } from '@/lib/types';
 
 // Goals (docs/design-system.md §Goals). The active goals with their rings and their pace
 // lines, the prompts the server's detection has raised, the history of what has ended,
@@ -31,7 +31,7 @@ import type { GoalMetric, GoalRecord, GoalWithProgress, Profile } from '@/lib/ty
 
 export default function Goals() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const insets = useScreenInsets();
   const { session } = useSession();
 
   const goals = useGoals();
@@ -309,6 +309,21 @@ function outcomeWords(goal: GoalRecord & { outcome: string }): string {
 }
 
 /**
+ * The line under "Daily target": where the number came from, in words.
+ *
+ * This used to print the wire value — "From stated" — for every source but `none`, which
+ * meant a fresh account was told its 2100 was something it had said. 2100 is the
+ * `daily_calorie_target` column's DEFAULT; nobody stated anything. The server now
+ * separates the two (backend services/tdee.ts §TargetSource) and `default` says so.
+ */
+function targetProvenance(source: ProfileTargets['source'] | undefined): string {
+  if (source === 'derived') return 'From your stats';
+  if (source === 'stated') return 'From stated';
+  if (source === 'default') return 'Default until you tell me more';
+  return 'Tell me your height, age and weight';
+}
+
+/**
  * The plan the coach reads, rendered organised, each row dated with when it was last
  * stated (concept-v2 §Goals and profile). Editing is the same sentence again — "Tell me"
  * opens the Log sheet, which classifies it and shows what it understood.
@@ -364,7 +379,7 @@ function PlanSections({ profile, onTell }: { profile: Profile | null; onTell: ()
           />
           <Row
             title="Daily target"
-            sub={targets?.source === 'none' ? 'Tell me your height, age and weight' : `From ${targets?.source ?? '—'}`}
+            sub={targetProvenance(targets?.source)}
             right={targets?.eat_target == null ? '—' : String(Math.round(targets.eat_target))}
           />
           <Row

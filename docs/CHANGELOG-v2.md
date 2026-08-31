@@ -87,6 +87,72 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-08-31 — a header under the clock, and a target nobody stated (`fix-safearea-target-label`)
+
+**The reports.** Two, from the same screen. The Goals header was photographed with its
+"1 ACTIVE" eyebrow beside the iOS clock. And the plan said **"Daily target 2100 · From
+stated"** on an account that had stated nothing at all.
+
+#### A — the top of a screen is the screen's own job
+
+No screen in this app has a navigation header: `headerShown: false` in both layouts, and
+the tab bar is at the bottom. So the first pixel of every screen is at the very top of the
+display, and the whole convention is `paddingTop: insets.top + <a little>` on the scroller
+the screen is built in.
+
+**Audited all ten screens. Every one already had it**, Goals included, and Goals has had it
+since WP6b — the arithmetic there is character-for-character what Today does. So the
+padding was never missing from the source; what can go missing is the *inset*.
+`useSafeAreaInsets` returns 0 before the provider has measured, and 0 for good on a host
+with no insets to give. Zero is how a correct screen still draws its eyebrow at y = 0.
+
+- **`lib/screen.ts`** is new and is nine lines of substance: `useScreenInsets()` returns
+  the real insets with `top` floored at `STATUS_BAR_MIN` (20 — the pre-notch iOS status
+  bar). No iOS device reports a genuine full-screen top inset below that, so the floor
+  costs nothing on a phone and makes the collision impossible everywhere else.
+- **Only `top` is floored.** A device with no home indicator really does have a zero bottom
+  inset, and the tab bar needs that zero to sit flush — `components/tab-bar.tsx` keeps
+  `useSafeAreaInsets` unchanged.
+- **All nine scroll screens now call it**: Today, Days, Progress, Goals, Coach, Log, Day,
+  DayLog, Exercise. One import and one call each; every `paddingTop` expression, every
+  `paddingBottom`, and all scroll behaviour are exactly as they were. The tenth screen,
+  sign-in, is a centred `SafeAreaView edges={['top','bottom']}` and was left alone.
+- **`__tests__/safe-area.test.tsx`** is the convention as a test, and it is the part that
+  lasts: each screen is rendered twice, once with a 59 pt inset and once with none, and its
+  scroller's `paddingTop` is asserted against both. A tenth screen that forgets the
+  convention fails the first assertion; a regression in the floor fails the second.
+
+#### B — 2100 is a column default, not something you said
+
+`profiles.daily_calorie_target` is `INT DEFAULT 2100` (migration 0002). `computeDayTargets`
+used it as the fallback whenever the TDEE inputs were incomplete, and reported that fallback
+as `source: "stated"` — so a reset profile was told, in the app's own words, that its 2100
+was a number it had given. It never had.
+
+`profiles.stated_at` (migration 0004) is the only evidence either way: every write path —
+`updateProfile`, the fusion confirm, `places.ts` — stamps the field it touches, so the key
+is present exactly when a human said the number.
+
+- **`TargetSource` is now four values**, and they are provenance rather than arithmetic:
+  `derived` (worked out from the TDEE inputs), `stated` (`stated_at` has the field),
+  `default` (the column's DEFAULT and nothing else), `none` (no target at all).
+- `computed` was renamed to `derived` in the same pass, because "computed" and "default"
+  read as neighbours and those two are the ones a reader must not confuse. `none` is
+  unchanged and still means the profile cannot produce a target.
+- **`stated_at` is now selected** by `services/profile.ts` and `services/day.ts` and is a
+  field of `TdeeProfile`. It is nullable there on purpose: a row read without it answers
+  `default`, which is the safe way to be wrong.
+- **The app says it in words.** Goals' "Daily target" sub-line is now "From your stats" /
+  "From stated" / "Default until you tell me more", and the unchanged "Tell me your height,
+  age and weight" when there is no target at all. It used to print the wire value directly,
+  which is how "stated" reached a user's eyes in the first place.
+- Nothing else reads `source`: Today's "No calorie target yet" card is gated on
+  `allowance == null` and is unaffected, and no calorie *number* moved anywhere.
+
+**A note for the next app build.** The wire value changed, so a phone running a build older
+than this one will draw "From derived" on that row until it is updated. The number beside it
+is right either way.
+
 ### 2026-08-31 — "assisted" is not a spelling of "chin-up" (`fix-exercise-qualifiers`)
 
 **The report.** The user said **"assisted chin up with 55 pounds"**. It was saved as a plain

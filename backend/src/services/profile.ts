@@ -1,6 +1,6 @@
 import type pg from "pg";
 import { boundsOf, localDay, type IsoDate } from "./localTime.js";
-import { computeDayTargets, type DayTargets, type GoalPace, type TdeeProfile } from "./tdee.js";
+import { computeDayTargets, type DayTargets, type GoalPace, type TargetSource, type TdeeProfile } from "./tdee.js";
 import { getProfile } from "./entries.js";
 import { currentPlaceSummary, type PlaceSummary } from "./places.js";
 
@@ -30,8 +30,8 @@ export interface ProfileTargets extends DayTargets {
 
 /**
  * The derived targets for one user on one day. `weightLb` comes from their last weigh-in:
- * the target moves with the body it is for, and without one there is no TDEE at all (the
- * profile's stated `daily_calorie_target` is then the fallback — services/tdee.ts).
+ * the target moves with the body it is for, and without one there is no TDEE at all
+ * (`daily_calorie_target` is then the fallback, stated or defaulted — services/tdee.ts).
  */
 export async function loadTargets(
 	db: Queryable,
@@ -45,7 +45,7 @@ export async function loadTargets(
 			await db.query<PlanProfile>(
 				`SELECT sex, birth_year, height_cm, activity_level, goal_pace, goal_weight_lb,
 				        pregnant_or_lactating, health_concern, daily_calorie_target, protein_g,
-				        carbs_max_g, eatback
+				        carbs_max_g, eatback, stated_at
 				   FROM profiles WHERE id = $1`,
 				[userId]
 			)
@@ -84,8 +84,12 @@ export interface ProfileView {
 		carbs_g: number | null;
 		fat_g: number | null;
 		fiber_g: number | null;
-		/** "computed" from the TDEE, "stated" from the user's own number, or "none". */
-		source: "computed" | "stated" | "none";
+		/**
+		 * Provenance, not arithmetic: "derived" from the TDEE inputs, "stated" because the
+		 * user said a number, "default" because the column's DEFAULT is all there is, or
+		 * "none" when there is no target at all (services/tdee.ts §TargetSource).
+		 */
+		source: TargetSource;
 		/** True when the profile excludes the user from deficit advice (age, BMI, pregnancy). */
 		tracking_only: boolean;
 		/** How much of what they earn the ring lets them eat back. */
