@@ -656,6 +656,7 @@ describe("fusion — confirm", () => {
 				active_to: null,
 			},
 			proposed_timeline: { by: "2026-12-01", rate: "~1 lb/week", note: "a safe pace", realistic: true },
+			facts: null,
 		});
 		expect(first.status).toBe(201);
 		expect(first.body.goal).toMatchObject({ kind: "lose_fat", title: "Down to 170 lb", status: "active", priority: 1 });
@@ -675,6 +676,7 @@ describe("fusion — confirm", () => {
 				active_to: null,
 			},
 			proposed_timeline: null,
+			facts: null,
 		});
 		// Appended, never promoted over the goal the user already has.
 		expect(second.body.goal).toMatchObject({ priority: 2, status: "active" });
@@ -1834,6 +1836,7 @@ describe("goals — set by talking", () => {
 					],
 					active_to: null,
 				},
+				facts: { current_weight_lb: null, training_days: null, environment: null, age_years: null },
 			}
 		);
 
@@ -1888,6 +1891,7 @@ describe("goals — set by talking", () => {
 					],
 					active_to: null,
 				},
+				facts: { current_weight_lb: null, training_days: null, environment: null, age_years: null },
 			}
 		);
 		const analyzed = await request(app).post("/api/log/analyze").set(headers).field("text", "I want to run 20 miles a week");
@@ -1931,6 +1935,140 @@ describe("goals — set by talking", () => {
 			});
 		expect(proposed.body.goal.active_to).toBe(proposed.body.proposal.projected_date);
 		expect(proposed.body.goal.active_to > soon).toBe(true);
+	});
+});
+
+// The field report, typed into the Log sheet exactly as it arrived:
+//
+//   "Currently I am 212 lbs, my goal is to go down to 200 lbs. come up with reasonable time
+//    to achieve that. I work out 4 days a week. At the same time I want to build body
+//    mascle. I am 45 read old. I go to gym to workout. I want a complete body workout
+//    through out the week."
+//
+// Three things went wrong at once: the whole-body sets metric could not be saved at all,
+// the 212 was thrown away so the timeline was projected from a three-week-old 181.2 and
+// came back "already at 200 — mark it reached?", and the four facts the user had just
+// stated had to be typed again into the Profile screen. This walks the whole thing.
+describe("goals — the facts stated alongside them", () => {
+	const tz = 60;
+	let headers: Record<string, string>;
+
+	const SAID =
+		"Currently I am 212 lbs, my goal is to go down to 200 lbs. come up with reasonable time to " +
+		"achieve that. I work out 4 days a week. At the same time I want to build body mascle. I am " +
+		"45 read old. I go to gym to workout. I want a complete body workout through out the week.";
+
+	/** What the two calls answer for this log. */
+	function nextWholeBodyGoal(facts: Record<string, unknown>): void {
+		nextFusion(
+			{ kind: "goal", title: "Down to 200 lb" },
+			{
+				spec: {
+					kind: "lose_fat",
+					title: "Down to 200 lb",
+					metrics: [
+						{ measure: "body_weight", scope: null, target: 200, unit: "lb", direction: "decrease", rate: null, by: null },
+						// No muscle named: the whole body's weekly volume.
+						{ measure: "weekly_sets", scope: null, target: 18, unit: "sets", direction: "increase", rate: null, by: null },
+					],
+					active_to: null,
+				},
+				facts,
+			}
+		);
+	}
+
+	beforeAll(async () => {
+		const token = await signUp("wholebody@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		// The only weigh-in the app knows about, and it is under the target.
+		await request(app).post("/api/weight").set(headers).send({ weight_lb: 181.2 });
+	}, 60_000);
+
+	it("saves a whole-body sets goal, the stated weight and the profile facts, and projects from 212", async () => {
+		nextWholeBodyGoal({ current_weight_lb: 212, training_days: 4, environment: "gym", age_years: 45 });
+
+		const analyzed = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("text", SAID)
+			.field("tz_offset_min", String(tz));
+		expect(analyzed.status).toBe(200);
+		expect(analyzed.body.result.kind).toBe("goal");
+
+		// 1. The unscoped weekly_sets metric survives the preview.
+		expect(analyzed.body.result.spec.metrics.map((m: { measure: string }) => m.measure)).toEqual([
+			"body_weight",
+			"weekly_sets",
+		]);
+		// 2. The facts ride along, for the card to show and the confirm to save.
+		expect(analyzed.body.result.facts).toEqual({
+			current_weight_lb: 212,
+			training_days: 4,
+			environment: "gym",
+			age_years: 45,
+		});
+		// 3. The timeline is projected from the 212 they just said, not the 181.2 on file.
+		expect(analyzed.body.proposal.metrics[0].current).toBe(212);
+		expect(analyzed.body.proposal.weeks).toBeGreaterThan(1);
+		expect(analyzed.body.proposal.projected_date).not.toBe(localDay(new Date(), tz).date);
+		expect(String(analyzed.body.result.proposed_timeline.note)).not.toContain("mark it reached");
+
+		const confirmed = await request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({
+				client_id: randomUUID(),
+				result: analyzed.body.result,
+				text: SAID,
+				tz_offset_min: tz,
+			});
+		// 4. It saves. The blocking "Weekly sets needs a muscle" is gone.
+		expect(confirmed.status).toBe(201);
+		expect(confirmed.body.goal).toMatchObject({ kind: "lose_fat", title: "Down to 200 lb", status: "active" });
+		expect(confirmed.body.goal.metrics[1]).toMatchObject({ measure: "weekly_sets", scope: null, target: 18 });
+
+		// 5. The 212 is a weigh-in, not a note that scrolled past.
+		expect(confirmed.body.weight).toMatchObject({ weight_lb: 212 });
+		const weights = await request(app).get("/api/weight").set(headers);
+		expect(weights.body[0]).toMatchObject({ weight_lb: 212 });
+
+		// 6. The plan facts are on the profile, dated.
+		const profile = await request(app).get("/api/profile").set(headers);
+		expect(profile.body).toMatchObject({
+			training_days: 4,
+			environment: "gym",
+			birth_year: new Date().getUTCFullYear() - 45,
+		});
+		expect(profile.body.stated_at.training_days).toBeTruthy();
+		expect(profile.body.stated_at.environment).toBeTruthy();
+		expect(profile.body.stated_at.birth_year).toBeTruthy();
+
+		// 7. And the goal reads back with a whole-body sets number on it.
+		const list = await request(app).get(`/api/goals?tz=${tz}`).set(headers);
+		const metrics = list.body.active[0].progress.metrics;
+		expect(metrics[1]).toMatchObject({ measure: "weekly_sets", scope: null, label: "Weekly sets, whole body" });
+	});
+
+	it("still offers 'already reached' when nothing was stated — worded with the number it used", async () => {
+		const token = await signUp("stale@example.com");
+		const theirs = { Authorization: `Bearer ${token}` };
+		await request(app).post("/api/weight").set(theirs).send({ weight_lb: 181.2 });
+
+		nextWholeBodyGoal({ current_weight_lb: null, training_days: null, environment: null, age_years: null });
+		const analyzed = await request(app)
+			.post("/api/log/analyze")
+			.set(theirs)
+			.field("text", "I want to get down to 200 lbs")
+			.field("tz_offset_min", String(tz));
+
+		expect(analyzed.body.result.facts).toBeNull();
+		const note = String(analyzed.body.proposal.metrics[0].note);
+		expect(analyzed.body.proposal.metrics[0].current).toBe(181.2);
+		// The number it went on, and the way out of it.
+		expect(note).toContain("181.2");
+		expect(note).toContain("already under 200 lb");
+		expect(note).toContain("tell me your current weight");
 	});
 });
 

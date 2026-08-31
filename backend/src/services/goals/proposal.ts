@@ -1,5 +1,5 @@
 import { addDays, daysBetween, type IsoDate } from "../localTime.js";
-import { computeMeasure, getMeasure, type DayFacts } from "./measures.js";
+import { computeMeasure, getMeasure, measureLabel, type DayFacts } from "./measures.js";
 
 // The proposed timeline (docs/concept-v2.md §Goals):
 //
@@ -48,6 +48,15 @@ export interface ProposalInput {
 	pace?: GoalPace | null;
 	/** The user's local date. Defaults to the facts' date. */
 	today?: IsoDate;
+	/**
+	 * A body weight the user just stated in the same breath as the goal ("I'm 212, I want
+	 * 200"). It is the starting point the projection runs from, in preference to the
+	 * seven-day average: that average exists to keep one glass of water out of the trend,
+	 * and it is the right number for *progress*, but projecting 212 → 200 from an average
+	 * that still carries last week's 181 gives a date the user can see is wrong. Progress
+	 * and reached-detection go on reading the smoothed number.
+	 */
+	statedWeightLb?: number | null;
 }
 
 export interface ProposalMetric {
@@ -216,23 +225,55 @@ function project(
 	return null;
 }
 
-function describeNoProjection(measure: string, direction: Direction): string {
+/**
+ * "You are already there" — worded with the number that said so.
+ *
+ * The number matters because it may not be the user's. `body_weight` is a seven-day
+ * average of weigh-ins, so a user who has not weighed in for five days and types "I'm 212,
+ * get me to 200" was being told they had already made it, on the strength of a reading they
+ * had forgotten about. Naming the reading turns a wrong answer into a question they can
+ * settle in one line.
+ */
+function alreadyThereNote(
+	measure: string,
+	scope: string | null,
+	current: number,
+	target: number,
+	unit: string | null,
+	direction: Direction,
+	weightWasStated: boolean
+): string {
+	const targetText = `${target}${unit ? ` ${unit}` : ""}`;
+	const relation =
+		current === target ? `already at ${targetText}` : `already ${wants(direction) === "down" ? "under" : "past"} ${targetText}`;
+
+	// The one case where the app may simply be out of date, and the user is standing right
+	// there able to correct it.
+	if (measure === "body_weight" && !weightWasStated) {
+		return `Your last weigh-ins average ${current} — ${relation}. Mark it reached, or tell me your current weight.`;
+	}
+	return `${measureLabel(measure, scope)} is at ${current}${unit ? ` ${unit}` : ""} — ${relation}. Mark it reached?`;
+}
+
+function describeNoProjection(measure: string, scope: string | null, direction: Direction): string {
 	if (!hasFinishLine(direction)) return "A standing intention — it runs until you replace it.";
-	const label = getMeasure(measure)?.label ?? measure;
-	return `${label} is a daily target rather than a journey, so there is no date to project.`;
+	return `${measureLabel(measure, scope)} is a daily target rather than a journey, so there is no date to project.`;
 }
 
 function proposeMetric(
 	metric: ProposalMetricSpec,
 	facts: DayFacts,
 	pace: GoalPace,
-	today: IsoDate
+	today: IsoDate,
+	statedWeightLb: number | null
 ): ProposalMetric {
 	const measure = metric.measure;
 	const scope = metric.scope ?? null;
 	const target = metric.target ?? null;
 	const statedBy = isIsoDate(metric.by) ? metric.by : null;
-	const current = computeMeasure(measure, facts, scope ?? undefined);
+	const computed = computeMeasure(measure, facts, scope ?? undefined);
+	// What the user just told us about their body beats what the trend remembers of it.
+	const current = measure === "body_weight" && statedWeightLb != null ? statedWeightLb : computed;
 	const unit = metric.unit ?? getMeasure(measure)?.unit ?? null;
 
 	const base: ProposalMetric = {
@@ -252,18 +293,22 @@ function proposeMetric(
 	};
 
 	if (target == null || !hasFinishLine(metric.direction)) {
-		return { ...base, note: describeNoProjection(measure, metric.direction) };
+		return { ...base, note: describeNoProjection(measure, scope, metric.direction) };
 	}
 	if (current == null) {
-		const label = (getMeasure(measure)?.label ?? measure).toLowerCase();
+		const label = measureLabel(measure, scope).toLowerCase();
 		return { ...base, note: `Nothing logged for ${label} yet — log it once and I will project a date.` };
 	}
 	if (metCurrent(current, target, metric.direction)) {
+		// The honest version of "already there": say which number said so. The user who is
+		// standing on the scale at 212 and gets told they are already under 200 has been
+		// shown the app's memory, not their body — so the note names the number it used and
+		// offers the other answer (concept-v2 §Principles: "confirm, don't trust").
 		return {
 			...base,
 			weeks: 0,
 			projected_date: today,
-			note: `Already at ${target}${unit ? ` ${unit}` : ""} — mark it reached?`,
+			note: alreadyThereNote(measure, scope, current, target, unit, metric.direction, statedWeightLb != null),
 		};
 	}
 
@@ -272,13 +317,13 @@ function proposeMetric(
 		// A percentage of nothing is nothing: a cardio goal from a week with no cardio in
 		// it has no starting point to grow from, which is a different thing from a measure
 		// that has no journey at all.
-		const label = (getMeasure(measure)?.label ?? measure).toLowerCase();
+		const label = measureLabel(measure, scope).toLowerCase();
 		return {
 			...base,
 			note:
 				GROWTH_MEASURES.includes(measure) && current <= 0
 					? `Nothing logged for ${label} yet — one week to grow from is all the projection needs.`
-					: describeNoProjection(measure, metric.direction),
+					: describeNoProjection(measure, scope, metric.direction),
 		};
 	}
 
@@ -330,9 +375,11 @@ function proposeMetric(
  * taking the slowest of them — a goal is reached when all of it is, not when the easiest
  * half is.
  */
-export function proposeTimeline({ spec, facts, pace, today }: ProposalInput): GoalProposal {
+export function proposeTimeline({ spec, facts, pace, today, statedWeightLb }: ProposalInput): GoalProposal {
 	const day = today ?? facts.date;
-	const metrics = spec.metrics.map((metric) => proposeMetric(metric, facts, pace ?? DEFAULT_PACE, day));
+	const metrics = spec.metrics.map((metric) =>
+		proposeMetric(metric, facts, pace ?? DEFAULT_PACE, day, statedWeightLb ?? null)
+	);
 
 	// A goal-level date the user stated ("by December") applies to the whole goal even when
 	// it was attached to one metric.
@@ -395,14 +442,19 @@ export function toProposedTimeline(proposal: GoalProposal): {
 	};
 }
 
-/** Scoped measures are meaningless without their scope — "sets this week" of *what*? */
+/**
+ * Some scoped measures are meaningless without their scope — "best load" of *what*? Others
+ * only narrow: weekly sets with no muscle named is the whole body's volume, which is what
+ * "a complete body workout through the week" means and what the calculator now returns.
+ * A measure says which it is with `scopeOptional`.
+ */
 export function validateMetrics(metrics: readonly ProposalMetricSpec[]): string | null {
 	for (const metric of metrics) {
 		const known = getMeasure(metric.measure);
 		if (!known) {
 			return `"${metric.measure}" is not a measure the app can compute.`;
 		}
-		if (known.scope && !metric.scope?.trim()) {
+		if (known.scope && !known.scopeOptional && !metric.scope?.trim()) {
 			return `${known.label} needs a ${known.scope} — say which one.`;
 		}
 	}

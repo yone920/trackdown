@@ -6,6 +6,7 @@ import {
 	daysBefore,
 	emptyDayFacts,
 	getMeasure,
+	measureLabel,
 	withinWindow,
 	type DayFacts,
 	type FactActivity,
@@ -168,9 +169,24 @@ describe("weekly_sets", () => {
 		expect(compute("weekly_sets", f, "lats")).toBe(4);
 	});
 
-	it("is zero for a muscle the week missed, and null without a scope", () => {
+	it("is zero for a muscle the week missed", () => {
 		expect(compute("weekly_sets", f, "hamstrings")).toBe(0);
-		expect(compute("weekly_sets", f)).toBeNull();
+	});
+
+	// "A complete body workout through the week" is a goal the app can count, so the scope
+	// narrows rather than being required: no muscle named = every muscle.
+	it("sums the whole week across every muscle group when no scope is given", () => {
+		expect(compute("weekly_sets", f)).toBe(11);
+		// The set that fell outside the seven-day window is still outside it.
+		expect(measureLabel("weekly_sets")).toBe("Weekly sets, whole body");
+		expect(measureLabel("weekly_sets", "chest")).toBe("Weekly sets");
+	});
+
+	it("counts an activity once even when it works several muscles", () => {
+		const chestAndTriceps = facts({
+			activities: [activity(TODAY, { muscle_groups: ["chest", "triceps"], sets: 4 })],
+		});
+		expect(compute("weekly_sets", chestAndTriceps)).toBe(4);
 	});
 });
 

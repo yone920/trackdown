@@ -4,7 +4,14 @@ import { Field, FieldGrid, LineField } from '@/components/fields';
 import { Card, Chip, Chips } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { C } from '@/lib/theme';
-import type { ActivityItem, Confidence, FieldSource, FusionResult, ProposedTimeline } from '@/lib/types';
+import type {
+  ActivityItem,
+  Confidence,
+  FieldSource,
+  FusionResult,
+  GoalFacts,
+  ProposedTimeline,
+} from '@/lib/types';
 
 // The confirm card (docs/design-system.md §Log). "Confirm, don't trust": every reading is
 // shown before it counts, editable in one tap, with what each fact came from and how sure
@@ -79,6 +86,22 @@ function timelineLine(timeline: ProposedTimeline | null): string | null {
   return parts.length === 0 ? null : parts.join(' · ');
 }
 
+/**
+ * "Also noting: 212 lb today · 4 days/week · gym · 45" — what the server picked up from the
+ * same sentence and is about to save alongside the goal. Shown because it is being written:
+ * a fact saved silently is a fact the user cannot correct (concept-v2 §Principles 3).
+ */
+export function notedFactsLine(facts: GoalFacts | null | undefined): string | null {
+  if (!facts) return null;
+  const parts = [
+    facts.current_weight_lb == null ? null : `${facts.current_weight_lb} lb today`,
+    facts.training_days == null ? null : `${facts.training_days} days/week`,
+    facts.environment,
+    facts.age_years == null ? null : `${facts.age_years} years old`,
+  ].filter(Boolean);
+  return parts.length === 0 ? null : `Also noting: ${parts.join(' · ')}`;
+}
+
 export type DateChoice = 'proposed' | 'confirm_date' | 'no_date';
 
 export function ConfirmCard({
@@ -106,7 +129,7 @@ export function ConfirmCard({
   saveLabel?: string;
   /** A correction has nothing to add more of. */
   showAddMore?: boolean;
-  /** Overrides "Recognised · <kind>" — a correction was recognised a while ago. */
+  /** Overrides "Recognized · <kind>" — a correction was recognized a while ago. */
   eyebrow?: string;
 }) {
   const patchActivity = (index: number, patch: Partial<ActivityItem>) => {
@@ -118,7 +141,7 @@ export function ConfirmCard({
   return (
     <Card testID="confirm-card" style={{ marginTop: 20 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Eyebrow>{eyebrow ?? `Recognised · ${KIND_LABEL[result.kind]}`}</Eyebrow>
+        <Eyebrow>{eyebrow ?? `Recognized · ${KIND_LABEL[result.kind]}`}</Eyebrow>
         {'confidence' in result ? <ConfidenceChip level={result.confidence} /> : null}
       </View>
 
@@ -268,6 +291,12 @@ export function ConfirmCard({
           </Sub>
           {timelineLine(result.proposed_timeline) ? (
             <Body style={{ marginTop: 10 }}>{timelineLine(result.proposed_timeline)}</Body>
+          ) : null}
+          {/* What else the same sentence said about them, and is about to be saved. */}
+          {notedFactsLine(result.facts) ? (
+            <Sub testID="goal-noted-facts" style={{ marginTop: 8 }}>
+              {notedFactsLine(result.facts)}
+            </Sub>
           ) : null}
           <FieldGrid>
             <LineField

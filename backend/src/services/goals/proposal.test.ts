@@ -123,7 +123,29 @@ describe("fat loss", () => {
 		});
 		expect(proposal.weeks).toBe(0);
 		expect(proposal.projected_date).toBe(TODAY);
-		expect(proposal.note).toContain("Already at 170 lb");
+		// Worded with the number it used, and offering the other answer: the trend may
+		// simply be older than the user standing on the scale.
+		expect(proposal.note).toContain("168");
+		expect(proposal.note).toContain("already under 170 lb");
+		expect(proposal.note).toContain("tell me your current weight");
+	});
+
+	it("projects from a weight stated with the goal rather than from the stale trend", () => {
+		// The field report: seeded weigh-ins at 181, the user types "I am 212, my goal is
+		// 200". Going by the trend alone the goal is already met; going by what they just
+		// said it is twelve pounds away.
+		const stale = facts({ weights: weightTrend(7, 181.2, 0) });
+		const toTwoHundred = {
+			kind: "lose_fat",
+			title: "Down to 200 lb",
+			metrics: [{ measure: "body_weight", target: 200, unit: "lb", direction: "decrease" }],
+		};
+		expect(proposeTimeline({ spec: toTwoHundred, facts: stale, today: TODAY }).weeks).toBe(0);
+
+		const stated = proposeTimeline({ spec: toTwoHundred, facts: stale, today: TODAY, statedWeightLb: 212 });
+		expect(stated.metrics[0]?.current).toBe(212);
+		expect(stated.weeks).toBeGreaterThan(1);
+		expect(stated.projected_date).not.toBe(TODAY);
 	});
 
 	it("has no date to give before the first weigh-in", () => {
@@ -282,9 +304,17 @@ describe("validateMetrics", () => {
 
 	it("refuses a scoped measure with nothing to scope it to", () => {
 		expect(validateMetrics([{ measure: "exercise_load", target: 185, direction: "increase" }])).toContain("exercise");
-		expect(validateMetrics([{ measure: "weekly_sets", target: 12, direction: "increase" }])).toContain("muscle");
 		expect(
 			validateMetrics([{ measure: "exercise_load", scope: "Bench Press", target: 185, direction: "increase" }])
+		).toBeNull();
+	});
+
+	// weekly_sets scopes to a muscle when one is named and to the whole body when none is,
+	// so an unscoped one is a goal, not a validation error (the field bug this fixed).
+	it("accepts weekly sets with no muscle named — that is the whole body", () => {
+		expect(validateMetrics([{ measure: "weekly_sets", target: 18, direction: "increase" }])).toBeNull();
+		expect(
+			validateMetrics([{ measure: "weekly_sets", scope: "chest", target: 12, direction: "increase" }])
 		).toBeNull();
 	});
 

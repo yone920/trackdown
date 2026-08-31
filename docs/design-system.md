@@ -59,7 +59,7 @@ Title `disp` 34 "What did you do?"; transcript/typed text area (`disp` 20) with 
 thumbnails; three 76px controls Photo / Speak / Type (Speak is the primary, `ink` filled);
 helper line "Say it, snap it, or type it — any mix. Same for food, weight, goals." Below: the
 **confirm card** for whatever was recognised (exercise / meal / weight / goal / coach context):
-eyebrow "RECOGNISED · <kind>", confidence chip (`good` high / `mute` medium / `accent` low),
+eyebrow "RECOGNIZED · <kind>", confidence chip (`good` high / `mute` medium / `accent` low),
 title, sources line ("machine from photo, load from your voice"), editable fields in a 3-col grid
 (`disp` 18 values), buttons Save (`ink` pill) and Add more. In Expo Go, Speak is hidden if the
 speech port reports unavailable.
