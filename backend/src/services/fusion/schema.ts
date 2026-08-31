@@ -148,6 +148,28 @@ export const GoalSpecSchema = z.object({
 });
 export type GoalSpec = z.infer<typeof GoalSpecSchema>;
 
+export const TRAINING_ENVIRONMENTS = ["gym", "home"] as const;
+
+/**
+ * Facts stated in the same breath as the goal. People do not set a goal in the abstract:
+ * "I'm 212 lbs, my goal is 200, I work out 4 days a week, I'm 45, I go to the gym" is one
+ * sentence with a goal and four facts in it, and throwing the facts away meant projecting
+ * the goal from a stale weigh-in and asking for a profile the user had already filled in
+ * out loud. The confirm saves each of these where it belongs — the weight as a weigh-in,
+ * the rest on the profile with a `stated_at` date — before the goal is created.
+ */
+export const GoalFactsSchema = z.object({
+	/** What they weigh today, when they said so. Saved as a weigh-in, not just a note. */
+	current_weight_lb: z.number().positive().max(2000).nullable(),
+	/** Sessions per week they train — profiles.training_days. */
+	training_days: z.number().int().min(0).max(7).nullable(),
+	/** Where they train — profiles.environment. */
+	environment: z.enum(TRAINING_ENVIRONMENTS).nullable(),
+	/** Their age in years; the profile stores a birth year, so the confirm subtracts. */
+	age_years: z.number().int().min(5).max(120).nullable(),
+});
+export type GoalFacts = z.infer<typeof GoalFactsSchema>;
+
 /**
  * The safe-rate projection (docs/concept-v2.md §Goals: "timelines are proposed, not
  * required"). When the user named a date of their own it is kept in `by` and
@@ -203,6 +225,12 @@ export const FusionResultSchema = z.discriminatedUnion("kind", [
 		kind: z.literal("goal"),
 		spec: GoalSpecSchema,
 		proposed_timeline: ProposedTimelineSchema.nullable(),
+		/**
+		 * Defaulted rather than required: the Goals screen and every client written before
+		 * this existed send a goal with no facts, and that is a goal with nothing stated
+		 * alongside it, not a malformed one.
+		 */
+		facts: GoalFactsSchema.nullable().default(null),
 	}),
 	z.object({
 		kind: z.literal("constraint"),
@@ -317,6 +345,14 @@ export const GoalDetailOutputSchema = z.object({
 		).max(6),
 		active_to: z.string().nullable(),
 	}),
+	// Four flat nullable scalars — about 250 bytes of grammar on a schema that had a
+	// kilobyte of headroom. fusion.test.ts pins the size so the next field has to measure.
+	facts: z.object({
+		current_weight_lb: z.number().nullable(),
+		training_days: z.number().int().nullable(),
+		environment: z.enum(TRAINING_ENVIRONMENTS).nullable(),
+		age_years: z.number().int().nullable(),
+	}),
 });
 export const GOAL_DETAIL_SCHEMA_NAME = "goal_spec";
 
@@ -357,6 +393,32 @@ export function expandSources<Field extends string>(
 		sources[field] = value === null || value === undefined ? null : photo.has(field.toLowerCase()) ? "photo" : "text";
 	}
 	return sources;
+}
+
+/**
+ * The model's stated facts, held to the public schema's bounds. The model-facing shape is
+ * deliberately loose (fewer constraints, less grammar), so a nonsense age or a negative
+ * weight is dropped here rather than failing the whole confirm later. All-null comes back
+ * as null: "nothing was stated" is not the same as "four blanks were stated".
+ */
+function sanitizeGoalFacts(facts: unknown): GoalFacts | null {
+	const parsed = GoalFactsSchema.safeParse(facts);
+	const clean = parsed.success
+		? parsed.data
+		: GoalFactsSchema.parse({
+				// Field by field, so one bad number does not cost the other three.
+				current_weight_lb: pick(facts, "current_weight_lb", z.number().positive().max(2000)),
+				training_days: pick(facts, "training_days", z.number().int().min(0).max(7)),
+				environment: pick(facts, "environment", z.enum(TRAINING_ENVIRONMENTS)),
+				age_years: pick(facts, "age_years", z.number().int().min(5).max(120)),
+			});
+	return Object.values(clean).every((value) => value === null) ? null : clean;
+}
+
+function pick<T>(source: unknown, key: string, schema: z.ZodType<T>): T | null {
+	const value = (source as Record<string, unknown> | null | undefined)?.[key];
+	const parsed = schema.safeParse(value);
+	return parsed.success ? parsed.data : null;
 }
 
 /**
@@ -426,6 +488,7 @@ export function toFusionResult(route: FusionRoute, detail: FusionDetail = {}): F
 				// Filled in by services/goals/proposal.ts once the user's facts are to
 				// hand; the analyzer itself has no database and no business guessing.
 				proposed_timeline: null,
+				facts: sanitizeGoalFacts(goalDetail.facts),
 			};
 		}
 

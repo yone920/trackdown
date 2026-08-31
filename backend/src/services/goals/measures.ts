@@ -180,6 +180,14 @@ export interface Measure {
 	/** Unit of the returned number, for display and for a goal's `unit` field. */
 	unit: string;
 	scope?: "muscle" | "exercise";
+	/**
+	 * True when the scope is a narrowing rather than a requirement: the measure computes
+	 * something meaningful without one. "12 sets of chest a week" and "18 sets a week"
+	 * are both goals; "best load" of nothing is not.
+	 */
+	scopeOptional?: boolean;
+	/** The label to use when a `scopeOptional` measure is asked for without a scope. */
+	unscopedLabel?: string;
 	/** Calendar days ending on facts.date that the calculator reads. */
 	windowDays: number;
 	/** "health" measures return null for a user with no Health samples. */
@@ -252,18 +260,25 @@ export const MEASURES: Record<MeasureId, Measure> = {
 		},
 	}),
 
-	// Weekly volume for one muscle group — the number behind "no pulling since Monday".
-	// Zero, not null, when the week has logs but none for this muscle: that is the fact.
+	// Weekly volume — for one muscle group when a scope is given (the number behind "no
+	// pulling since Monday"), and for the whole body when none is. "A complete body workout
+	// through the week" is a real goal and the app can count it; refusing it because nobody
+	// named a muscle was a bug, not a rule.
+	//
+	// Zero, not null, when the week has logs but none that count: that is the fact.
 	weekly_sets: define({
 		id: "weekly_sets",
 		label: "Weekly sets",
 		unit: "sets",
 		scope: "muscle",
+		scopeOptional: true,
+		unscopedLabel: "Weekly sets, whole body",
 		windowDays: 7,
 		derivedFrom: "logs",
 		compute({ facts, scope }) {
-			if (!scope) return null;
-			const week = facts.activities.filter((a) => withinWindow(a.date, facts.date, 7) && hasMuscle(a, scope));
+			const week = facts.activities.filter(
+				(a) => withinWindow(a.date, facts.date, 7) && (!scope || hasMuscle(a, scope))
+			);
 			return sum(week.map((a) => a.sets));
 		},
 	}),
@@ -383,6 +398,18 @@ export function isMeasureId(value: string): value is MeasureId {
 
 export function getMeasure(id: string): Measure | undefined {
 	return isMeasureId(id) ? MEASURES[id] : undefined;
+}
+
+/**
+ * What to call a measure as it is actually being used. A measure whose scope is optional
+ * reads differently without one — "Weekly sets" of nothing in particular is "Weekly sets,
+ * whole body" — and the proposal note, the goals list and the app all want the same words.
+ */
+export function measureLabel(id: string, scope?: string | null): string {
+	const measure = getMeasure(id);
+	if (!measure) return id;
+	if (measure.unscopedLabel && !scope?.trim()) return measure.unscopedLabel;
+	return measure.label;
 }
 
 /** Convenience wrapper: unknown ids and missing scopes both give null rather than throwing. */

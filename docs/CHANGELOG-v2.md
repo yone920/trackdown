@@ -77,6 +77,93 @@ half-lived today.
 
 ---
 
+## Field fixes
+
+Real logs, from the phone, that the build plan had not imagined.
+
+### 2026-08-30 — a goal with facts in it (`fix-goal-fusion`)
+
+One sentence typed into the Log sheet broke three things at once:
+
+> "Currently I am 212 lbs, my goal is to go down to 200 lbs. come up with reasonable time to
+> achieve that. I work out 4 days a week. At the same time I want to build body mascle. I am
+> 45 read old. I go to gym to workout. I want a complete body workout through out the week."
+
+- **Unscoped `weekly_sets` is a goal, not an error.** "A complete body workout through the
+  week" names no muscle, and `validateMetrics` refused to save it — a blocking 400 with no
+  way past it on the card. The measure now sums the week across every muscle group when no
+  scope is given, and a measure declares whether its scope is a requirement (`exercise_load`
+  — "best load" of nothing is nothing) or a narrowing (`weekly_sets`) with `scopeOptional`.
+  The label follows: `measureLabel()` gives "Weekly sets, whole body" unscoped, "Weekly
+  sets" for one muscle, and `GET /api/goals` titles the widget with it.
+- **Facts stated alongside a goal are captured.** `GoalDetailOutputSchema` — the second,
+  focused call — gained a `facts` object: `current_weight_lb`, `training_days`,
+  `environment` (gym | home), `age_years`. `POST /api/log/confirm` for `kind: "goal"` saves
+  the weight as a weigh-in and merges the rest into the profile (the age as
+  `birth_year = this year − age`, dated in `stated_at`) **before** creating the goal. The
+  preview carries them too, so the confirm card can show "Also noting: 212 lb today ·
+  4 days/week · gym · 45 years old" — a fact saved silently is a fact the user cannot
+  correct.
+- **"Already reached" stayed, but honest.** The 212 was being thrown away, so the timeline
+  was projected from a seeded 181.2 and came back "Already at 200 lb — mark it reached?".
+  Two changes: a weight stated with the goal is the projection's starting point
+  (`statedWeightLb`, threaded through `proposalForSpec` / `createGoal`), and when nothing was
+  stated the note now names the number it went on — "Your last weigh-ins average 181.2 —
+  already under 200 lb. Mark it reached, or tell me your current weight."
+- **App**: the noted-facts line on the goal card, and **RECOGNISED → RECOGNIZED** (the app is
+  US English) in `components/confirm-card.tsx` and `docs/design-system.md`.
+
+**Decisions**
+
+- **A stated weight beats the seven-day average — for the projection only.** The average
+  exists to keep one glass of water out of the trend and is the right number for progress
+  and for reached-detection, both of which still read it. It is the wrong number for "how
+  long from here", when the user is standing on the scale telling us where *here* is. The
+  weigh-in is also written, so the average catches up by itself.
+- **`facts` is `.default(null)` on the public schema**, not required: a goal typed into the
+  Goals screen states nothing alongside itself, and every client written before this sends
+  one. Model-facing it is required-and-nullable like everything else, and sanitised on the
+  way out — the loose model-facing bounds cost less grammar, and one nonsense age should not
+  fail the whole confirm.
+- **The grammar budget now fails on a laptop.** `fusion.test.ts` pins all three model-facing
+  schemas under 4500 bytes (route 3.5 KB, goal spec 1.3 KB, plan fields 1.0 KB), so the next
+  field is measured in a second rather than discovered by a provider at request time.
+- **The goal prompt now demands `by` as YYYY-MM-DD.** The contract test caught the real model
+  answering "December" — which `GoalDetailOutputSchema` allowed (a bare `z.string()`) and the
+  public schema would then have rejected at confirm time. Nothing in the app changes; the
+  prompt resolves the date against the context day it is already given.
+- No new dependencies. No migration: `training_days`, `environment` and `birth_year` are
+  columns the profile already had.
+
+**Tests** — 324 passing, 2 skipped in `backend` (was 307/2); 64 passing in the app.
+
+- `src/app.test.ts` (+2): the field report verbatim through analyze → confirm — the metric
+  list survives, `facts` rides on the preview, the proposal reads `current: 212`, the save
+  returns 201, `GET /api/weight` has the 212, the profile has `training_days 4`,
+  `environment gym` and the birth year with `stated_at` on all three, and the goals list
+  labels the metric "Weekly sets, whole body". Plus the honest already-reached wording for a
+  user who stated nothing.
+- `src/services/goals/measures.test.ts`, `proposal.test.ts`: the whole-body sum, the label,
+  the unscoped metric validating, and the projection from a stated weight over a stale trend.
+- `src/services/fusion/fusion.test.ts`: the facts widening, all-null → null, and the size pin.
+- `anthropic.fusion.contract.test.ts` (+1): the field report against the real model — the
+  extended `goal_spec` grammar compiles, 212 lands in `facts` rather than in the target, and
+  `weekly_sets` comes back with a null scope. Run here, green.
+- `__tests__/confirm-card.test.tsx` (+2): the noted-facts line, and that it is absent when
+  nothing was stated.
+
+**Deferred**
+
+- **The noted facts are not editable on the card.** They render as a line; correcting the
+  212 means saying it again. The fields are on the profile and the weigh-in is in the day
+  log, both one tap from being fixed, so this waits for a real complaint.
+- **`environment` is gym | home only.** The profile column takes any string and the
+  constraint/preference path can already write "outdoor" or "mixed"; the goal path's enum is
+  narrow because those two are what people say while setting a goal. Widening it costs
+  grammar, so it needs a reason.
+
+---
+
 ## WP6b — Days, Day, DayLog, Progress, Goals and the Coach screen
 
 The second half of WP6: every screen WP6a left as a routed placeholder, plus the one

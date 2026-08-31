@@ -1,8 +1,17 @@
+import { z } from "zod";
 import { describe, expect, it } from "vitest";
 import { buildFusionMessageContent, createFusionAnalyzer } from "./analyze.js";
 import { localDay, type FusionContext } from "./context.js";
 import { buildFusionSystemPrompt } from "./prompt.js";
-import { FusionResultSchema, FusionRouteSchema, expandSources, toFusionResult } from "./schema.js";
+import {
+	FusionResultSchema,
+	FusionRouteOutputSchema,
+	FusionRouteSchema,
+	GoalDetailOutputSchema,
+	PlanFieldsOutputSchema,
+	expandSources,
+	toFusionResult,
+} from "./schema.js";
 import { createFakeLlm } from "../../test/fakes/llm.js";
 
 // The pure half of the fusion pipeline: the day arithmetic, the prompt the model is given
@@ -206,7 +215,31 @@ describe("the fusion schema", () => {
 	});
 });
 
+/**
+ * The ceiling WP2 measured the hard way: Anthropic compiles a structured-output schema
+ * into a decoding grammar and refuses one much past this, on Haiku and Sonnet alike (see
+ * the note at the top of schema.ts). The contract test is where a schema over the line
+ * actually fails; this is where it fails in a second, on a laptop, with the number in the
+ * message. Every field added to a model-facing schema has to be measured here.
+ */
+const GRAMMAR_CEILING_BYTES = 4500;
+
+function schemaBytes(schema: z.ZodType): number {
+	return Buffer.byteLength(JSON.stringify(z.toJSONSchema(schema)), "utf8");
+}
+
 describe("the model-facing schema", () => {
+	it("stays under the provider's grammar limit, every schema it sends", () => {
+		for (const [name, schema] of [
+			["fusion_result", FusionRouteOutputSchema],
+			["goal_spec", GoalDetailOutputSchema],
+			["plan_fields", PlanFieldsOutputSchema],
+		] as const) {
+			const bytes = schemaBytes(schema);
+			expect({ name, overBudget: bytes >= GRAMMAR_CEILING_BYTES }).toEqual({ name, overBudget: false });
+		}
+	});
+
 	// Anthropic compiles a structured-output schema into a decoding grammar and refuses
 	// one that grows past a few KB, which the eight-branch public union does. The lean
 	// routing schema is what actually goes to the provider; these tests pin the two
@@ -296,15 +329,43 @@ describe("createFusionAnalyzer", () => {
 					],
 					active_to: null,
 				},
-				proposed_timeline: { by: "2026-12-01", rate: "~1 lb/week", note: null, realistic: true },
+				facts: { current_weight_lb: 191, training_days: null, environment: null, age_years: null },
 			}
 		);
-		const result = await createFusionAnalyzer(llm).analyze({ text: "I want to get to 170", context });
+		const result = await createFusionAnalyzer(llm).analyze({ text: "I'm 191, I want to get to 170", context });
 		expect(result.kind).toBe("goal");
 		if (result.kind !== "goal") return;
 		expect(result.spec.metrics[0]).toMatchObject({ measure: "body_weight", target: 170 });
+		// The facts stated alongside the goal ride along on the preview, so the confirm can
+		// save them and the card can show what it noted.
+		expect(result.facts).toEqual({
+			current_weight_lb: 191,
+			training_days: null,
+			environment: null,
+			age_years: null,
+		});
 		expect(llm.requests).toHaveLength(2);
 		expect(llm.requests[1]?.system).toContain("Down to 170 lb");
+	});
+
+	it("keeps nothing rather than four blanks when the user stated no facts", async () => {
+		const llm = createFakeLlm();
+		llm.outputs.push(
+			{ result: { kind: "goal", title: "Down to 170 lb" } },
+			{
+				spec: {
+					kind: "lose_fat",
+					title: "Down to 170 lb",
+					metrics: [
+						{ measure: "body_weight", scope: null, target: 170, unit: "lb", direction: "decrease", rate: null, by: null },
+					],
+					active_to: null,
+				},
+				facts: { current_weight_lb: null, training_days: null, environment: null, age_years: null },
+			}
+		);
+		const result = await createFusionAnalyzer(llm).analyze({ text: "I want to get to 170", context });
+		expect(result.kind === "goal" && result.facts).toBeNull();
 	});
 
 	it("asks a second time for the plan fields behind a constraint, but not for coach context", async () => {
@@ -336,7 +397,13 @@ describe("createFusionAnalyzer", () => {
 
 	it("asks the user rather than saving a goal the second call could not specify", async () => {
 		const llm = createFakeLlm();
-		llm.outputs.push({ result: { kind: "goal", title: "Get fitter" } }, { spec: { kind: "custom", title: "Get fitter", metrics: [], active_to: null }, proposed_timeline: null });
+		llm.outputs.push(
+			{ result: { kind: "goal", title: "Get fitter" } },
+			{
+				spec: { kind: "custom", title: "Get fitter", metrics: [], active_to: null },
+				facts: { current_weight_lb: null, training_days: null, environment: null, age_years: null },
+			}
+		);
 		const result = await createFusionAnalyzer(llm).analyze({ text: "get fitter", context });
 		// A spec with no measures is still a goal shape; it is the *missing* second call
 		// that falls back, so this one saves.

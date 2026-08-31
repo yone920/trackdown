@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import React from 'react';
 
-import { ConfirmCard, sourcesLine } from '@/components/confirm-card';
+import { ConfirmCard, notedFactsLine, sourcesLine } from '@/components/confirm-card';
 import type { FusionResult } from '@/lib/types';
 
 // The confirm card has to render every kind the classifier can return — that is the whole
@@ -75,7 +75,7 @@ const goal: FusionResult = {
 describe('ConfirmCard', () => {
   it('renders an exercise with its fields and its sources', () => {
     show(activities);
-    expect(screen.getByText('Recognised · exercise')).toBeTruthy();
+    expect(screen.getByText('Recognized · exercise')).toBeTruthy();
     expect(screen.getByText('Shoulder Press')).toBeTruthy();
     expect(screen.getByDisplayValue('3')).toBeTruthy();
     expect(screen.getByDisplayValue('40')).toBeTruthy();
@@ -86,24 +86,45 @@ describe('ConfirmCard', () => {
   it('renders a meal and reports an edit', () => {
     const onChange = jest.fn();
     show(meal, onChange);
-    expect(screen.getByText('Recognised · meal')).toBeTruthy();
+    expect(screen.getByText('Recognized · meal')).toBeTruthy();
     fireEvent.changeText(screen.getByTestId('meal-kcal'), '700');
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ kind: 'meal', kcal: 700 }));
   });
 
   it('renders a weigh-in', () => {
     show(weight);
-    expect(screen.getByText('Recognised · weight')).toBeTruthy();
+    expect(screen.getByText('Recognized · weight')).toBeTruthy();
     expect(screen.getByDisplayValue('181.4')).toBeTruthy();
   });
 
   it('renders a goal with its proposed timeline and the date choices', () => {
     show(goal);
-    expect(screen.getByText('Recognised · goal')).toBeTruthy();
+    expect(screen.getByText('Recognized · goal')).toBeTruthy();
     expect(screen.getByText(/about 20 weeks/)).toBeTruthy();
     expect(screen.getByText('Use 2027-01-14')).toBeTruthy();
     expect(screen.getByText('Keep my date')).toBeTruthy();
     expect(screen.getByText('No date')).toBeTruthy();
+    // Nothing was stated alongside it, so there is nothing to note.
+    expect(screen.queryByTestId('goal-noted-facts')).toBeNull();
+  });
+
+  it('shows the facts stated alongside a goal, which the server is about to save', () => {
+    show({
+      ...goal,
+      facts: { current_weight_lb: 212, training_days: 4, environment: 'gym', age_years: 45 },
+    } as FusionResult);
+    expect(screen.getByTestId('goal-noted-facts')).toBeTruthy();
+    expect(screen.getByText('Also noting: 212 lb today · 4 days/week · gym · 45 years old')).toBeTruthy();
+  });
+
+  it('notes only what was actually stated', () => {
+    expect(notedFactsLine(null)).toBeNull();
+    expect(
+      notedFactsLine({ current_weight_lb: null, training_days: null, environment: null, age_years: null }),
+    ).toBeNull();
+    expect(
+      notedFactsLine({ current_weight_lb: null, training_days: 4, environment: null, age_years: null }),
+    ).toBe('Also noting: 4 days/week');
   });
 
   it.each([
@@ -118,7 +139,7 @@ describe('ConfirmCard', () => {
 
   it('shows the question when the classifier could not tell, and offers no Save', () => {
     show({ kind: 'unclear', question: 'Was that the machine or free weights?' });
-    expect(screen.getByText('Recognised · unclear')).toBeTruthy();
+    expect(screen.getByText('Recognized · unclear')).toBeTruthy();
     expect(screen.getByText('Was that the machine or free weights?')).toBeTruthy();
     expect(screen.queryByTestId('confirm-save')).toBeNull();
   });

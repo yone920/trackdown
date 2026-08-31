@@ -445,6 +445,19 @@ export type GoalSpec = {
   active_to: IsoDate | null;
 };
 
+/**
+ * Facts the user stated in the same breath as a goal ("I'm 212, I train 4 days a week at
+ * the gym, I'm 45"). The server saves each where it belongs — the weight as a weigh-in, the
+ * rest on the profile — so the card only has to show what it noted. Optional: a goal typed
+ * into the Goals screen states nothing alongside itself.
+ */
+export type GoalFacts = {
+  current_weight_lb: number | null;
+  training_days: number | null;
+  environment: 'gym' | 'home' | null;
+  age_years: number | null;
+};
+
 export type ProfileFields = {
   diet_style: string | null;
   protein_g: number | null;
@@ -471,7 +484,7 @@ export type FusionResult =
       sources: Record<string, FieldSource> | null;
     }
   | { kind: 'weight'; weight_lb: number; confidence: Confidence; sources: Record<string, FieldSource> | null }
-  | { kind: 'goal'; spec: GoalSpec; proposed_timeline: ProposedTimeline | null }
+  | { kind: 'goal'; spec: GoalSpec; proposed_timeline: ProposedTimeline | null; facts?: GoalFacts | null }
   | { kind: 'constraint'; text: string; fields: ProfileFields }
   | { kind: 'preference'; text: string; fields: ProfileFields }
   | { kind: 'coach_context'; text: string }

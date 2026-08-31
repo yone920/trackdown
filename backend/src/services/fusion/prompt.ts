@@ -33,8 +33,8 @@ FIRST decide what kind of thing it is, then fill in that kind and nothing else:
   that would settle it. Prefer any of the kinds above over this: a vague meal is a meal.
 
 A log that states a current fact on the way to a goal ("I'm 191 now, want to get to 170")
-is the goal — the weight it mentions belongs in the goal's starting point, not a second
-result.`;
+is the goal — the second step captures the 191 as a stated fact, so it is not a second
+result here.`;
 
 const EVIDENCE_RULES = `EVIDENCE
 - A photo names the thing: which machine, which plate, what the display reads, what is on the
@@ -140,10 +140,23 @@ const GOAL_DETAIL = `Turn what the user said into a measurable goal spec (docs/c
   "at_most" for a standing intention.
 - Units are pounds and miles. Convert anything the user said in kg or km.
 - Do not work out how long it will take. If the user named a date of their own, put it in
-  that metric's "by" and nothing else; the app projects the timeline from their logs at
-  safe rates and says whether their date fits.
+  that metric's "by" as YYYY-MM-DD — resolve "December", "in six weeks" and "by my birthday"
+  against today's date below, and use null if you cannot. Never put words in "by". The app
+  projects the timeline from their logs at safe rates and says whether their date fits.
 - active_to: only for a goal with a stated window ("upper body for two months"); null for an
-  open-ended one.`;
+  open-ended one.
+- A goal about training the whole body ("a complete body workout through the week") is
+  weekly_sets with scope null — that is total sets across every muscle group. Only name a
+  scope when the user named one muscle.
+
+"facts" — things the user stated about THEMSELVES in the same breath, not about the goal.
+Every one they did not state stays null. Do not infer, do not carry a number over from the
+goal itself:
+- current_weight_lb: what they weigh NOW ("I am 212 lbs, my goal is 200" → 212, not 200).
+  Pounds; convert kg.
+- training_days: sessions per week they say they train ("I work out 4 days a week" → 4).
+- environment: "gym" or "home", when they say where they train. Nothing else.
+- age_years: their age in years ("I'm 45" → 45). Read through typos.`;
 
 export function buildGoalDetailSystemPrompt(context: FusionContext, title: string): string {
 	return `${GOAL_DETAIL}

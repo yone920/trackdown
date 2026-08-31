@@ -1,12 +1,19 @@
 import type pg from "pg";
 import { z } from "zod";
 import { saveCoachContext } from "../coach/coach.js";
-import { insertEntries, insertWeights, getProfile, type NewEntry } from "../entries.js";
+import {
+	insertEntries,
+	insertWeights,
+	getProfile,
+	updateProfile,
+	type NewEntry,
+	type ProfilePatch,
+} from "../entries.js";
 import { insertTextEvidence, linkEvidence, type EvidenceRow } from "../evidence.js";
 import { InvalidGoalError, createGoal } from "../goals/store.js";
 import { localDateOf } from "../localTime.js";
 import type { GoalProposal } from "../goals/proposal.js";
-import { FusionResultSchema, type FusionKind } from "./schema.js";
+import { FusionResultSchema, type FusionKind, type GoalFacts } from "./schema.js";
 
 // POST /api/log/confirm's half of the pipeline: take the preview the user just approved
 // (with whatever they edited) and write it, once, in one transaction.
@@ -167,6 +174,25 @@ async function applyProfileStatement(
 }
 
 /**
+ * The profile columns a goal's stated facts set. The age becomes a birth year because that
+ * is what the profile stores and what the TDEE model reads — an age is only true for a
+ * year, a birth year stays true.
+ *
+ * Returns null when nothing was stated, so a goal with no facts writes no profile row and
+ * stamps no `stated_at`.
+ */
+function goalFactsToProfile(facts: GoalFacts | null, loggedAt: string | undefined): ProfilePatch | null {
+	if (!facts) return null;
+	const patch: ProfilePatch = {};
+	if (facts.training_days != null) patch.training_days = facts.training_days;
+	if (facts.environment != null) patch.environment = facts.environment;
+	if (facts.age_years != null) {
+		patch.birth_year = (loggedAt ? new Date(loggedAt) : new Date()).getUTCFullYear() - facts.age_years;
+	}
+	return Object.keys(patch).length > 0 ? patch : null;
+}
+
+/**
  * Write one confirmed preview. Runs inside a caller's transaction — every branch here is
  * all-or-nothing with the evidence links and the idempotency ledger.
  */
@@ -253,12 +279,27 @@ export async function saveConfirmed(
 		}
 
 		case "goal": {
+			// The facts stated alongside the goal are saved first, and each where it
+			// belongs: nobody says "I'm 212 and I want 200" expecting the 212 to be thrown
+			// away. The weigh-in in particular has to land *before* the proposal is
+			// computed, or the timeline is projected from whatever the scale last said.
+			const facts = result.facts ?? null;
+			if (facts?.current_weight_lb != null) {
+				const rows = await insertWeights(client, userId, [
+					{ weight_lb: facts.current_weight_lb, ...(loggedAt ? { logged_at: loggedAt } : {}) },
+				]);
+				saved.weight = rows[0] ?? null;
+			}
+			const profilePatch = goalFactsToProfile(facts, loggedAt);
+			if (profilePatch) saved.profile = (await updateProfile(client, userId, profilePatch)) as Row;
+
 			// Through the same service the Goals screen uses, so a goal set by talking and
 			// a goal typed into the app get the same priority, the same validated metrics
 			// and the same computed timeline (services/goals/store.ts).
 			try {
 				const created = await createGoal(client, userId, {
 					spec: result.spec,
+					...(facts?.current_weight_lb == null ? {} : { statedWeightLb: facts.current_weight_lb }),
 					...(body.confirm_date === undefined ? {} : { confirmDate: body.confirm_date }),
 					...(body.no_date === undefined ? {} : { noDate: body.no_date }),
 					...(body.tz_offset_min === undefined ? {} : { tzOffsetMin: body.tz_offset_min }),

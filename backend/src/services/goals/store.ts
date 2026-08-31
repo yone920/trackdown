@@ -3,7 +3,7 @@ import { buildFacts } from "../day.js";
 import { addDays, boundsOf, daysBetween, localDay, type IsoDate } from "../localTime.js";
 import { loadTargets } from "../profile.js";
 import { detectReached, type GoalDetection } from "./detect.js";
-import { computeMeasure, getMeasure, type DayFacts } from "./measures.js";
+import { computeMeasure, getMeasure, measureLabel, type DayFacts } from "./measures.js";
 import {
 	proposeTimeline,
 	validateMetrics,
@@ -207,7 +207,9 @@ export function progressFor(goal: GoalRecord, facts: DayFacts, { withSeries = fa
 		const series = withSeries ? sampleSeries(start, end, at) : [];
 		return {
 			measure: metric.measure,
-			label: measure?.label ?? metric.measure,
+			// Named as it is used: "Weekly sets" of chest, "Weekly sets, whole body" of nothing
+			// in particular. The app titles its widget with this.
+			label: measureLabel(metric.measure, scope),
 			scope,
 			unit: metric.unit ?? measure?.unit ?? null,
 			direction: metric.direction ?? null,
@@ -337,6 +339,8 @@ export interface CreateGoalInput {
 	confirmDate?: boolean;
 	/** Save the goal with no end date at all. */
 	noDate?: boolean;
+	/** A body weight stated alongside the goal — the projection's starting point. */
+	statedWeightLb?: number | null;
 	tzOffsetMin?: number;
 	now?: Date;
 }
@@ -355,12 +359,16 @@ export async function proposalForSpec(
 	db: Queryable,
 	userId: string,
 	spec: ProposalSpec,
-	{ tzOffsetMin = 0, now = new Date() }: { tzOffsetMin?: number; now?: Date } = {}
+	{
+		tzOffsetMin = 0,
+		now = new Date(),
+		statedWeightLb = null,
+	}: { tzOffsetMin?: number; now?: Date; statedWeightLb?: number | null } = {}
 ): Promise<GoalProposal> {
 	const today = localDay(now, tzOffsetMin).date;
 	const facts = await loadFacts(db, userId, { date: today, tzOffsetMin });
 	const targets = await loadTargets(db, userId, today, tzOffsetMin);
-	return proposeTimeline({ spec, facts, pace: targets.profile?.goal_pace ?? null, today });
+	return proposeTimeline({ spec, facts, pace: targets.profile?.goal_pace ?? null, today, statedWeightLb });
 }
 
 /** Thrown for a spec the measure catalog cannot accept; routes turn it into a 400. */
@@ -385,7 +393,11 @@ export async function createGoal(db: Queryable, userId: string, input: CreateGoa
 	const today = localDay(input.now ?? new Date(), tzOffsetMin).date;
 	const activeFrom = typeof spec.active_from === "string" && spec.active_from ? spec.active_from : today;
 
-	const proposal = await proposalForSpec(db, userId, spec, { tzOffsetMin, ...(input.now ? { now: input.now } : {}) });
+	const proposal = await proposalForSpec(db, userId, spec, {
+		tzOffsetMin,
+		...(input.now ? { now: input.now } : {}),
+		...(input.statedWeightLb == null ? {} : { statedWeightLb: input.statedWeightLb }),
+	});
 
 	// What the goal actually ends on: nothing if the user said "no date", their own date
 	// when they confirmed it (unrealistic or not — it is theirs), the safe-rate projection

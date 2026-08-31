@@ -124,9 +124,16 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 		// by the projection from the user's own facts at the safe rates in concept-v2
 		// §Goals, so the confirm card shows the date the goal will actually be saved with
 		// (services/goals/proposal.ts).
+		// A weight stated with the goal ("I'm 212, I want 200") is the projection's starting
+		// point on the preview as well as on the save, so the date on the confirm card is
+		// the date the goal is created with. The weigh-in itself is written by the confirm
+		// — analyze still saves nothing.
 		const proposal =
 			result.kind === "goal"
-				? await proposalForSpec(pool, userId, result.spec, { tzOffsetMin: context.tzOffsetMin })
+				? await proposalForSpec(pool, userId, result.spec, {
+						tzOffsetMin: context.tzOffsetMin,
+						statedWeightLb: result.facts?.current_weight_lb ?? null,
+					})
 				: null;
 		if (proposal && result.kind === "goal") result.proposed_timeline = toProposedTimeline(proposal);
 
