@@ -9,6 +9,7 @@ import {
 	type IsoDate,
 } from "./localTime.js";
 import { attachHealthWorkouts, buildBlocks, healthWorkoutAsActivity } from "./day/blocks.js";
+import { applyKcalEstimates, estimateWeightKg } from "./day/estimate.js";
 import { withDeltas, type DeltaVsLast } from "./day/deltas.js";
 import { buildArc, eatingPattern, expectedItems, slotForMinutes, type ArcEvent, type ExpectedItem } from "./day/narrative.js";
 import type { Block, DayActivity, DayMeal, DayWeight, HealthWorkout, MealSlot } from "./day/types.js";
@@ -211,8 +212,10 @@ function toActivity(row: ActivityRow): DayActivity {
 		logged_at: row.logged_at,
 		description: row.description,
 		exercise: row.exercise,
-		exercise_id: row.exercise_id,
-		equipment: row.equipment,
+		// `?? null` rather than a bare read: services/goals/store.ts loads a narrower row
+		// for the facts window, and an undefined here would travel into the block model.
+		exercise_id: row.exercise_id ?? null,
+		equipment: row.equipment ?? null,
 		category: row.category,
 		muscle_groups: row.muscle_groups ?? [],
 		sets: row.sets,
@@ -265,6 +268,21 @@ function toHealthWorkout(row: HealthRow): HealthWorkout {
 
 function numberOrNull(value: unknown): number | null {
 	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * The Health workouts covering one local day, from both places they can live. A sync that
+ * already wrote an `activities` row wins: it is the editable record the user sees, and
+ * counting its sample too is the double count the overlap rules exist for.
+ */
+function healthWorkoutsFor(dayActivities: DayActivity[], dayHealth: HealthRow[]): HealthWorkout[] {
+	const materialised = new Set(
+		dayActivities.filter((a) => a.source === "health" && a.external_id).map((a) => a.external_id as string)
+	);
+	return [
+		...dayActivities.filter((a) => a.source === "health").map(activityAsHealthWorkout),
+		...dayHealth.filter((row) => row.kind === "workout" && !materialised.has(row.external_id)).map(toHealthWorkout),
+	];
 }
 
 /** An activities row a Health sync already materialised, as a workout for the merge. */
@@ -452,17 +470,7 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 	}));
 
 	const dayHealth = healthRows.filter((row) => localDateOf(row.start_at, tzOffsetMin) === date);
-	const materialised = new Set(
-		dayActivities.filter((a) => a.source === "health" && a.external_id).map((a) => a.external_id as string)
-	);
-	const healthWorkouts: HealthWorkout[] = [
-		// A sync that already wrote an activities row wins: it is the editable record the
-		// user sees, and counting its sample too is the double count the rules exist for.
-		...dayActivities.filter((a) => a.source === "health").map(activityAsHealthWorkout),
-		...dayHealth
-			.filter((row) => row.kind === "workout" && !materialised.has(row.external_id))
-			.map(toHealthWorkout),
-	];
+	const healthWorkouts = healthWorkoutsFor(dayActivities, dayHealth);
 
 	// Body-mass samples are weigh-ins on a day that has none of its own (concept-v2
 	// §Health: "body mass samples become weight logs"). A day the user weighed themselves
@@ -474,8 +482,25 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 		}
 	}
 
+	// The body the calorie model is computed for: the day's weigh-in (the mean, if there
+	// were several), else the most recent one before it. Resolved here rather than with the
+	// rest of the calorie maths below because the block estimates need it too.
+	const dayWeight = weights.length === 0 ? null : round1(mean(weights.map((w) => w.weight_lb)));
+	const lastKnownWeight =
+		dayWeight ??
+		(weightRows.filter((row) => Date.parse(row.logged_at) < endUtc.getTime()).at(-1)?.weight_lb ?? null);
+
 	const blocksWithoutHealth = buildBlocks(dayActivities);
-	const { blocks, standalone } = attachHealthWorkouts(blocksWithoutHealth, healthWorkouts);
+	const merged = attachHealthWorkouts(blocksWithoutHealth, healthWorkouts);
+	const standalone = merged.standalone;
+	// Lifts print no calories, so a block of them is estimated from its span and the body
+	// doing it (services/day/estimate.ts). Applied after the Health merge: a block a watch
+	// measured keeps the watch's figure.
+	const { blocks } = applyKcalEstimates(
+		merged.blocks,
+		dayActivities,
+		estimateWeightKg(lastKnownWeight, profile?.goal_weight_lb ?? null)
+	);
 	const standaloneActivities = standalone.map(healthWorkoutAsActivity);
 
 	// --- deltas ---------------------------------------------------------------------
@@ -548,17 +573,14 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 	// --- the calorie model ----------------------------------------------------------
 	const eaten = meals.reduce((total, meal) => total + meal.kcal, 0);
 	// Blocks already carry the overlap rules' answer (a Health workout attached to a block
-	// fills in its calories rather than adding a second figure); standalone Health items
-	// are the only activities counted outside a block. Daily active energy is deliberately
-	// NOT added: it is the baseline the TDEE already accounts for.
+	// fills in its calories rather than adding a second figure) and the MET estimate for
+	// the lifts that reported none; standalone Health items are the only activities counted
+	// outside a block. Daily active energy is deliberately NOT added: it is the baseline the
+	// TDEE already accounts for.
 	const earned =
 		blocks.reduce((total, block) => total + block.kcal, 0) +
 		standaloneActivities.reduce((total, activity) => total + activity.kcal, 0);
 
-	const dayWeight = weights.length === 0 ? null : round1(mean(weights.map((w) => w.weight_lb)));
-	const lastKnownWeight =
-		dayWeight ??
-		(weightRows.filter((row) => Date.parse(row.logged_at) < endUtc.getTime()).at(-1)?.weight_lb ?? null);
 	const targets: DayTargets = computeDayTargets(profile, lastKnownWeight, startUtc);
 	const eatback: Eatback = profile?.eatback ?? "half";
 	const allowance =
@@ -575,7 +597,19 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 	});
 
 	// --- facts for the measure catalog ----------------------------------------------
-	const facts = buildFacts({ date, tzOffsetMin, tdee: targets.tdee, mealRows, activityRows, weightRows, healthRows });
+	const facts = buildFacts({
+		date,
+		tzOffsetMin,
+		tdee: targets.tdee,
+		mealRows,
+		activityRows,
+		weightRows,
+		healthRows,
+		// So the facts window's calories are the same numbers the day view shows: the
+		// measures and the coach must not read a raw sum while the ring reads an estimate.
+		dayWeightLb: lastKnownWeight,
+		goalWeightLb: profile?.goal_weight_lb ?? null,
+	});
 
 	// --- weight trend ---------------------------------------------------------------
 	const avg7 = computeMeasure("body_weight", facts);
@@ -697,6 +731,53 @@ interface FactsInput {
 	activityRows: ActivityRow[];
 	weightRows: WeightRow[];
 	healthRows: HealthRow[];
+	/** The body weight `date` itself was computed for, when the caller already resolved one. */
+	dayWeightLb?: number | null;
+	/** The plan's goal weight — the last fallback before the estimate's default body. */
+	goalWeightLb?: number | null;
+}
+
+/**
+ * The MET estimate for every day in the facts window, per activity id. Built by running
+ * each day's rows through the same blocks → Health merge → estimate path `computeDay` uses,
+ * so a lift that is worth 63 kcal on the Today screen is worth 63 kcal to `calorie_balance`
+ * and to the coach. Nothing is written anywhere: this is a map, held for one request.
+ */
+function estimatesForWindow({
+	date,
+	tzOffsetMin,
+	activityRows,
+	weightRows,
+	healthRows,
+	dayWeightLb,
+	goalWeightLb,
+}: FactsInput): Map<string, number> {
+	const on = (instant: string) => localDateOf(instant, tzOffsetMin);
+	const byDate = new Map<IsoDate, ActivityRow[]>();
+	for (const row of activityRows) {
+		const day = on(row.logged_at);
+		byDate.set(day, [...(byDate.get(day) ?? []), row]);
+	}
+
+	const estimates = new Map<string, number>();
+	for (const [day, rows] of byDate) {
+		const activities = rows.map(toActivity);
+		const dayHealth = healthRows.filter((row) => on(row.start_at) === day);
+		const merged = attachHealthWorkouts(buildBlocks(activities), healthWorkoutsFor(activities, dayHealth));
+
+		// The same weight rule as computeDay: that day's weigh-in, else the latest before it.
+		// For the day being computed the caller has already resolved one (it may have come
+		// from a Health body-mass sample, which these rows do not carry), so that wins.
+		const onDay = weightRows.filter((row) => on(row.logged_at) === day);
+		const before = weightRows.filter((row) => on(row.logged_at) <= day);
+		const resolved =
+			(day === date ? (dayWeightLb ?? null) : null) ??
+			(onDay.length > 0 ? round1(mean(onDay.map((row) => row.weight_lb))) : (before.at(-1)?.weight_lb ?? null));
+
+		const { byActivity } = applyKcalEstimates(merged.blocks, activities, estimateWeightKg(resolved, goalWeightLb ?? null));
+		for (const [id, kcal] of byActivity) estimates.set(id, kcal);
+	}
+	return estimates;
 }
 
 /**
@@ -704,8 +785,10 @@ interface FactsInput {
  * date it happened on. The calculators are pure and know nothing about timezones; this is
  * where the user's midnight is applied, once.
  */
-export function buildFacts({ date, tzOffsetMin, tdee, mealRows, activityRows, weightRows, healthRows }: FactsInput): DayFacts {
+export function buildFacts(input: FactsInput): DayFacts {
+	const { date, tzOffsetMin, tdee, mealRows, activityRows, weightRows, healthRows } = input;
 	const on = (instant: string) => localDateOf(instant, tzOffsetMin);
+	const estimates = estimatesForWindow(input);
 	const meals: FactMeal[] = mealRows.map((row) => ({
 		date: on(row.logged_at),
 		kcal: row.kcal,
@@ -724,7 +807,13 @@ export function buildFacts({ date, tzOffsetMin, tdee, mealRows, activityRows, we
 		load_lb: row.load_lb,
 		duration_min: row.duration_min,
 		distance_mi: row.distance_mi,
-		kcal: row.kcal,
+		// A lift that reported no calories carries its block's MET estimate here, so
+		// `calorie_balance` and the coach read the same energy the day view shows. Only the
+		// rows that gave no figure are in the map (0004_v2.sql stores "nobody said" as 0,
+		// not NULL), so this cannot overwrite a number anyone reported. The `activities`
+		// row itself is untouched — this is the request's own arithmetic.
+		kcal: estimates.get(row.id) ?? row.kcal,
+		kcal_estimated: estimates.has(row.id),
 		// Not read by any measure; the coach's data-quality flags are what these are for.
 		source: row.source,
 		confidence: row.confidence,

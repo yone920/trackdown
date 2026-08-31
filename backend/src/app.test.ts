@@ -1289,6 +1289,148 @@ describe("day — Health overlap over real rows", () => {
 	});
 });
 
+describe("day — a lifting session that reported no calories", () => {
+	// The field report (2026-08-31): four exercises, 8:00 to 8:39, no kcal on any of them,
+	// and a day that read "0 kcal earned". Lifts print no number, so the block estimates
+	// one (services/day/estimate.ts) and every screen and every reader gets the same one.
+	const tz = tzForLocalHour(15);
+	const today = localDay(new Date(), tz).date;
+	const yesterday = addDays(today, -1);
+	let headers: Record<string, string>;
+	let userId: string;
+
+	/** 190 lb = 86.18 kg; 4.5 MET × 3.5 × 86.18 / 200 × 9.75 min = 66 kcal an exercise. */
+	const EXPECTED_EARNED = 264;
+
+	async function liftingMorning(date: string): Promise<void> {
+		const session: [string, string, string][] = [
+			["08:00", "Bench Press", "chest"],
+			["08:12", "Incline Dumbbell Press", "chest"],
+			["08:25", "Cable Fly", "chest"],
+			["08:39", "Triceps Pushdown", "triceps"],
+		];
+		for (const [clock, exercise, muscle] of session) {
+			const res = await request(app)
+				.post("/api/entries/movement")
+				.set(headers)
+				.send({
+					description: `3 × 10 ${exercise.toLowerCase()}`,
+					exercise,
+					category: "strength",
+					muscle_groups: [muscle],
+					sets: 3,
+					reps: 10,
+					logged_at: localInstant(date, clock, tz),
+				});
+			expect(res.status).toBe(201);
+		}
+	}
+
+	beforeAll(async () => {
+		const token = await signUp("mira@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+		userId = (await request(app).get("/api/auth/get-session").set(headers)).body.user.id as string;
+
+		await request(app)
+			.patch("/api/profile")
+			.set(headers)
+			.send({
+				sex: "male",
+				birth_year: new Date().getUTCFullYear() - 38,
+				height_cm: 180,
+				activity_level: "moderate",
+				goal_pace: "standard",
+			});
+		await request(app)
+			.post("/api/weight")
+			.set(headers)
+			.send({ weight_lb: 190, logged_at: localInstant(yesterday, "07:00", tz) });
+		await request(app)
+			.post("/api/entries/meals")
+			.set(headers)
+			.send({
+				description: "the day's food",
+				kcal: 1900,
+				protein_g: 150,
+				carbs_g: 180,
+				fat_g: 60,
+				fiber_g: 25,
+				logged_at: localInstant(yesterday, "12:30", tz),
+			});
+
+		await liftingMorning(yesterday);
+		await liftingMorning(today);
+	}, 60_000);
+
+	it("earns calories for the block instead of reading zero, and says they are an estimate", async () => {
+		const day = (await request(app).get(`/api/day/today?tz=${tz}`).set(headers)).body;
+
+		expect(day.items.activities).toHaveLength(4);
+		// Every row still carries the zero it was logged with — the estimate is the block's.
+		for (const activity of day.items.activities) expect(activity.kcal).toBe(0);
+
+		expect(day.blocks).toHaveLength(1);
+		expect(day.blocks[0]).toMatchObject({
+			exercise_count: 4,
+			minutes: 39,
+			category: "strength",
+			kcal: EXPECTED_EARNED,
+			kcal_estimated: true,
+			kcal_from_health: false,
+		});
+		expect(day.earned).toBe(EXPECTED_EARNED);
+		expect(day.summary_line).toContain("264 earned");
+		// The allowance and the balance are built from the same number.
+		expect(day.allowance).toBe((day.target as number) + Math.round(EXPECTED_EARNED / 2));
+		expect(day.balance).toBe((day.tdee as number) + EXPECTED_EARNED - day.eaten);
+	});
+
+	it("writes nothing to the activities rows", async () => {
+		const { rows } = await db.pool.query<{ kcal: number }>(`SELECT kcal FROM activities WHERE user_id = $1`, [userId]);
+		expect(rows).toHaveLength(8);
+		for (const row of rows) expect(Number(row.kcal)).toBe(0);
+	});
+
+	it("closes the day with the estimate in it, so the week and the Days list agree", async () => {
+		const closed = await request(app).post("/api/day/close").set(headers).send({ tz_offset_min: tz, date: yesterday });
+		expect(closed.status).toBe(200);
+
+		const { rows } = await db.pool.query<{
+			earned: number;
+			kcal_burned: number;
+			blocks: { kcal: number; kcal_estimated: boolean }[];
+		}>(`SELECT earned, kcal_burned, blocks FROM daily_summaries WHERE user_id = $1 AND date = $2::date`, [
+			userId,
+			yesterday,
+		]);
+		expect(rows[0]?.earned).toBe(EXPECTED_EARNED);
+		expect(rows[0]?.kcal_burned).toBe(EXPECTED_EARNED);
+		expect(rows[0]?.blocks[0]).toMatchObject({ kcal: EXPECTED_EARNED, kcal_estimated: true });
+
+		// The week reads the frozen record for yesterday and recomputes today; both agree.
+		const week = (await request(app).get(`/api/week?tz=${tz}`).set(headers)).body;
+		const rowFor = (date: string) => week.days.find((day: { date: string }) => day.date === date);
+		expect(rowFor(yesterday).earned).toBe(EXPECTED_EARNED);
+		expect(rowFor(today).earned).toBe(EXPECTED_EARNED);
+		expect(week.weekly_deficit).toBe(
+			week.days.reduce((total: number, day: { balance: number | null }) => total + (day.balance ?? 0), 0)
+		);
+	});
+
+	it("gives the coach the same earned figure it gives the ring", async () => {
+		coach.nextBrief = SAMPLE_BRIEF;
+		const res = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+
+		const inputs = coach.inputs.at(-1);
+		expect(inputs?.today.earned).toBe(EXPECTED_EARNED);
+		// The features window is built from the same facts, so it sees the session too.
+		expect(inputs?.features.sessions_this_week).toBeGreaterThan(0);
+		expect(buildCoachPrompt(inputs!)).toContain(`Earned from activity: ${EXPECTED_EARNED} kcal`);
+	});
+});
+
 describe("day close", () => {
 	const tz = tzForLocalHour(15);
 	const today = localDay(new Date(), tz).date;

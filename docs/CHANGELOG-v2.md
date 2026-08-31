@@ -87,6 +87,63 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-08-31 — a lifting session worth 0 kcal (`fix-strength-kcal`)
+
+**The report.** Four strength exercises logged between 8:00 and 8:39, no calories on any of
+them, and the day said **"0 kcal earned"**. Cardio gets a number from the machine or the
+watch; a barbell prints nothing, and nothing in the model estimated it. So a real forty
+minutes in the gym moved the ring, the balance, the week's deficit and the coach's picture of
+the day by exactly zero.
+
+**The fix — a block-level MET estimate, never a stored one.** `services/day/estimate.ts` is
+one pure module and it is applied where the blocks are built, on every read:
+
+    kcal = MET × 3.5 × weight_kg / 200 × duration_min       MET 4.5 strength, 2.5 mobility
+
+- **Nothing is written to `activities`.** A row keeps the calories the user or a machine gave
+  it and no others (the column stores "nobody said" as 0, not NULL). The estimate is derived
+  like the blocks themselves, so a correction — or a watch that turns up later with the real
+  figure — replaces it rather than adding to something already saved.
+- **Order matters.** buildBlocks → the Health overlap merge → the estimate. A block a watch
+  measured keeps the watch's number: our guess about the same minutes is not an improvement,
+  and adding both is the double count the overlap rules exist to prevent.
+- **No double count inside the block either.** Minutes an activity's own calories already paid
+  for are subtracted from the span before the estimate covers what is left, so the bike's 20
+  minutes and its 180 kcal are never charged twice. Cardio is never estimated at all.
+- **Floors and caps.** What remains is floored at **8 minutes per estimable exercise** (a lift
+  logged at a single instant has no span, and no span must not mean no work) and capped at
+  **120 minutes**. Those minutes are split between the exercises: one that named its own
+  duration weighs that, one that did not weighs the 8-minute default, each at its own
+  category's MET. Rounding is per exercise and the block is the sum, so the rows and the
+  header always add up.
+- **Which body.** `weight_kg` is the day's weigh-in (the mean, if several), else the latest one
+  before it, else the plan's goal weight, else 80 kg. A wrong weight moves the answer a few per
+  cent; no estimate moves it to zero.
+
+The field case: 39 minutes, four exercises, 190 lb → 4 × 66 = **264 kcal**.
+
+**One number, everywhere.** `Block.kcal_estimated` is new (presentation only, no schema
+change). `earned` is Σ blocks as before, so the ring, the allowance, the balance, the week's
+deficit and `daily_summaries` at close all move together — the close writes `computeDay`'s own
+view, and the week reads the frozen record for a closed day and recomputes an open one; both
+were checked against each other in the test. The one place that *did* read a rawer sum was
+`goals/measures.ts` `calorie_balance`, which sums the facts window's activity kcal: `buildFacts`
+now runs the same blocks → merge → estimate path per day in the window and carries each lift's
+share on its fact (`kcal_estimated` beside it), so the measures, the goal progress and the
+coach's "Earned from activity" read exactly what the ring reads. The coach's `today.earned`
+already came from `view.earned` and needed no change; verified in the test rather than assumed.
+
+**The label.** Today's training line and each block header, and the Day screen's *Earned* tile
+and training line, carry a quiet **"est."** — `C.dim`, no caps, no colour — via new optional
+`note` props on `Section` and `GroupHeading`. The Right-now and In-short readings read the
+estimated value like any other number; they are told the day, not the provenance.
+
+**Tests.** 12 new: the estimation maths (span, the per-exercise floor, the cap, mixed
+cardio + strength, duration weighting, mobility's own MET, a watch-measured block left alone,
+the weight fallbacks), `buildFacts` → `calorie_balance` agreeing with `earned`, the whole thing
+end to end over real rows (earned 264, rows still 0, the close, the week, the coach's inputs),
+and the "est." marker on Today.
+
 ### 2026-08-31 — no forms: review it, or tell it what to change (`wp-no-forms`)
 
 Two field reports, one answer. The first: in the Log sheet the keyboard covered the box

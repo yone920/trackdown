@@ -125,6 +125,9 @@ function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) 
   const Mark = view.verdict === 'served' ? IconCheckCircle : IconAlertCircle;
   const health = view.items.activities.filter((activity) => activity.source === 'health');
   const logged = view.items.activities.filter((activity) => activity.source !== 'health');
+  // Lifts print no calories, so their block's figure is a MET estimate (concept-v2
+  // §Calories). Said once on the Earned tile and once on the Training line.
+  const earnedEstimated = view.blocks.some((block) => block.kcal_estimated);
 
   const mealsBySlot = SLOT_ORDER.map((slot) => ({
     slot,
@@ -172,14 +175,20 @@ function DayBody({ view, onOpenLog }: { view: DayView; onOpenLog: () => void }) 
       {/* Eaten · Earned · Allowance */}
       <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
         <Stat label="Eaten" value={kcal(view.eaten)} />
-        <Stat label="Earned" value={kcal(view.earned)} color={view.earned > 0 ? C.good : C.ink} />
+        <Stat
+          label="Earned"
+          value={kcal(view.earned)}
+          unit={earnedEstimated ? 'estimated' : undefined}
+          color={view.earned > 0 ? C.good : C.ink}
+        />
         <Stat label="Allowance" value={view.allowance == null ? '—' : kcal(view.allowance)} />
       </View>
 
       {/* Training, by muscle group */}
       <Section
         title="Training"
-        summary={logged.length === 0 && health.length === 0 ? 'Nothing logged' : `${kcal(view.earned)} kcal earned`}>
+        summary={logged.length === 0 && health.length === 0 ? 'Nothing logged' : `${kcal(view.earned)} kcal earned`}
+        note={earnedEstimated ? 'est.' : null}>
         {logged.length === 0 && health.length === 0 ? (
           <Card>
             <Sub>No exercise on this day.</Sub>
