@@ -89,6 +89,30 @@ export const EntryPatch = z
 	.refine((patch) => Object.keys(patch).length > 0, { message: "Empty patch." });
 export type EntryPatch = z.infer<typeof EntryPatch>;
 
+/**
+ * A correction that replaces ONE activity record with SEVERAL (migration 0018). Told, like
+ * every other correction: the user says "the last two sets I dropped to 70", the fusion
+ * revision answers with the parts, and this is the parts arriving to be written.
+ *
+ * A record carries one load, so a load that changed partway through the sets cannot be
+ * corrected into it. The PATCH beside this can only ever move the fields of one row, which
+ * is why a second door exists rather than a flag on the first: a PATCH that creates rows
+ * would be a lie about what a PATCH is.
+ */
+export const SplitPart = z.object({
+	description: z.string().trim().min(1).max(500),
+	kcal: z.number().int().min(0).default(0),
+	...activityFields,
+});
+export type SplitPart = z.infer<typeof SplitPart>;
+
+export const SplitEntry = z.object({
+	/** At least two: replacing one record with one record is a PATCH. */
+	parts: z.array(SplitPart).min(2).max(10),
+	correction_instruction: correctionInstruction,
+});
+export type SplitEntry = z.infer<typeof SplitEntry>;
+
 export const NewWeight = z.object({
 	weight_lb: z.number().positive().max(2000),
 	logged_at: isoDate.optional(),
@@ -370,6 +394,80 @@ export async function updateEntry(db: Queryable, userId: string, kind: Kind, id:
 		);
 	}
 	return after;
+}
+
+/**
+ * Replace one activity record with several, in one transaction (migration 0018).
+ *
+ * The original row is **corrected in place into the first part** rather than deleted and
+ * re-created, and that is the whole design. Its id survives, so its evidence, its photos
+ * and every correction ever made to it stay attached to the thing the user is looking at;
+ * a delete-and-insert would take the day's history away in the name of fixing it. The
+ * remaining parts are new rows that borrow the original's clock and source, each carrying a
+ * correction row with the same instruction and `replaces_activity_id` pointing back — so
+ * "why is this here?" has an answer on the row itself.
+ *
+ * Null when there is no such row: a 404 is the honest answer, and nothing has been written.
+ */
+export async function splitEntry(
+	pool: pg.Pool,
+	userId: string,
+	id: string,
+	body: SplitEntry
+): Promise<Record<string, unknown>[] | null> {
+	const client = await pool.connect();
+	try {
+		await client.query("BEGIN");
+		const before = await getEntry(client, userId, "movement", id);
+		if (!before) {
+			await client.query("ROLLBACK");
+			return null;
+		}
+		const [first, ...rest] = body.parts;
+		const said = body.correction_instruction;
+
+		// The original becomes part one. updateEntry files its own correction against it,
+		// with the field-level diff, exactly as an ordinary told change would.
+		const head = await updateEntry(client, userId, "movement", id, {
+			...first!,
+			correction_instruction: said,
+		});
+
+		// The rest are new rows on the same moment of the same day. `logged_at` is the
+		// original's, not now: the parts of a drop set happened when the set happened, and
+		// stamping them with the time of the correction would move a morning lift to the
+		// evening.
+		const loggedAt = new Date(before.logged_at as string | Date).toISOString();
+		const created = await insertEntries(
+			client,
+			userId,
+			"movement",
+			rest.map((part) => ({
+				...part,
+				logged_at: loggedAt,
+				source: part.source ?? (before.source as string | null) ?? "manual",
+				confidence: part.confidence ?? (before.confidence as string | null) ?? null,
+			})) as NewEntry[]
+		);
+
+		for (const row of created) {
+			await recordCorrection(
+				client,
+				userId,
+				{ activityId: row.id as string, replacesActivityId: id },
+				said,
+				diffFields(before as Record<string, unknown>, row as Record<string, unknown>, CORRECTABLE_FIELDS.activity)
+			);
+		}
+
+		await client.query("COMMIT");
+		return [head as Record<string, unknown>, ...(created as Record<string, unknown>[])];
+	} catch (error) {
+		await client.query("ROLLBACK");
+		throw error;
+	} finally {
+		client.release();
+	}
 }
 
 export async function deleteEntry(db: Queryable, userId: string, kind: Kind, id: string): Promise<boolean> {

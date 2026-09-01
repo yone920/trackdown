@@ -123,6 +123,48 @@ describe("diffResults", () => {
 		expect(diffResults([meal()], [activity()], "that was a workout")).toEqual([]);
 	});
 
+	it("files a split as one correction per part, each naming the record it replaced", () => {
+		// Field report 2026-09-01: "4 sets of 10 at 85, the last two sets I reduced to 70".
+		// One record cannot hold two loads, so the correction replaces it with two — and
+		// each of the two has to be able to explain, on its own row, where it came from.
+		const before = activity({ exercise: "Chest Press", sets: 4, reps: 10, load_lb: 85 });
+		const after: FusionResult = {
+			kind: "activities",
+			items: [
+				{ ...before.items[0]!, sets: 2, reps: 10, load_lb: 85, description: "chest press, first two sets" },
+				{ ...before.items[0]!, sets: 2, reps: 10, load_lb: 70, description: "chest press, last two sets — dropped to 70" },
+			],
+		};
+		const said = "the last two sets I reduced the load to 70";
+		const corrections = diffResults([before], [after], said);
+
+		expect(corrections).toHaveLength(2);
+		expect(corrections.every((correction) => correction.replaces === 0)).toBe(true);
+		expect(corrections.map((correction) => correction.item)).toEqual([0, 1]);
+		// The first part kept the load and lost half the sets; the second changed both.
+		expect(corrections[0]!.changes).toContainEqual({ field: "sets", from: 4, to: 2 });
+		expect(corrections[0]!.changes).not.toContainEqual({ field: "load_lb", from: 85, to: 85 });
+		expect(corrections[1]!.changes).toContainEqual({ field: "sets", from: 4, to: 2 });
+		expect(corrections[1]!.changes).toContainEqual({ field: "load_lb", from: 85, to: 70 });
+		// The parts SUM to what was actually done — four sets, not six.
+		const total = after.kind === "activities" ? after.items.reduce((sum, item) => sum + (item.sets ?? 0), 0) : 0;
+		expect(total).toBe(4);
+	});
+
+	it("still refuses to guess when SEVERAL records became a different number of records", () => {
+		// Which of two originals a new part came out of is not a question positions can
+		// answer, and a guessed provenance is worse than none.
+		const before: FusionResult = {
+			kind: "activities",
+			items: [...activity().items, ...activity({ exercise: "Lat Pulldown" }).items],
+		};
+		const after: FusionResult = {
+			kind: "activities",
+			items: [...activity().items, ...activity().items, ...activity().items],
+		};
+		expect(diffResults([before], [after], "split the pulldown")).toEqual([]);
+	});
+
 	it("has nothing to say about a goal, a statement or a question", () => {
 		const goal: FusionResult = {
 			kind: "goal",

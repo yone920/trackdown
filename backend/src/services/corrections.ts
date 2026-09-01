@@ -39,6 +39,12 @@ export interface CorrectionOwner {
 	activityId?: string | null;
 	mealId?: string | null;
 	weightId?: string | null;
+	/**
+	 * The record this one was split out of (migration 0018). Set only on the rows a
+	 * correction CREATED — "this exists because that was corrected" — and never on the row
+	 * the correction is about, which is named by `activityId` and is a different fact.
+	 */
+	replacesActivityId?: string | null;
 }
 
 /**
@@ -108,6 +114,12 @@ export interface PartCorrection {
 	item: number | null;
 	instruction: string;
 	changes: FieldChange[];
+	/**
+	 * Which item of the part as it went IN this one replaces — set only when the told
+	 * change split one record into several (migration 0018). Absent for an ordinary
+	 * field-level correction, which replaces nothing: it moves what was already there.
+	 */
+	replaces?: number | null;
 }
 
 /**
@@ -132,6 +144,26 @@ export function diffResults(
 		const now = after[part];
 		if (!now || now.kind !== was.kind) return;
 		if (was.kind === "activities" && now.kind === "activities") {
+			// A SPLIT: one record became several (migration 0018). Every part is diffed
+			// against the record it came out of, so each new row's history says what it
+			// took from the original — "sets 4 → 2, load — → 85" — and names it as the
+			// record it replaces. Only ONE record splitting is handled: which of three
+			// originals a new part came from is not a question the positions can answer,
+			// and a guessed provenance is worse than none.
+			if (was.items.length === 1 && now.items.length > 1) {
+				const original = was.items[0] as unknown as Record<string, unknown>;
+				now.items.forEach((item, index) => {
+					const changes = diffFields(
+						original,
+						item as unknown as Record<string, unknown>,
+						CORRECTABLE_FIELDS.activity
+					);
+					if (changes.length > 0) {
+						corrections.push({ part, item: index, instruction: said, changes, replaces: 0 });
+					}
+				});
+				return;
+			}
 			if (was.items.length !== now.items.length) return;
 			was.items.forEach((item, index) => {
 				const changes = diffFields(
@@ -174,11 +206,15 @@ export async function recordCorrection(
 	const mealId = owner.mealId ?? null;
 	const weightId = owner.weightId ?? null;
 	if ([activityId, mealId, weightId].filter(Boolean).length !== 1) return null;
+	// A row cannot have been split out of itself; that would be a loop in the provenance
+	// rather than a fact about where the row came from.
+	const replaces = owner.replacesActivityId && owner.replacesActivityId !== activityId ? owner.replacesActivityId : null;
 	const { rows } = await db.query<RecordCorrection>(
-		`INSERT INTO record_corrections (user_id, activity_id, meal_id, weight_id, instruction, changes)
-		 VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+		`INSERT INTO record_corrections
+		        (user_id, activity_id, meal_id, weight_id, instruction, changes, replaces_activity_id)
+		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
 		 RETURNING id, instruction, changes, created_at`,
-		[userId, activityId, mealId, weightId, said, JSON.stringify(changes)]
+		[userId, activityId, mealId, weightId, said, JSON.stringify(changes), replaces]
 	);
 	return rows[0] ?? null;
 }

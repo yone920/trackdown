@@ -5,11 +5,13 @@ import {
 	EntryPatch,
 	NewEntry,
 	RangeQuery,
+	SplitEntry,
 	deleteEntry,
 	getEntry,
 	insertEntries,
 	isKind,
 	listEntries,
+	splitEntry,
 	updateEntry,
 } from "../services/entries.js";
 import { z } from "zod";
@@ -72,6 +74,33 @@ export function entriesRouter(pool: pg.Pool): Router {
 			return;
 		}
 		res.json(row);
+	});
+
+	/**
+	 * One told change that replaces one record with several (migration 0018). Only on
+	 * "movement": a load that changed partway through the sets is the whole reason this
+	 * exists, and a meal has no equivalent — a plate read wrong is one plate read wrong.
+	 *
+	 * Separate from PATCH rather than a flag on it, because a PATCH moves the fields of one
+	 * row and this one creates rows. Both are the same act to the user — they said what was
+	 * wrong and the app fixed it — and that is exactly why the difference belongs in the
+	 * URL rather than in a branch inside the patch handler.
+	 */
+	router.post("/api/entries/:kind/:id/split", async (req: AuthenticatedRequest, res) => {
+		const kind = req.params.kind as string;
+		if (!isKind(kind)) return;
+		if (kind !== "movement") {
+			res.status(404).json({ error: "Only an exercise record can be split." });
+			return;
+		}
+		const parsed = SplitEntry.safeParse(req.body);
+		if (!parsed.success) return badRequest(res, parsed.error);
+		const rows = await splitEntry(pool, req.userId!, req.params.id as string, parsed.data);
+		if (!rows) {
+			res.status(404).json({ error: "Not found." });
+			return;
+		}
+		res.status(201).json({ records: rows });
 	});
 
 	router.delete("/api/entries/:kind/:id", async (req: AuthenticatedRequest, res) => {

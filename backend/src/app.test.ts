@@ -369,6 +369,104 @@ describe("entries", () => {
 		expect(patched.body.exercise_id).not.toBe(activity.exercise_id);
 	});
 
+	// The correction split (migration 0018). A PATCH can only ever move the fields of one
+	// row; a load that changed partway through the sets is two rows or it is nothing.
+	it("replaces one exercise record with the parts a load change needs, and keeps the trail", async () => {
+		const auth = { Authorization: `Bearer ${token}` };
+		const created = await request(app)
+			.post("/api/entries/movement")
+			.set(auth)
+			.send({
+				description: "4 × 10 chest press",
+				kcal: 120,
+				exercise: "chest press",
+				sets: 4,
+				reps: 10,
+				load_lb: 85,
+				source: "fused",
+				confidence: "high",
+				logged_at: "2026-08-11T18:00:00.000Z",
+			});
+		expect(created.status).toBe(201);
+		const original = created.body[0];
+
+		const said = "the last two sets I reduced the load to 70";
+		const split = await request(app)
+			.post(`/api/entries/movement/${original.id}/split`)
+			.set(auth)
+			.send({
+				correction_instruction: said,
+				parts: [
+					{ description: "chest press, first two sets", kcal: 60, exercise: "chest press", sets: 2, reps: 10, load_lb: 85 },
+					{
+						description: "chest press, last two sets — dropped to 70",
+						kcal: 60,
+						exercise: "chest press",
+						sets: 2,
+						reps: 10,
+						load_lb: 70,
+					},
+				],
+			});
+		expect(split.status).toBe(201);
+		expect(split.body.records).toHaveLength(2);
+
+		// The original row is corrected IN PLACE into the first part: same id, so its
+		// evidence and its own history stay attached to what the user is looking at.
+		expect(split.body.records[0].id).toBe(original.id);
+		expect(split.body.records[0]).toMatchObject({ sets: 2, load_lb: 85 });
+		expect(split.body.records[1].id).not.toBe(original.id);
+		expect(split.body.records[1]).toMatchObject({ sets: 2, load_lb: 70 });
+
+		// The parts SUM to what was done: four sets, not six.
+		const ids = split.body.records.map((row: { id: string }) => row.id);
+		const rows = await request(app).get("/api/entries/movement").set(auth);
+		const presses = rows.body.filter((row: { id: string }) => ids.includes(row.id));
+		expect(presses).toHaveLength(2);
+		expect(presses.reduce((sum: number, row: { sets: number }) => sum + row.sets, 0)).toBe(4);
+		// The new row borrowed the original's clock, not the clock of the correction.
+		expect(new Date(presses[0].logged_at).toISOString()).toBe(new Date(presses[1].logged_at).toISOString());
+
+		// Both rows can explain themselves, and the new one names what it came out of.
+		const history = await db.pool.query(
+			`SELECT activity_id, replaces_activity_id, instruction, changes FROM record_corrections
+			  WHERE activity_id = ANY($1::uuid[]) ORDER BY created_at`,
+			[[split.body.records[0].id, split.body.records[1].id]]
+		);
+		expect(history.rows).toHaveLength(2);
+		expect(history.rows.every((row) => row.instruction === said)).toBe(true);
+		const born = history.rows.find((row) => row.activity_id === split.body.records[1].id)!;
+		expect(born.replaces_activity_id).toBe(original.id);
+		expect(born.changes).toContainEqual({ field: "load_lb", from: 85, to: 70 });
+		// The row that was corrected in place replaces nothing: it IS the original.
+		const kept = history.rows.find((row) => row.activity_id === original.id)!;
+		expect(kept.replaces_activity_id).toBeNull();
+		expect(kept.changes).toContainEqual({ field: "sets", from: 4, to: 2 });
+	});
+
+	it("refuses to split a meal, and 404s a record that is not there", async () => {
+		const auth = { Authorization: `Bearer ${token}` };
+		const part = { description: "half of it", kcal: 30, sets: 1, reps: 10 };
+		const meal = await request(app)
+			.post("/api/entries/meals/00000000-0000-0000-0000-000000000000/split")
+			.set(auth)
+			.send({ correction_instruction: "split it", parts: [part, part] });
+		expect(meal.status).toBe(404);
+
+		const missing = await request(app)
+			.post("/api/entries/movement/00000000-0000-0000-0000-000000000000/split")
+			.set(auth)
+			.send({ correction_instruction: "split it", parts: [part, part] });
+		expect(missing.status).toBe(404);
+
+		// One part is not a split; that is a PATCH, and saying so beats writing half of one.
+		const single = await request(app)
+			.post("/api/entries/movement/00000000-0000-0000-0000-000000000000/split")
+			.set(auth)
+			.send({ correction_instruction: "split it", parts: [part] });
+		expect(single.status).toBe(400);
+	});
+
 	it("still saves an exercise the catalogue has never heard of", async () => {
 		const auth = { Authorization: `Bearer ${token}` };
 		const created = await request(app)
@@ -4543,8 +4641,9 @@ describe("fusion — revising by telling it", () => {
 		],
 	};
 
-	/** What the detail call answers with — the same schema the analyze pipeline uses. */
+	/** What the revision call answers with (services/fusion/schema.ts §ActivitiesRevision). */
 	const revisedItems = {
+		revision_mode: "amend",
 		items: [
 			{
 				exercise: "Chest-Supported Row",
@@ -4578,7 +4677,7 @@ describe("fusion — revising by telling it", () => {
 		expect(res.body.results).toHaveLength(1);
 		expect(res.body.results[0].items[0]).toMatchObject({ sets: 3, reps: 4, load_lb: 50 });
 		// Nothing was routed: a revision is one focused call, not a fresh read.
-		expect(llm.requests.at(-1)!.schemaName).toBe("activities");
+		expect(llm.requests.at(-1)!.schemaName).toBe("activities_revision");
 		expect(llm.requests.at(-1)!.system).toContain("reps were 4 and it was 50 pounds");
 		// And no evidence was stored for a round that carried no photos.
 		expect(res.body.evidence).toEqual([]);

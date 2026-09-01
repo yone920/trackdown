@@ -514,6 +514,42 @@ export const ActivitiesDetailOutputSchema = z.object({
 });
 export const ACTIVITIES_DETAIL_SCHEMA_NAME = "activities";
 
+/**
+ * What a told change did to an activities record. "amend" is the ordinary answer — the
+ * fields of the record, corrected. "split" is the one this schema exists for.
+ *
+ * The field report (2026-09-01): the user logged "4 sets of 10 at 85, the last two sets I
+ * reduced to 70". The CREATE path splits that correctly now (the GROUPING rule in
+ * prompt.ts). The CORRECTION path could not: told the same story about one saved record,
+ * the model had nowhere to put a second load, so it wrote "2 sets at 85, 2 sets at 70"
+ * into the DESCRIPTION and left sets=4, load=null — a sentence where two records should
+ * have been, and a row that still claimed four sets at no weight at all.
+ *
+ * A record can only carry one load, so a load that changed partway through the sets is
+ * two records or it is nothing.
+ */
+export const ACTIVITY_REVISION_MODES = ["amend", "split"] as const;
+export type ActivityRevisionMode = (typeof ACTIVITY_REVISION_MODES)[number];
+
+/**
+ * The revision call's shape for an activities part. It is the detail schema plus one enum,
+ * and `revision_mode` is **FIRST on purpose**: structured output is decoded field by field
+ * in schema order, so a mode declared after the items it governs would be chosen to fit
+ * items already written rather than deciding what to write. The coach's own revision schema
+ * puts its mode first for the same reason (services/coach/schema.ts).
+ *
+ * One enum is what this costs, on a single-branch schema with room — unlike the routing
+ * union, where one more field anywhere is one too many (see FusionRouteOutputSchema).
+ * `anthropic.fusion.contract.test.ts` is the gate, as always.
+ */
+export const ActivitiesRevisionOutputSchema = z.object({
+	revision_mode: z.enum(ACTIVITY_REVISION_MODES),
+	items: z.array(ModelActivityItem).min(1).max(20),
+	photo_fields: photoFields,
+	photo_indexes: photoIndexes,
+});
+export const ACTIVITIES_REVISION_SCHEMA_NAME = "activities_revision";
+
 export const MealDetailOutputSchema = ModelMeal.omit({ kind: true }).extend({
 	photo_fields: photoFields,
 	photo_indexes: photoIndexes,

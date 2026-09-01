@@ -502,6 +502,34 @@ export function usePatchRecord() {
   });
 }
 
+export type SplitInput = {
+  id: string;
+  /** At least two: replacing one record with one record is a PATCH. */
+  parts: Record<string, unknown>[];
+  instruction: string;
+};
+
+/**
+ * Replace one saved exercise record with the parts a told change needs — the other half of
+ * "make a change" (migration 0018). A PATCH can only ever move the fields of one row, and a
+ * load that changed partway through the sets is two rows or it is nothing.
+ *
+ * The original row is corrected in place into the first part and keeps its id, so its
+ * photos and its own correction history stay attached to it; the server writes the rest and
+ * the trail linking them, in one transaction.
+ */
+export function useSplitRecord() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, parts, instruction }: SplitInput) =>
+      api<{ records: Record<string, unknown>[] }>(`/api/entries/movement/${id}/split`, {
+        method: 'POST',
+        body: { parts, correction_instruction: instruction },
+      }),
+    onSuccess: () => invalidateAfterLog(qc),
+  });
+}
+
 /** The three kinds of row a tap can take back. A goal is dropped, not deleted; a
  * statement lives on the plan and has no row of its own. */
 export type DeleteKind = 'activity' | 'meal' | 'weight';

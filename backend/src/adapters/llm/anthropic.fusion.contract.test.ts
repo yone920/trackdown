@@ -357,6 +357,94 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 		expect(item.muscle_groups).toEqual(["back"]);
 	}, 90_000);
 
+	// The correction half of the drop-set fix (field report 2026-09-01). The CREATE path
+	// splits "4 sets of 10 at 85, the last two at 70" correctly. Told the same story about
+	// a record that already exists, the correction path used to have nowhere to put the
+	// second load, so it wrote the story into the DESCRIPTION and left sets=4, load=null.
+	//
+	// This is also the gate on the schema: `revision_mode` is a field added to a
+	// model-facing shape, and only a real request proves the grammar still compiles.
+	it("splits one saved record into parts that sum when the load changed partway", async () => {
+		const saved = {
+			kind: "activities" as const,
+			items: [
+				{
+					exercise: "Chest Press",
+					equipment: "chest press machine",
+					description: "4 × 10 chest press",
+					category: "strength" as const,
+					muscle_groups: ["chest"],
+					sets: 4,
+					reps: 10,
+					load_lb: 85,
+					duration_min: null,
+					distance_mi: null,
+					kcal: 120,
+					confidence: "high" as const,
+					sources: null,
+					refine: null,
+				},
+			],
+		};
+		const [revised] = await analyzer().revise({
+			results: [saved],
+			instruction: "4 sets of 10 at 85, the last two sets I reduced the load to 70",
+			context,
+		});
+
+		expect(revised!.kind).toBe("activities");
+		if (revised!.kind !== "activities") return;
+		// Two records, because one record carries one load.
+		expect(revised!.items).toHaveLength(2);
+		// And they SUM to what was done: four sets, never the original four plus a partial.
+		expect(revised!.items.reduce((sum, item) => sum + (item.sets ?? 0), 0)).toBe(4);
+		const loads = revised!.items.map((item) => item.load_lb).sort((a, b) => (a ?? 0) - (b ?? 0));
+		expect(loads[0]).toBeCloseTo(70, 0);
+		expect(loads[1]).toBeCloseTo(85, 0);
+		// The change is in the FIELDS. A description that still spells out the split is the
+		// bug wearing the fix's clothes.
+		expect(revised!.items.every((item) => item.load_lb !== null)).toBe(true);
+		// Same movement on both halves, and the muscle groups carried across.
+		expect(revised!.items.every((item) => /chest press/i.test(item.exercise ?? ""))).toBe(true);
+		expect(revised!.items.every((item) => (item.muscle_groups ?? []).includes("chest"))).toBe(true);
+	}, 90_000);
+
+	// An ordinary correction must NOT split. The mode exists to be decided, not to be
+	// reached for whenever a sentence has two numbers in it.
+	it("amends without splitting when the change fits in one record", async () => {
+		const saved = {
+			kind: "activities" as const,
+			items: [
+				{
+					exercise: "Chest-Supported Row",
+					equipment: "chest-supported row machine",
+					description: "3 × 12 chest-supported row",
+					category: "strength" as const,
+					muscle_groups: ["back"],
+					sets: 3,
+					reps: 12,
+					load_lb: 45,
+					duration_min: null,
+					distance_mi: null,
+					kcal: 120,
+					confidence: "high" as const,
+					sources: null,
+					refine: null,
+				},
+			],
+		};
+		const [revised] = await analyzer().revise({
+			results: [saved],
+			instruction: "it was 4 reps at 50 pounds",
+			context,
+		});
+		if (revised!.kind !== "activities") return;
+		expect(revised!.items).toHaveLength(1);
+		expect(revised!.items[0]!.reps).toBe(4);
+		expect(revised!.items[0]!.load_lb).toBeCloseTo(50, 0);
+		expect(revised!.items[0]!.sets).toBe(3);
+	}, 90_000);
+
 	// The other half of the same contract, on a different kind: a meal's slot is a fact the
 	// user can only ever change by saying so.
 	it("moves a meal to the sitting the user says it was", async () => {

@@ -107,6 +107,36 @@ export function resultToPatch(kind: EditKind, result: FusionResult): Record<stri
 }
 
 /**
+ * A told change that could not fit in the record it was about, as the parts to replace it
+ * with — or null, which is the ordinary answer.
+ *
+ * A record carries ONE load, so "the last two sets I dropped to 70" on a 4-set record is
+ * two records or it is nothing (field report 2026-09-01). The correction path can now
+ * answer with several items where one went in; this is that answer on its way to
+ * `POST /api/entries/movement/:id/split`, which replaces the row in one transaction.
+ *
+ * Null for one item, because replacing one record with one record is a PATCH, and for any
+ * kind but an activity: a plate read wrong is one plate read wrong.
+ */
+export function resultToSplit(kind: EditKind, result: FusionResult): Record<string, unknown>[] | null {
+  if (kind !== 'activity' || result.kind !== 'activities') return null;
+  if (result.items.length < 2) return null;
+  return result.items.map((item) => ({
+    description: item.description || item.exercise || 'Exercise',
+    kcal: Math.max(0, Math.round(item.kcal ?? 0)),
+    exercise: item.exercise,
+    equipment: item.equipment,
+    category: item.category,
+    muscle_groups: item.muscle_groups,
+    sets: item.sets,
+    reps: item.reps,
+    load_lb: item.load_lb,
+    duration_min: item.duration_min,
+    distance_mi: item.distance_mi,
+  }));
+}
+
+/**
  * The corrections that belong to the parts actually being saved, renumbered onto the list
  * the confirm sends.
  *

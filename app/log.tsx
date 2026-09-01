@@ -21,6 +21,7 @@ import { ApiError } from '@/lib/api';
 import {
   recordToResult,
   resultToPatch,
+  resultToSplit,
   savableCorrections,
   type EditKind,
 } from '@/lib/edit-record';
@@ -28,7 +29,7 @@ import { correctionLine } from '@/lib/format';
 import { composeMaxHeight, footerLift, keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
 import { MAX_PHOTOS, pickPhotos, takePhoto, type LocalPhoto } from '@/lib/photos';
 import { getSpeech } from '@/lib/ports/speech';
-import { useAnalyze, useConfirm, useDayLog, usePatchRecord } from '@/lib/queries';
+import { useAnalyze, useConfirm, useDayLog, usePatchRecord, useSplitRecord } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
 import type { FusionResult, PartCorrection } from '@/lib/types';
@@ -118,6 +119,7 @@ export default function LogSheet() {
   const analyze = useAnalyze();
   const confirm = useConfirm();
   const patch = usePatchRecord();
+  const split = useSplitRecord();
   const keyboard = useKeyboardHeight();
   const window = useWindowDimensions();
   // A compose box that grows for ever buries its own caret under the keyboard.
@@ -254,10 +256,22 @@ export default function LogSheet() {
   const saveEdit = async () => {
     const result = results[0];
     if (!result || !editing || !editKind) return;
-    const body = resultToPatch(editKind, result);
-    if (!body) return;
     setError(null);
+    // A told change that could not fit in the record it was about: the revision came back
+    // with SEVERAL records where one went in, because a record carries one load and the
+    // load changed partway through the sets (field report 2026-09-01). That is a replace,
+    // not a patch, and it is one transaction on the server so the day never holds half of
+    // it. The row keeps its id — it becomes the first part — so nothing it already carries
+    // is lost in the name of correcting it.
+    const parts = resultToSplit(editKind, result);
     try {
+      if (parts) {
+        await split.mutateAsync({ id: editId!, parts, instruction: told ?? 'split this record' });
+        router.back();
+        return;
+      }
+      const body = resultToPatch(editKind, result);
+      if (!body) return;
       await patch.mutateAsync({ kind: editKind, id: editId!, patch: body, instruction: told });
       router.back();
     } catch (caught) {

@@ -144,7 +144,12 @@ const FIELDS = `FIELDS
   or showed it: "chest-supported row machine", "cable stack", "dumbbells", "treadmill".
   It is NOT the movement and never a substitute for one; null when they named no kit.
 - description: a clean short phrase, sentence case, no leading article. For an activity,
-  include the numbers ("3 × 10 dumbbell bench at 45 lb"). For a composed dish, name the dish.
+  NAME THE MOVEMENT and add only what the fields cannot carry — which part of the session
+  it was ("last two sets, dropped to 70"), the working behind a per-side load ("45/side +
+  45 lb bar = 135 lb"), how it went. Do NOT restate sets × reps × load: they are already
+  fields, the row draws them from the fields, and saying them again prints them twice
+  ("4 × 10 · 4 × 10 chest press machine…" — field report 2026-09-01). For a composed dish,
+  name the dish.
 - kcal: integer. For a meal, calories eaten. For an activity, calories burned — a MET-style
   estimate from duration and effort, or the machine's own figure when a photo shows one.
 - Macros are grams. Estimate them for every meal.
@@ -338,6 +343,35 @@ ${claims ? describeVocabulary(context) : ""}`;
 }
 
 /**
+ * The half of the correction prompt that only an activities part sees: one record is
+ * allowed to become several. A record carries ONE load, so a load that changed partway
+ * through the sets cannot be corrected into it — it has to be split (field report
+ * 2026-09-01, and see ACTIVITY_REVISION_MODES in schema.ts).
+ *
+ * The summing rule is the create path's, word for word (the GROUPING block): the parts add
+ * up to what was done, never a total plus a partial. It is stated in both places rather
+ * than shared, because it is the same rule about two different acts — reading a log, and
+ * correcting one — and the create path proved that saying it plainly is what fixes it.
+ */
+const REVISION_SPLIT = `ONE RECORD MAY BECOME SEVERAL — say which in "revision_mode", and decide that FIRST.
+- "amend": the ordinary answer. The record above with their change applied to its FIELDS,
+  and the same number of items as went in.
+- "split": their change cannot fit in one record, so return the PARTS it becomes. There are
+  two reasons this happens and no others: the LOAD CHANGED partway through the sets (a
+  record carries one load), or what was saved as one record was really TWO EXERCISES.
+  * THE PARTS MUST SUM TO WHAT THEY ACTUALLY DID. "4 sets of 10 at 85, the last two I
+    dropped to 70" is 2 × 10 at 85 and 2 × 10 at 70 — four sets in total, because four sets
+    is what they did. NEVER the original 4-set record plus a 2-set record: that is six sets
+    and two of them never happened.
+  * Every part carries its own sets, reps and load as FIELDS. The description says which
+    part of the session it was ("first two sets", "last two sets — dropped to 70") and
+    nothing the fields already hold.
+  * Same movement, same machine, same muscle groups on every part unless they said
+    otherwise. Splitting a record does not rename it.
+- If their change fits in the fields of one record, it is an "amend". Do not split because
+  a sentence is long.`
+
+/**
  * "Make a change" (docs/concept-v2.md §Principles 7). The user is looking at a part of what
  * was understood and has TOLD the app what is wrong with it. This call re-runs that part's
  * own detail schema with the part itself and the instruction in the prompt, so a revision
@@ -377,8 +411,11 @@ RULES
   meal was lunch, not dinner" changes that field and nothing else.
 - Their words are an instruction, never something to log: "make it lunch" does not add a
   meal called "make it lunch".
+- A change belongs in a FIELD, never in the description. If they tell you a load, a rep
+  count or a set count, move the FIELD; writing the new numbers into the description and
+  leaving the fields as they were is not a correction, it is a note about one.
 
-${kind === "goal" ? GOAL_DETAIL : `${PART_INTRO[kind]}\n\n${claims ? FIELDS : PLAN_FIELDS}`}
+${kind === "activities" ? `${REVISION_SPLIT}\n\n` : ""}${kind === "goal" ? GOAL_DETAIL : `${PART_INTRO[kind]}\n\n${claims ? FIELDS : PLAN_FIELDS}`}
 
 CONTEXT
 It is ${context.localTime} on ${context.localDate} in the user's timezone. Units: pounds and miles.
