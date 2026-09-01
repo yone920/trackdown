@@ -119,13 +119,21 @@ export type BodyRegion = {
   detail: string;
 };
 
-/** Which level a ledger entry's week lands on. Nothing at all in four weeks is level 0. */
+/**
+ * Which level a ledger entry's week lands on.
+ *
+ * Level 0 is `days_since == null` and **nothing else** — the ledger has not seen this muscle
+ * in four weeks. Deliberately not "and no sets either": a treadmill walk serves the calves
+ * and the glutes and records no sets at all, so a muscle can be `days_since: 0` with
+ * `sets_28d: 0`, and grey there would say "not in four weeks" about something trained this
+ * morning. Checked against the live account, which is exactly that shape.
+ */
 export function levelOf(entry: {
   sets_7d?: number;
   sets_28d: number;
   days_since: number | null;
 }): CoverageLevel {
-  if (entry.days_since == null || entry.sets_28d === 0) return 0;
+  if (entry.days_since == null) return 0;
   const week = entry.sets_7d ?? 0;
   if (week >= SET_BAND_LOW && week <= SET_BAND_HIGH) return 2;
   if (week > SET_BAND_HIGH) return 3;

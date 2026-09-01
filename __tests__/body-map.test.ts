@@ -33,6 +33,10 @@ describe('the ramp', () => {
     expect(levelOf({ days_since: null, sets_28d: 0, sets_7d: 0 })).toBe(0);
     // Trained ten days ago: nothing this week, but it is not a muscle we have never seen.
     expect(levelOf({ days_since: 10, sets_28d: 12, sets_7d: 0 })).toBe(1);
+    // The live account's own shape: a treadmill walk serves the calves and records no sets,
+    // so this is `days_since: 0` with nothing counted. Grey here would say "not in four
+    // weeks" about something done this morning.
+    expect(levelOf({ days_since: 0, sets_28d: 0, sets_7d: 0 })).toBe(1);
     expect(LEVEL_COLOR[0]).toBe(C.track);
     expect(LEVEL_COLOR[3]).toBe(C.accent);
   });
@@ -88,6 +92,7 @@ describe('the twelve regions', () => {
     const regions = bodyRegions([entry({ key: 'chest' })]);
     const calves = regions.find((region) => region.key === 'calves')!;
     expect(calves).toMatchObject({ level: 0, color: C.track, sets_7d: 0, days_since: null });
+    expect(calves.overdue).toBe(false);
     expect(calves.detail).toContain('nothing in four weeks');
   });
 
