@@ -16,7 +16,10 @@
 //     **Chest Stretch** through an alias. The finisher's rows were name-only until the
 //     stretches were seeded (2026-09-01); this is the rule that gives them pictures.
 //
-// A fifth, "Pretend Machine Fly", matches nothing at all: the miss list has to be real.
+//   * "Bench Press - Powerlifting" — a correct match with the wrong *photographs* (an
+//     empty bar). It is what PREFERRED_SOURCE_NAMES exists to overrule.
+//
+// A sixth, "Pretend Machine Fly", matches nothing at all: the miss list has to be real.
 
 export const DATASET_FIXTURE = [
 	{
@@ -60,6 +63,23 @@ export const DATASET_FIXTURE = [
 		instructions: ["Lie flat and bring the opposite knee and elbow together."],
 		category: "strength",
 		images: ["Air_Bike/0.jpg", "Air_Bike/1.jpg"],
+	},
+	{
+		// The entry the general rules would pick for our Bench Press: its derived key
+		// ("bench press", the qualifier after " - " dropped) is our own name, and it comes
+		// first here as it does in the dataset. Its photographs are of an EMPTY bar, which
+		// is why PREFERRED_SOURCE_NAMES overrules it (field report 2026-09-01).
+		id: "Bench_Press_-_Powerlifting",
+		name: "Bench Press - Powerlifting",
+		force: "push",
+		level: "advanced",
+		mechanic: "compound",
+		equipment: "barbell",
+		primaryMuscles: ["chest"],
+		secondaryMuscles: ["shoulders", "triceps"],
+		instructions: ["Set up with a hard arch and the bar over the eyes."],
+		category: "powerlifting",
+		images: ["Bench_Press_-_Powerlifting/0.jpg", "Bench_Press_-_Powerlifting/1.jpg"],
 	},
 	{
 		id: "Chest_And_Front_Of_Shoulder_Stretch",

@@ -55,6 +55,25 @@ export interface CatalogRow {
  */
 const AMBIGUOUS_SOURCE_NAMES = new Set(["Air Bike"]);
 
+/**
+ * Catalogue name → the dataset entry its pictures should come from, when the rules pick a
+ * technically-correct entry whose photographs are the wrong *photographs*.
+ *
+ * **Bench Press** is the one that paid for this list (field report 2026-09-01). The rules
+ * resolve it to "Bench Press - Powerlifting", which is a bench press and is illustrated
+ * with an **empty bar**: the user could not tell it was a barbell at all and went looking
+ * for what was wrong with his 135 lb log. "Barbell Bench Press - Medium Grip" is the same
+ * movement with plates on it, which is the picture the sheet is for.
+ *
+ * Explicit, like {@link AMBIGUOUS_SOURCE_NAMES} above, and for the same reason: "prefer the
+ * entry whose photographs are clearer" is not a rule a computer can apply. A preference
+ * that names an entry the dataset does not have, or one with too few frames, is ignored
+ * rather than turned into a miss — the general rules then answer as they always did.
+ */
+const PREFERRED_SOURCE_NAMES: Record<string, string> = {
+	"bench press": "Barbell Bench Press - Medium Grip",
+};
+
 // One normaliser, shared with the write path's matcher (services/exerciseMatch.ts): a
 // dataset name and a spoken name have to be flattened the same way or the aliases that fix
 // one stop fixing the other. Re-exported so this module's own API is unchanged.
@@ -109,12 +128,27 @@ export function matchCatalog(catalog: readonly CatalogRow[], dataset: readonly D
 		for (const key of keys.derived) if (!derived.has(key)) derived.set(key, entry);
 	}
 
+	// Every usable entry by its own exact name, so a preference can name one directly —
+	// including one the general rules would never reach.
+	const byName = new Map<string, DatasetExercise>();
+	for (const entry of dataset) {
+		if (entry.images.length < 2 || AMBIGUOUS_SOURCE_NAMES.has(entry.name)) continue;
+		if (!byName.has(entry.name)) byName.set(entry.name, entry);
+	}
+
 	const matches = new Map<string, DatasetExercise>();
 	const unmatched: string[] = [];
 	for (const row of catalog) {
 		// The catalogue's own spelling first, then its aliases in the order they are written:
 		// data/exercises.json puts the most common phrasing first.
 		const keys = [row.name, ...row.aliases].map(normalizeExerciseName).filter(Boolean);
+		// A named preference beats every rule below it, and only when the dataset actually
+		// has the entry it names with frames to spare (see PREFERRED_SOURCE_NAMES).
+		const preferred = byName.get(PREFERRED_SOURCE_NAMES[normalizeExerciseName(row.name)] ?? "");
+		if (preferred) {
+			matches.set(row.id, preferred);
+			continue;
+		}
 		let found: DatasetExercise | undefined;
 		for (const index of [exact, derived]) {
 			for (const key of keys) {
