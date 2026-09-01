@@ -174,7 +174,9 @@ the food, Progress is the long view.
   generator in the app — when there is no plan. No food, and no whole-day framing.
 - **Eat** — the other half of the day, in four layers: today's numbers (the same arithmetic
   Today shows), the rolling seven-day averages against their targets — **computed**, with
-  each target saying whether it was stated, derived or a guideline — a short **written**
+  each target saying whether it was stated, derived or a guideline, and **the open day is
+  never in them**: a day still being lived cannot be judged, and it has its own live layer
+  above — a short **written**
   paragraph on which way to steer the nutrients (never a dish), and the food log. The
   paragraph is a cached reading, so opening the page generates nothing.
 - **Progress** now opens with the **Days** list; there is no Days tab. **You** is unchanged.

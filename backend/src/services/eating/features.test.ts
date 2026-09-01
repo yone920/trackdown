@@ -130,3 +130,64 @@ describe("what stood out about the last logged day", () => {
 		expect(notes).toEqual([]);
 	});
 });
+
+describe("the open day is never judged", () => {
+	// Field report 2026-09-01, 12:59 pm, one meal in: the page said "protein came in at
+	// 105 g on 2026-09-01, under the 148 g mark" — a past-tense verdict on a day that was
+	// half over — and today's partial totals were dragging the averages down with it. A day
+	// still being lived cannot be judged, and it does not need to be: it has its own live
+	// layer at the top of the page (concept-v2 §Principles 8).
+
+	const closed = day({ date: "2026-08-31", kcal: 2200, protein_g: 160, carbs_g: 140, fiber_g: 30 });
+	// Half a day: one meal, and the numbers to match.
+	const open = day({ date: "2026-09-01", kcal: 620, protein_g: 45, carbs_g: 60, fiber_g: 6, meals: 1 });
+
+	it("leaves today out of the averages", () => {
+		const week = summarise([closed, open], targets(), "2026-09-01");
+		expect(week.days_logged).toBe(1);
+		expect(week.avg_kcal).toBe(2200);
+		expect(week.protein.avg_per_day).toBe(160);
+		expect(week.days.map((d) => d.date)).toEqual(["2026-08-31"]);
+	});
+
+	it("never flags today, however far under the mark its half-day looks", () => {
+		// 45 g of protein is a long way under 160, and at lunchtime it means nothing.
+		const week = summarise([closed, open], targets(), "2026-09-01");
+		expect(week.outliers.join(" ")).not.toContain("2026-09-01");
+		expect(week.outliers).toEqual([]);
+	});
+
+	it("still flags the last CLOSED day when that day deserves it", () => {
+		const poor = day({ date: "2026-08-31", protein_g: 90 });
+		const week = summarise([poor, open], targets({ protein_g: 160 }), "2026-09-01");
+		expect(week.outliers.join(" ")).toContain("2026-08-31");
+		expect(week.outliers.join(" ")).toContain("protein came in at 90 g");
+	});
+
+	it("counts CLOSED days in the caption — one logged day says one, not two", () => {
+		// The thin-week caption has to count what the averages counted, or it flatters the
+		// week by exactly the day it is not allowed to judge.
+		expect(summarise([closed, open], targets(), "2026-09-01").days_logged).toBe(1);
+	});
+
+	it("says nothing at all when today is the only day with food in it", () => {
+		const week = summarise([open], targets(), "2026-09-01");
+		expect(week.days_logged).toBe(0);
+		expect(week.avg_kcal).toBeNull();
+		expect(week.protein.avg_per_day).toBeNull();
+		expect(week.outliers).toEqual([]);
+	});
+
+	it("drops a future day too, which is the same rule read forwards", () => {
+		const tomorrow = day({ date: "2026-09-02" });
+		expect(summarise([closed, tomorrow], targets(), "2026-09-01").days.map((d) => d.date)).toEqual([
+			"2026-08-31",
+		]);
+	});
+
+	it("judges every day it is given when no open day is named", () => {
+		// The older callers, and the unit tests above them: without an open date this is
+		// arithmetic over whatever it was handed.
+		expect(summarise([closed, open], targets()).days_logged).toBe(2);
+	});
+});

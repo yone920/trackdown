@@ -104,9 +104,11 @@ which way to steer their NUTRIENTS over the coming days, from a week of their ow
 - Lead with whatever is furthest from where it should be. If everything is in range, say so
   plainly in one sentence and stop; a paragraph that manufactures a concern to justify its
   own existence is worse than a short one.
-- The numbers are averages over the days that had food logged, and the sheet says how many
-  days those were. An average over two days is a thin week and the paragraph should hedge
-  accordingly rather than treating it as a trend.
+- The numbers are averages over CLOSED days that had food logged — **today is not in them**,
+  because a day still being lived cannot be judged and has its own live layer elsewhere on
+  the page. Never write about today in the past tense, and never say what today "came in
+  at". The sheet says how many closed days there were; an average over two of them is a thin
+  week and the paragraph should hedge accordingly rather than treating it as a trend.
 - A guideline is not something they said. The sheet marks which targets were stated, which
   were derived from body weight and which are standing guidelines; never hand a default back
   to the user as their own aim.
@@ -482,7 +484,7 @@ export function buildEatingDirectionPrompt(sheet: EatingDirectionSheet): string 
 		return `${label}: ${macro.avg_per_day} g/day average · ${aim}`;
 	};
 	const facts = [
-		`Days with food logged in the last 7: ${sheet.week.days_logged}`,
+		`Closed days with food logged in the last 7 (today is NOT counted): ${sheet.week.days_logged}`,
 		sheet.week.avg_kcal === null ? null : `Calories: ${sheet.week.avg_kcal}/day average`,
 		macro("Protein", sheet.week.protein),
 		macro("Carbohydrate", sheet.week.carbs),

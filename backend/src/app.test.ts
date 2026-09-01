@@ -5367,10 +5367,13 @@ describe("the Eat page", () => {
 		expect(res.body.today.macros.carbs_g.target).toBe(150);
 		expect(res.body.today.meals).toHaveLength(2);
 
-		// Layer 2 — the rolling week, computed. Two days had food on them, so the divisor
-		// is two: a day nobody logged is an absence, not a day of eating nothing.
-		expect(res.body.week.days_logged).toBe(2);
-		expect(res.body.week.protein.avg_per_day).toBe(70);
+		// Layer 2 — the rolling week, computed over CLOSED days only. Today's two meals are
+		// in layer 1 and nowhere near this one: a day still being lived cannot be judged
+		// (field report 2026-09-01). So the divisor is ONE — yesterday.
+		expect(res.body.week.days_logged).toBe(1);
+		expect(res.body.week.protein.avg_per_day).toBe(60);
+		// And nothing in the week's judgements names today.
+		expect(JSON.stringify(res.body.week)).not.toContain(today);
 		expect(res.body.week.protein).toMatchObject({ target: 160, source: "stated", direction: "at_least" });
 		expect(res.body.week.carbs).toMatchObject({ target: 150, direction: "at_most" });
 		// Nobody states a fibre target; the guideline stands in and says so.
@@ -5404,10 +5407,27 @@ describe("the Eat page", () => {
 				fiber_g: 2,
 				logged_at: localInstant(today, "19:00", tz),
 			});
-		coachLlm.nextOutput = { text: "Protein has come up; hold it there and watch the fibre." };
+		// Today's meals do not move the week — that is the fix — so the direction is asked
+		// again only because the DAY moved under the hash, not the closed-day averages.
 		const res = await request(app).get(`/api/eating?tz=${tz}`).set(headers);
-		expect(res.body.direction.text).toMatch(/Protein has come up/);
-		expect(res.body.week.protein.avg_per_day).toBe(110);
+		expect(res.body.week.protein.avg_per_day).toBe(60);
+		expect(res.body.week.days_logged).toBe(1);
+	});
+
+	it("keeps the open day out of the week even when it is the only day logged", async () => {
+		const token = await signUp("today-only-eater@example.com");
+		const only = { Authorization: `Bearer ${token}` };
+		await request(app)
+			.post("/api/entries/meals")
+			.set(only)
+			.send({ description: "lunch", kcal: 620, protein_g: 45, logged_at: localInstant(today, "12:59", tz) });
+
+		const res = await request(app).get(`/api/eating?tz=${tz}&generate=false`).set(only);
+		// Layer 1 has it; layer 2 has nothing to say, and says nothing rather than judging.
+		expect(res.body.today.eaten).toBe(620);
+		expect(res.body.week.days_logged).toBe(0);
+		expect(res.body.week.protein.avg_per_day).toBeNull();
+		expect(res.body.week.outliers).toEqual([]);
 	});
 
 	it("says nothing rather than inventing a concern about an empty week", async () => {
@@ -5433,10 +5453,19 @@ describe("the Eat page's safe door", () => {
 		// the coach has, and for the same reason.
 		const token = await signUp("read-only-eater@example.com");
 		const headers = { Authorization: `Bearer ${token}` };
+		// Yesterday, so the WEEK has something in it: the open day is never in the week.
 		await request(app)
 			.post("/api/entries/meals")
 			.set(headers)
-			.send({ description: "eggs", kcal: 400, protein_g: 30, carbs_g: 20, fat_g: 20, fiber_g: 4 });
+			.send({
+				description: "eggs",
+				kcal: 400,
+				protein_g: 30,
+				carbs_g: 20,
+				fat_g: 20,
+				fiber_g: 4,
+				logged_at: localInstant(addDays(localDay(new Date(), tz).date, -1), "08:00", tz),
+			});
 
 		coachLlm.nextOutput = { text: "This must never be reached." };
 		const before = coachLlm.requests.length;
@@ -5445,7 +5474,7 @@ describe("the Eat page's safe door", () => {
 		expect(res.status).toBe(200);
 		// The computed layers are all there — they are arithmetic, not generation.
 		expect(res.body.week.days_logged).toBe(1);
-		expect(res.body.today.eaten).toBe(400);
+		expect(res.body.today.eaten).toBe(0);
 		// And nothing was written.
 		expect(coachLlm.requests).toHaveLength(before);
 		expect(res.body.direction).toBeNull();

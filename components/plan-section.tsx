@@ -256,7 +256,13 @@ export function PlanSection() {
       {/* Why — the reasoning, expanded, because the point is that it is grounded. */}
       {brief?.why ? (
         <Card style={{ marginTop: 18 }}>
-          <Eyebrow>Why</Eyebrow>
+          {/* The rationale is a fact about the ANSWER, not about now: it was written when
+              the plan was asked for, which on a plan asked at 7 am is a reading of
+              yesterday. It said so nowhere, and the user asked why it was "talking about
+              yesterday" (field report 2026-09-01). So it admits its age. */}
+          <Eyebrow testID="coach-why-eyebrow">
+            {brief.asked_at ? `Why · as of ${clock(brief.asked_at)}` : 'Why'}
+          </Eyebrow>
           <Body style={{ marginTop: 8, lineHeight: 15 * 1.55 }}>{brief.why}</Body>
         </Card>
       ) : null}

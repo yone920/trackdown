@@ -6,7 +6,7 @@ import { computeDay } from "../services/day.js";
 import { eatingDays, summarise, type EatingTargets } from "../services/eating/features.js";
 import { activeGoals } from "../services/goals/store.js";
 import { getProfile } from "../services/entries.js";
-import { isIsoDate, localDay, type IsoDate } from "../services/localTime.js";
+import { addDays, isIsoDate, localDay, type IsoDate } from "../services/localTime.js";
 import type { DayReadings } from "../services/readings/readings.js";
 
 // The Eat page, in one request (user decision 2026-09-01).
@@ -87,7 +87,13 @@ export function eatingRouter(pool: pg.Pool, readings: DayReadings): Router {
 			losing: goal?.kind === "lose_fat",
 		};
 
-		const week = summarise(await eatingDays(pool, userId, date, tz), targets);
+		// The week is CLOSED days only — yesterday backward (field report 2026-09-01: the
+		// page was judging a half-lived day in the past tense and averaging its partial
+		// totals in). Today has its own live layer at the top of this page and needs no
+		// verdict from this one. Excluded twice on purpose: here, so the open day is never
+		// read, and again inside `summarise`, so the rule travels with the function.
+		const closedThrough = addDays(date, -1);
+		const week = summarise(await eatingDays(pool, userId, closedThrough, tz), targets, date);
 
 		const direction = parsed.data.generate
 			? await readings.eatingDirection(pool, userId, date, {

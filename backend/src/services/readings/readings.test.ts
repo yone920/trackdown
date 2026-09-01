@@ -174,8 +174,9 @@ describe("the inputs hash", () => {
 	 * one model call per active day, and worth it, but not a thing to do by accident.
 	 */
 	it("is bound to what the prompt currently says", () => {
-		// Bumped 2026-09-01 when the Eat page's direction prompt joined the fingerprint.
-		expect(PROMPT_FINGERPRINT).toBe("1690c1a0");
+		// Bumped 2026-09-01 when the Eat page's direction prompt joined the fingerprint, and
+		// again when that prompt was told the open day is not in its numbers.
+		expect(PROMPT_FINGERPRINT).toBe("6b5cd166");
 		expect(dayInputsHash(view())).toMatch(/^[0-9a-f]{32}$/);
 	});
 });
@@ -321,7 +322,7 @@ describe("the eating direction prompt", () => {
 
 	it("hands over the computed week, and says where each target came from", () => {
 		const prompt = buildEatingDirectionPrompt(eatingSheet());
-		expect(prompt).toContain("Days with food logged in the last 7: 2");
+		expect(prompt).toContain("Closed days with food logged in the last 7 (today is NOT counted): 2");
 		expect(prompt).toContain("Protein: 125 g/day average · aim at least 160 g (stated)");
 		expect(prompt).toContain("Carbohydrate: 182.5 g/day average · aim at most 150 g (stated)");
 		// Nobody states a fibre target; the guideline stands in and admits it.
@@ -338,10 +339,19 @@ describe("the eating direction prompt", () => {
 		expect(buildEatingDirectionPrompt(eatingSheet())).toContain("Say nothing about training");
 	});
 
+	it("is told the open day is not in its numbers, in as many words", () => {
+		// Field report 2026-09-01: the page judged a half-lived day in the past tense. The
+		// arithmetic no longer includes it, and the prompt is told so as well — a model
+		// handed only closed days can still write "today came in at" if nobody says not to.
+		const prompt = buildEatingDirectionPrompt(eatingSheet());
+		expect(prompt).toContain("today is not in them");
+		expect(prompt).toContain("Never write about today in the past tense");
+	});
+
 	it("leaves out a macro nobody has any days for", () => {
 		const empty = eatingSheet({ week: summarise([], { protein_g: null, carbs_max_g: null, fat_g: null, fiber_g: null, weight_lb: null, losing: false }) });
 		const prompt = buildEatingDirectionPrompt(empty);
-		expect(prompt).toContain("Days with food logged in the last 7: 0");
+		expect(prompt).toContain("Closed days with food logged in the last 7 (today is NOT counted): 0");
 		expect(prompt).not.toContain("g/day average");
 	});
 });

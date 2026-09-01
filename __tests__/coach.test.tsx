@@ -685,6 +685,28 @@ it('warms every plan row and asks for the first photo at the width the sheet use
   }
 });
 
+it('says when the Why was written, so the morning rationale admits its age', async () => {
+  // Field report 2026-09-01: "why is it talking about yesterday". Because it was written at
+  // 7 am, when yesterday was the most recent thing there was. The card now says so.
+  mockApi.mockResolvedValue(next());
+  renderCoach();
+
+  await screen.findByText('Pull day: back and shoulders');
+  expect(screen.getByTestId('coach-why-eyebrow')).toHaveTextContent(/Why · as of/);
+  expect(screen.getByTestId('coach-why-eyebrow')).toHaveTextContent(/\d/);
+});
+
+it('falls back to a plain Why on a brief that never recorded when it was asked', async () => {
+  const answer = next();
+  (answer.brief as { asked_at: string | null }).asked_at = null;
+  mockApi.mockResolvedValue(answer);
+  renderCoach();
+
+  await screen.findByText('Pull day: back and shoulders');
+  expect(screen.getByTestId('coach-why-eyebrow')).toHaveTextContent('Why');
+  expect(screen.getByTestId('coach-why-eyebrow')).not.toHaveTextContent('as of');
+});
+
 // ── the plan and the log are one section ─────────────────────────────────────────────
 // User decision 2026-09-01: "if it's done, it's checked, you can click it, you can see the
 // log, everything I logged about it". The Do list and the Done list were two views of the

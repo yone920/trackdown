@@ -5,14 +5,23 @@ import { addDays, type IsoDate } from "../localTime.js";
 // §Principles 4) — so everything on this page's middle layer is SQL and arithmetic, and the
 // paragraph underneath it is handed these numbers rather than the rows.
 //
-// The window is a ROLLING SEVEN DAYS and it is the same shape as the coverage ledger: every
-// meal carries its own clock and drops out of the average exactly seven days after it was
-// eaten. Nothing resets on a Monday, because nobody's eating does.
+// The window is a ROLLING SEVEN DAYS of **CLOSED** days — yesterday backward — and it is
+// the same shape as the coverage ledger: every meal carries its own clock and drops out of
+// the average exactly seven days after it was eaten. Nothing resets on a Monday, because
+// nobody's eating does.
+//
+// **THE OPEN DAY IS NEVER IN HERE** (field report 2026-09-01). At 12:59 pm, one meal in,
+// the page said "protein came in at 105 g on 2026-09-01, under the 148 g mark" — a past
+// tense verdict on a day that was half over, and today's partial totals were dragging the
+// averages down with it. That is the no-unearned-verdicts law (concept-v2 §Principles 8),
+// broken by arithmetic rather than by wording: a day still being lived cannot be judged,
+// and it does not need to be, because it already has its own live layer at the top of the
+// page.
 //
 // **Days with nothing logged are not zeros.** A day the user never opened the app is not a
 // day they ate no protein, and averaging a blank in would drag every number toward a lie
-// that flatters nobody. So the divisor is *days that have a meal on them*, and how many
-// those were is reported beside the averages — an average over two days says so.
+// that flatters nobody. So the divisor is *closed days that have a meal on them*, and how
+// many those were is reported beside the averages — an average over two days says so.
 
 type Queryable = pg.Pool | pg.PoolClient;
 
@@ -139,10 +148,20 @@ export function proteinTarget(targets: EatingTargets): { target: number | null; 
 /**
  * The week, from the days and the targets. Pure: everything it needs has already been read,
  * which is what makes it testable without a database.
+ *
+ * `openDate` is the day the user is still living. It is dropped here as well as excluded by
+ * the query, deliberately: the rule is what this function is *for*, and a rule enforced only
+ * at the call site is a rule the next caller does not inherit.
  */
-export function summarise(days: readonly EatingDay[], targets: EatingTargets): EatingWeek {
-	// A day with a meal on it is a day that counts. Everything else is an absence, not a zero.
-	const logged = days.filter((day) => day.meals > 0);
+export function summarise(
+	days: readonly EatingDay[],
+	targets: EatingTargets,
+	openDate?: string | null
+): EatingWeek {
+	// A day with a meal on it is a day that counts. Everything else is an absence, not a
+	// zero — and the day still being lived is neither.
+	const closed = openDate ? days.filter((day) => day.date < openDate) : days;
+	const logged = closed.filter((day) => day.meals > 0);
 	const protein = proteinTarget(targets);
 	return {
 		days: [...logged],
@@ -179,7 +198,11 @@ export function summarise(days: readonly EatingDay[], targets: EatingTargets): E
 
 /**
  * What stands out about the most recently logged day — the "yesterday ran 60 g over" line.
- * Measured against the week's own averages and the stated targets, never against a mood.
+ * Measured against the stated targets, never against a mood.
+ *
+ * It is only ever handed CLOSED days (see the note at the top of this file): "came in at"
+ * and "under the mark" are past-tense judgements, and there is no honest way to make one
+ * about a day with meals still to come.
  *
  * Silent unless something is actually worth saying: a page that always has a complaint on
  * it is a page people stop reading.

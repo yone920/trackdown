@@ -87,6 +87,46 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-01 — a day still being lived cannot be judged (`fix-open-day-verdicts`)
+
+A screenshot at 12:59 pm, one meal in. The Eat page's week said:
+
+> protein came in at 105 g on **2026-09-01**, under the 148 g mark
+
+2026-09-01 was that day. The week layer was passing a past-tense verdict on a day that was
+half over — and worse, quietly averaging its partial totals in as though they were a whole
+day's eating, which dragged 1,693 kcal/day and 164.5 g of protein down with it.
+
+That is the no-unearned-verdicts law (concept-v2 §Principles 8) broken by **arithmetic**
+rather than by wording. Every previous version of this rule was about what the app *says*;
+this one was about what it *counts*, and the wording was only reporting it faithfully.
+
+**The rolling week is CLOSED days now — yesterday backward.** The open day never appears in
+an average, never appears in an outlier flag, and never appears in the "thin week" count,
+which is the same fix said three ways: a caption that counts today flatters the week by
+exactly the day it is not allowed to judge. Today needs none of it — it already has its own
+live layer at the top of the same page.
+
+Excluded **twice, deliberately**: the query ends yesterday so the open day is never read,
+and `summarise` drops it again, because the rule is what that function is *for* and a rule
+enforced only at the call site is one the next caller does not inherit. The direction
+paragraph is handed the same closed-day facts — and is told in as many words that today is
+not in its numbers, since a model given only closed days can still write "today came in at"
+if nobody says not to. Its inputs hash moved with the numbers, so the cached paragraph
+refreshes itself.
+
+**And the Why card admits its age.** Its eyebrow is now "Why · as of 7:04a". The rationale is
+a fact about the *answer* — written when the plan was asked for — so a plan asked at 7 am
+reads yesterday, correctly, and said so nowhere. The user asked why it was "talking about
+yesterday" on the same day as the screenshot above. A brief with no recorded ask time still
+reads a plain "Why".
+
+**Verified** — backend **706 → 715**: the open day out of the averages and out of the flags,
+the last *closed* day still flagged when it deserves it, the caption counting closed days,
+a future day dropped by the same rule read forwards, today-only weeks saying nothing at all,
+and the route end to end. App **347 → 349**: the Why eyebrow with its time, and its fallback.
+`tsc` and `expo lint` clean.
+
 ### 2026-09-01 — each tab owns one verb (`wp-train-tab`)
 
 Giving eating its own tab left Today holding a calories card while another tab owned
