@@ -1,4 +1,4 @@
-import type { FusionResult, SegmentKind } from "./schema.js";
+import type { ActivityItem, FusionResult, SegmentKind } from "./schema.js";
 
 // "Make a change" — the second half of the review-and-tell flow (docs/concept-v2.md
 // §Principles 7: NO FORMS). The user is looking at what was understood and says what is
@@ -71,19 +71,36 @@ export function compactPart(result: FusionResult): string {
  */
 export function carryForward(previous: FusionResult, next: FusionResult): FusionResult {
 	if (previous.kind !== "activities" || next.kind !== "activities") return next;
-	if (previous.items.length !== next.items.length) return next;
 	const same = (a: string | null, b: string | null) =>
 		(a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
-	return {
-		...next,
-		items: next.items.map((item, index) => {
-			const before = previous.items[index]!;
-			if (!same(before.exercise, item.exercise)) return item;
-			return {
-				...item,
-				category: item.category ?? before.category,
-				muscle_groups: item.muscle_groups ?? before.muscle_groups,
-			};
-		}),
-	};
+	const inherit = (before: ActivityItem, item: ActivityItem): ActivityItem =>
+		same(before.exercise, item.exercise)
+			? {
+					...item,
+					category: item.category ?? before.category,
+					muscle_groups: item.muscle_groups ?? before.muscle_groups,
+				}
+			: item;
+
+	// A SPLIT: one record became several (services/fusion/schema.ts
+	// §ACTIVITY_REVISION_MODES). Every part came out of the same record, so every part
+	// inherits from it — and this matters more here than anywhere else: the parts of a
+	// split are the same movement as the record they came from, so without this a drop set
+	// would leave the muscle groups behind and both halves of a chest press would vanish
+	// off the body map and out from under their own heading.
+	if (previous.items.length === 1 && next.items.length > 1) {
+		const before = previous.items[0]!;
+		return { ...next, items: next.items.map((item) => inherit(before, item)) };
+	}
+	if (previous.items.length !== next.items.length) return next;
+	return { ...next, items: next.items.map((item, index) => inherit(previous.items[index]!, item)) };
+}
+
+/**
+ * How many records this revision replaced the part with, when that is more than it was
+ * handed. Zero for an ordinary amend — which is nearly always the answer.
+ */
+export function splitInto(previous: FusionResult, next: FusionResult): number {
+	if (previous.kind !== "activities" || next.kind !== "activities") return 0;
+	return previous.items.length === 1 && next.items.length > 1 ? next.items.length : 0;
 }

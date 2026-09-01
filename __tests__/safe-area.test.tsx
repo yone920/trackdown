@@ -3,15 +3,15 @@ import { render, screen } from '@testing-library/react-native';
 import React from 'react';
 import { SafeAreaInsetsContext, type EdgeInsets } from 'react-native-safe-area-context';
 
-import Coach from '@/app/coach';
 import Day from '@/app/day/[date]';
 import DayLog from '@/app/day/[date]/log';
 import ExerciseSheet from '@/app/exercise/[id]';
 import Lifts from '@/app/lifts';
 import LogSheet from '@/app/log';
+import Home from '@/app/(tabs)/index';
 import Days from '@/app/(tabs)/days';
 import Progress from '@/app/(tabs)/progress';
-import Today from '@/app/(tabs)/index';
+import Today from '@/app/(tabs)/today';
 import You from '@/app/you';
 import { STATUS_BAR_MIN } from '@/lib/screen';
 import { makeDay, makeWeek } from './fixtures';
@@ -79,11 +79,11 @@ beforeEach(() => {
 
 /** Every screen, and the testID of the scroller it is built in. */
 const SCREENS: [name: string, Screen: () => React.ReactElement, testID: string][] = [
+  ['Home', Home, 'home-scroll'],
   ['Today', Today, 'today-scroll'],
   ['Days', Days, 'days-list'],
   ['Progress', Progress, 'progress-scroll'],
   ['You', You, 'you-scroll'],
-  ['Coach', Coach, 'coach-scroll'],
   ['Log', LogSheet, 'log-scroll'],
   ['Day', Day, 'day-scroll'],
   ['DayLog', DayLog, 'day-log-scroll'],

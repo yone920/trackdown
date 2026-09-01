@@ -1,0 +1,33 @@
+-- ---------------------------------------------------------------------------
+-- 0018 — a correction that replaces one record with several.
+--
+-- The field report (docs/CHANGELOG-v2.md §Field fixes, 2026-09-01): the user
+-- logged "4 sets of 10 at 85, the last two sets I reduced to 70". The CREATE
+-- path splits that into two records now. The CORRECTION path could not — told
+-- the same story about one saved record, the model had nowhere to put a second
+-- load, so it wrote "2 sets at 85, 2 sets at 70" into the description and left
+-- sets=4, load=null. A sentence where two records should have been.
+--
+-- A record carries ONE load, so a load that changed partway through the sets is
+-- two records or it is nothing. `record_corrections` already keeps what was told
+-- and what moved; what it could not say is that a row is here BECAUSE another
+-- row was corrected.
+--
+--   replaces_activity_id   the record this one was split out of.
+--
+-- The original row is not deleted and not re-created: it becomes the FIRST part
+-- of the split, corrected in place, and keeps its id, its evidence and its own
+-- correction history. The other parts are new rows, each with a correction row
+-- carrying the same instruction and this column pointing back at the original.
+-- So "where did this row come from?" has an answer, and the original's history
+-- reads unbroken.
+--
+-- ON DELETE SET NULL, not CASCADE, and the difference matters: deleting the
+-- original does not delete the rows that came out of it, and their history keeps
+-- the instruction that made them even once the row it names is gone. CASCADE is
+-- right for `activity_id` — that IS the row the correction is about — and wrong
+-- here, where the reference is a provenance note about a different row.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE record_corrections
+	ADD COLUMN replaces_activity_id UUID REFERENCES activities(id) ON DELETE SET NULL;

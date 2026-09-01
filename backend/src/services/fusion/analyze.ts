@@ -14,7 +14,9 @@ import {
 import { carryForward, compactPart, segmentKindFor } from "./revise.js";
 import {
 	ACTIVITIES_DETAIL_SCHEMA_NAME,
+	ACTIVITIES_REVISION_SCHEMA_NAME,
 	ActivitiesDetailOutputSchema,
+	ActivitiesRevisionOutputSchema,
 	FUSION_ROUTE_SCHEMA_NAME,
 	FusionRouteOutputSchema,
 	GOAL_DETAIL_SCHEMA_NAME,
@@ -356,6 +358,37 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 		}
 	}
 
+	/**
+	 * The revision call for an activities part. Same message, same prompt as any other
+	 * revision — one extra field, `revision_mode`, decided before the items it governs.
+	 *
+	 * The mode is honoured in one direction only. A "split" that came back with no more
+	 * items than went in is simply an amend, and an "amend" that came back with MORE items
+	 * is a model contradicting itself — the extra items are dropped rather than saved,
+	 * because on this path the part may be a row that ALREADY EXISTS and inventing a second
+	 * one is the failure this whole change is against. Only a deliberate split adds records.
+	 */
+	async function reviseActivities(
+		previous: Extract<FusionResult, { kind: "activities" }>,
+		context: FusionContext,
+		messages: { role: "user"; content: LlmContent[] }[],
+		system: string
+	): Promise<FusionResult> {
+		const { revision_mode, items, photo_fields } = await llm.parseStructured({
+			system,
+			schema: ActivitiesRevisionOutputSchema,
+			schemaName: ACTIVITIES_REVISION_SCHEMA_NAME,
+			maxTokens: DETAIL_MAX_TOKENS,
+			messages,
+		});
+		const splitting = revision_mode === "split" && items.length > previous.items.length;
+		const kept = splitting ? items : items.slice(0, previous.items.length);
+		return toFusionResult(
+			{ kind: "activities", items: kept.length > 0 ? kept : items.slice(0, 1) },
+			{ photoFields: photo_fields }
+		);
+	}
+
 	return {
 		async analyze({ text, photos = [], context }) {
 			const messages = [{ role: "user" as const, content: buildFusionMessageContent(text, photos) }];
@@ -412,7 +445,13 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 					// A question has nothing in it to revise; it goes back as it came.
 					if (!kind) return previous;
 					const system = buildRevisionSystemPrompt(context, kind, compactPart(previous), said);
-					const { result } = await fillSegment(kind, context, messages, system);
+					// An activities part is revised through its own schema, because it is the one
+					// kind a correction can RESTRUCTURE: a load that changed partway through the
+					// sets is two records or it is nothing (schema.ts §ACTIVITY_REVISION_MODES).
+					const result =
+						previous.kind === "activities"
+							? await reviseActivities(previous, context, messages, system)
+							: (await fillSegment(kind, context, messages, system)).result;
 					return withRefinements(carryForward(previous, result), context);
 				})
 			);

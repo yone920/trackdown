@@ -141,6 +141,13 @@ describe('You — the dossier', () => {
 });
 
 describe('You — the plan and the account', () => {
+  it('opens the workings from a quiet row of its own', async () => {
+    renderYou();
+    await waitFor(() => expect(screen.getByTestId('how-it-works-row')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('how-it-works-row'));
+    expect(mockPush).toHaveBeenCalledWith('/how-it-works');
+  });
+
   it('renders every section read-only, with one "Tell me" for all of it', async () => {
     serve();
     renderYou();

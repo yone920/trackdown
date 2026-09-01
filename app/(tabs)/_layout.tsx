@@ -10,7 +10,11 @@ export default function TabLayout() {
       <Tabs
         screenOptions={{ headerShown: false, sceneStyle: { backgroundColor: C.bg } }}
         tabBar={(props) => <TabBar {...props} />}>
-        <Tabs.Screen name="index" options={{ title: 'Today' }} />
+        {/* Home lands, Today is where the day happens. The app used to land on Today,
+            which is the right page when something is happening and the wrong one when
+            nothing is (user decision 2026-09-01). */}
+        <Tabs.Screen name="index" options={{ title: 'Home' }} />
+        <Tabs.Screen name="today" options={{ title: 'Today' }} />
         <Tabs.Screen name="days" options={{ title: 'Days' }} />
         <Tabs.Screen name="progress" options={{ title: 'Progress' }} />
       </Tabs>

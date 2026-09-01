@@ -56,10 +56,12 @@ export function invalidateAfterLog(qc: ReturnType<typeof useQueryClient>): void 
 // ---------------------------------------------------------------------------
 
 /** GET /api/day/:date — the live day when `date` is today, the record when it is past. */
-export function useDay(date: IsoDate) {
+export function useDay(date: IsoDate, options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['day', date],
-    enabled: !!date,
+    // `enabled` is a caller's veto, never a way to turn a blank date on: app/day/[date].tsx
+    // stops asking for a day it is about to redirect away from (user decision 2026-09-01).
+    enabled: !!date && options.enabled !== false,
     queryFn: () => api<DayView>(`/api/day/${date}`, { query: { tz: tzOffsetMin() } }),
   });
 }
@@ -495,6 +497,34 @@ export function usePatchRecord() {
       api<Record<string, unknown>>(PATCH_PATH[kind]!(id), {
         method: 'PATCH',
         body: instruction ? { ...patch, correction_instruction: instruction } : patch,
+      }),
+    onSuccess: () => invalidateAfterLog(qc),
+  });
+}
+
+export type SplitInput = {
+  id: string;
+  /** At least two: replacing one record with one record is a PATCH. */
+  parts: Record<string, unknown>[];
+  instruction: string;
+};
+
+/**
+ * Replace one saved exercise record with the parts a told change needs — the other half of
+ * "make a change" (migration 0018). A PATCH can only ever move the fields of one row, and a
+ * load that changed partway through the sets is two rows or it is nothing.
+ *
+ * The original row is corrected in place into the first part and keeps its id, so its
+ * photos and its own correction history stay attached to it; the server writes the rest and
+ * the trail linking them, in one transaction.
+ */
+export function useSplitRecord() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, parts, instruction }: SplitInput) =>
+      api<{ records: Record<string, unknown>[] }>(`/api/entries/movement/${id}/split`, {
+        method: 'POST',
+        body: { parts, correction_instruction: instruction },
       }),
     onSuccess: () => invalidateAfterLog(qc),
   });

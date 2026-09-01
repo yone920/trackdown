@@ -6,9 +6,9 @@ import { IconChevronRight } from '@/components/icons';
 import { Card, Chip } from '@/components/kit';
 import { Disp, Eyebrow, Sub } from '@/components/type';
 import { groupByWeek, weekdayLabel, type WeekGroup } from '@/lib/days-weeks';
-import { useDaysPages, useGoals, useWeek } from '@/lib/queries';
+import { localDateKey, useDaysPages, useGoals, useWeek } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
-import { C, RADIUS, SPACE, TABULAR } from '@/lib/theme';
+import { C, SPACE, TABULAR } from '@/lib/theme';
 import type { DayRow, Verdict } from '@/lib/types';
 
 // Days (docs/design-system.md §Days). Every day the user has logged, newest first,
@@ -48,6 +48,14 @@ export default function Days() {
   const items = useMemo(() => flatten(groupByWeek(rows, week.data ?? null)), [rows, week.data]);
 
   const empty = !days.isLoading && rows.length === 0;
+
+  /**
+   * Today's row goes to the Today TAB, not to `/day/<today>` (user decision 2026-09-01).
+   * The open day has one page and it is the tab; the day page is the archival reading of a
+   * day that has closed. Two live pages for the same day was the confusion this removes.
+   */
+  const openDay = (date: string) =>
+    date === localDateKey() ? router.push('/today') : router.push(`/day/${date}`);
 
   return (
     <FlatList
@@ -105,7 +113,7 @@ export default function Days() {
         item.type === 'week' ? (
           <WeekHeading group={item.group} />
         ) : (
-          <DayListRow row={item.row} onPress={() => router.push(`/day/${item.row.date}`)} />
+          <DayListRow row={item.row} onPress={() => openDay(item.row.date)} />
         )
       }
     />

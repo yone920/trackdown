@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Pressable, View } from 'react-native';
 
 import { Card } from '@/components/kit';
-import { Body as BodyText, Sub } from '@/components/type';
+import { Body as BodyText, Sub, Eyebrow } from '@/components/type';
 import {
   bodyLegend,
   bodyRegions,
@@ -69,6 +69,13 @@ export function BodyMap({
 
   return (
     <Card testID={testID}>
+      {/* What window the colours are about. The map never said, and the question it left
+          people asking was whether it resets on a Monday — it does not: every set carries
+          its own rolling 7-day clock (field report 2026-09-01). The tap detail says
+          days-since and the weekly target; this says what the picture is of. */}
+      <Eyebrow testID="body-map-window" style={{ marginBottom: 14 }}>
+        Last 7 days
+      </Eyebrow>
       <View style={{ flexDirection: 'column', alignItems: 'center', gap: 20 }}>
         {(['front', 'back'] as const).map((side) => (
           <View key={side} testID={`body-map-${side}`} style={{ alignItems: 'center' }}>

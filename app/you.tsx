@@ -113,6 +113,20 @@ export default function You() {
         </Card>
       </Section>
 
+      {/* A quiet door to the workings (user request 2026-09-01). It sits above Account
+          because it is about the app, not about this account. */}
+      <Section title="How it works">
+        <Card style={{ paddingVertical: 4 }}>
+          <Row
+            testID="how-it-works-row"
+            title="How it works"
+            sub="The rules behind the map, the loads and the plan."
+            divider={false}
+            onPress={() => router.push('/how-it-works')}
+          />
+        </Card>
+      </Section>
+
       <Section title="Account">
         <Card style={{ paddingVertical: 4 }}>
           <Row title="Signed in as" sub={session?.user.email ?? '—'} />

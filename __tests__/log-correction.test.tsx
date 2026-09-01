@@ -83,6 +83,46 @@ const REVISED: FusionResult = {
   ],
 };
 
+/**
+ * The same record told again as a drop set. One record carries ONE load, so this comes back
+ * as TWO — the revision's "split" (field report 2026-09-01).
+ */
+const SPLIT: FusionResult = {
+  kind: 'activities',
+  items: [
+    {
+      exercise: 'Chest-Supported Row',
+      equipment: 'chest-supported row machine',
+      description: 'chest-supported row, first two sets',
+      category: 'strength',
+      muscle_groups: ['back'],
+      sets: 2,
+      reps: 12,
+      load_lb: 45,
+      duration_min: null,
+      distance_mi: null,
+      kcal: 60,
+      confidence: 'high',
+      sources: null,
+    },
+    {
+      exercise: 'Chest-Supported Row',
+      equipment: 'chest-supported row machine',
+      description: 'chest-supported row, last two sets — dropped to 35',
+      category: 'strength',
+      muscle_groups: ['back'],
+      sets: 2,
+      reps: 12,
+      load_lb: 35,
+      duration_min: null,
+      distance_mi: null,
+      kcal: 60,
+      confidence: 'high',
+      sources: null,
+    },
+  ],
+};
+
 function renderSheet() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
@@ -161,6 +201,72 @@ describe('correcting a row that is already in the log', () => {
       muscle_groups: ['back'],
       equipment: 'chest-supported row machine',
     });
+  });
+});
+
+describe('a told change that will not fit in the record it is about', () => {
+  it('replaces the record with the parts, in one call, instead of saving half of it', async () => {
+    // The old path took `items[0]` and PATCHed it: the second half of the drop set was
+    // dropped on the floor with no error and no warning. A record carries one load.
+    renderSheet();
+    await waitFor(() => expect(screen.getByTestId('confirm-card')).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId('log-make-change'));
+    mockUpload.mockResolvedValueOnce({
+      results: [SPLIT],
+      evidence: [],
+      context: { local_date: '2026-08-29', tz_offset_min: 0 },
+    });
+    const said = 'the last two sets I dropped the load to 35';
+    fireEvent.changeText(screen.getByTestId('log-text'), said);
+    fireEvent.press(screen.getByTestId('log-submit'));
+
+    // Both halves are on the card, to be looked at before anything is written. They are
+    // two items of ONE part, which is why nothing that indexes by part had to move.
+    await waitFor(() => expect(screen.getByTestId('activity-load-1')).toBeTruthy());
+    expect(screen.getByTestId('activity-load-0')).toHaveTextContent('45');
+    expect(screen.getByTestId('activity-load-1')).toHaveTextContent('35');
+
+    fireEvent.press(screen.getByTestId('confirm-save'));
+    await waitFor(() => expect(mockBack).toHaveBeenCalled());
+
+    // One POST to the split endpoint — not a PATCH, and not two writes the day could
+    // end up holding one of.
+    const patched = mockApi.mock.calls.filter(
+      (call) => (call[1] as { method?: string } | undefined)?.method === 'PATCH',
+    );
+    expect(patched).toHaveLength(0);
+    const posted = mockApi.mock.calls.find(([path]) => String(path).endsWith('/split')) as [
+      string,
+      { method?: string; body: { parts: Record<string, unknown>[]; correction_instruction: string } },
+    ];
+    expect(posted[0]).toBe('/api/entries/movement/a1/split');
+    expect(posted[1].method).toBe('POST');
+    expect(posted[1].body.correction_instruction).toBe(said);
+    expect(posted[1].body.parts).toHaveLength(2);
+    // The parts SUM to what was done — four sets, not the original three plus two more.
+    expect(posted[1].body.parts.reduce((sum, part) => sum + (part.sets as number), 0)).toBe(4);
+    expect(posted[1].body.parts.map((part) => part.load_lb)).toEqual([45, 35]);
+    // And each half is still the movement it always was.
+    expect(posted[1].body.parts.every((part) => part.muscle_groups as string[])).toBe(true);
+  });
+
+  it('still PATCHes when the change fits in the record', async () => {
+    renderSheet();
+    await waitFor(() => expect(screen.getByTestId('confirm-card')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('log-make-change'));
+    mockUpload.mockResolvedValueOnce({
+      results: [REVISED],
+      evidence: [],
+      context: { local_date: '2026-08-29', tz_offset_min: 0 },
+    });
+    fireEvent.changeText(screen.getByTestId('log-text'), 'reps were 4');
+    fireEvent.press(screen.getByTestId('log-submit'));
+    await waitFor(() => expect(screen.getByTestId('activity-reps-0')).toHaveTextContent('4'));
+
+    fireEvent.press(screen.getByTestId('confirm-save'));
+    await waitFor(() => expect(mockBack).toHaveBeenCalled());
+    expect(mockApi.mock.calls.find(([path]) => String(path).endsWith('/split'))).toBeUndefined();
   });
 });
 

@@ -1065,9 +1065,138 @@ describe("revising what was understood", () => {
 		expect(kept.items[0]!.muscle_groups).toBeNull();
 	});
 
+	it("splits one record into the parts a load change needs, and carries the movement across", async () => {
+		// Field report 2026-09-01. The user told the whole story again on one record; the
+		// old path stuffed "2 sets at 85, 2 sets at 70" into the description and left
+		// sets=4 and load=null. A record carries one load: this is two records.
+		const llm = createFakeLlm();
+		llm.outputs.push({
+			revision_mode: "split",
+			items: [
+				{
+					exercise: "Chest Press",
+					equipment: "chest press machine",
+					description: "chest press, first two sets",
+					sets: 2,
+					reps: 10,
+					load_lb: 85,
+					duration_min: null,
+					distance_mi: null,
+					kcal: 60,
+					confidence: "high",
+				},
+				{
+					exercise: "Chest Press",
+					equipment: "chest press machine",
+					description: "chest press, last two sets — dropped to 70",
+					sets: 2,
+					reps: 10,
+					load_lb: 70,
+					duration_min: null,
+					distance_mi: null,
+					kcal: 60,
+					confidence: "high",
+				},
+			],
+			photo_fields: [],
+			photo_indexes: [],
+		});
+
+		const saved: FusionResult = {
+			kind: "activities",
+			items: [
+				{
+					exercise: "Chest Press",
+					equipment: "chest press machine",
+					description: "4 × 10 chest press",
+					category: "strength",
+					muscle_groups: ["chest"],
+					sets: 4,
+					reps: 10,
+					load_lb: 85,
+					duration_min: null,
+					distance_mi: null,
+					kcal: 120,
+					confidence: "high",
+					sources: null,
+					refine: null,
+				},
+			],
+		};
+		const [revised] = await createFusionAnalyzer(llm).revise({
+			results: [saved],
+			instruction: "the last two sets I reduced the load to 70",
+			context,
+		});
+
+		expect(revised!.kind).toBe("activities");
+		if (revised!.kind !== "activities") return;
+		expect(revised!.items).toHaveLength(2);
+		// The parts SUM to what was done. Four sets, not the six the old answer implied.
+		expect(revised!.items.reduce((sum, item) => sum + (item.sets ?? 0), 0)).toBe(4);
+		expect(revised!.items.map((item) => item.load_lb)).toEqual([85, 70]);
+		// The muscle groups the detail schema never asks for reach BOTH parts — without
+		// this a drop set drops off the body map and out from under its own heading.
+		expect(revised!.items.every((item) => item.muscle_groups?.includes("chest"))).toBe(true);
+		expect(revised!.items.every((item) => item.category === "strength")).toBe(true);
+		expect(FusionResultSchema.safeParse(revised).success).toBe(true);
+	});
+
+	it("will not let an \"amend\" quietly add a record", async () => {
+		// The mode is honoured in one direction. A model that says it is amending and
+		// answers with two items is contradicting itself, and on this path the part may be
+		// a row that already exists — inventing a second one is the failure being fixed.
+		const llm = createFakeLlm();
+		const item = (load: number) => ({
+			exercise: "Chest Press",
+			equipment: null,
+			description: "chest press",
+			sets: 2,
+			reps: 10,
+			load_lb: load,
+			duration_min: null,
+			distance_mi: null,
+			kcal: 60,
+			confidence: "high" as const,
+		});
+		llm.outputs.push({ revision_mode: "amend", items: [item(85), item(70)], photo_fields: [], photo_indexes: [] });
+
+		const saved: FusionResult = {
+			kind: "activities",
+			items: [
+				{
+					exercise: "Chest Press",
+					equipment: null,
+					description: "4 × 10 chest press",
+					category: "strength",
+					muscle_groups: ["chest"],
+					sets: 4,
+					reps: 10,
+					load_lb: 85,
+					duration_min: null,
+					distance_mi: null,
+					kcal: 120,
+					confidence: "high",
+					sources: null,
+					refine: null,
+				},
+			],
+		};
+		const [revised] = await createFusionAnalyzer(llm).revise({
+			results: [saved],
+			instruction: "it was 85 pounds",
+			context,
+		});
+		if (revised!.kind !== "activities") return;
+		expect(revised!.items).toHaveLength(1);
+		expect(revised!.items[0]!.load_lb).toBe(85);
+	});
+
 	it("re-runs the part's own detail call with the part and the instruction in the prompt", async () => {
 		const llm = createFakeLlm();
 		llm.outputs.push({
+			// An ordinary correction: the fields move, the record stays one record.
+			revision_mode: "amend",
 			items: [
 				{
 					exercise: "Chest-Supported Row",
@@ -1094,7 +1223,7 @@ describe("revising what was understood", () => {
 
 		// One call, on the schema the analyze pipeline already uses — no new union.
 		expect(llm.requests).toHaveLength(1);
-		expect(llm.requests[0]!.schemaName).toBe("activities");
+		expect(llm.requests[0]!.schemaName).toBe("activities_revision");
 		const system = llm.requests[0]!.system;
 		expect(system).toContain("reps were 4 and it was 50 pounds");
 		expect(system).toContain('"sets":3');

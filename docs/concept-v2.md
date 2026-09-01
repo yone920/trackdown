@@ -153,15 +153,38 @@ day is judged against the goal active **that day**.
 The input classifier routes statements to: log · goal · constraint · preference · coach context,
 always showing what it understood before saving.
 
+## The tabs — Home · Today · Days · Progress · You
+
+Revised 2026-09-01. The app used to land on Today, which is the right page when something is
+happening and the wrong one when nothing is: a rest morning opened on an empty log and a plan
+nobody had asked for. So the landing tab answers the calm question and Today answers the live
+one.
+
+- **Home** — where you are, in general. The goal and its progress, the 7-day weight and its
+  trend, the week in two numbers (sessions against what you said you train, cardio in
+  *equivalent* minutes against the weekly target), and one big button into Today: *Start
+  today's workout* with no plan, *Today · 2 of 6 done* with one. Deliberately light and
+  deliberately a dead end for everything but navigation. **Nothing on Home can generate a
+  plan** — the button is a door.
+- **Today** — the one page for the open day, in the order a day is lived: **Do** (the plan,
+  ticked off), **Done** (what actually happened), **Eat** (guidance, then macros and meals),
+  **Body**. There is no separate coach page: the plan and the record of what you did are two
+  halves of one day, and *Start today's workout* on this page is the only generator in the app.
+- **Days**, **Progress**, **You** are unchanged. Today's row in the Days list goes to the
+  Today tab rather than to a second copy of today.
+
 ## The two day views
 
 - **Today** is live: a header stating where you are (day N, on track), the goal banner and
   goal-driven cards, a **Right now** reading (≤ 2 LLM sentences regenerated on each log: what's
-  done, what's short, the one best next action, with action chips), a **day arc** (6a–11p line:
-  logs as dots, workout as a bar, NOW), then Training and Eating organised like the closed day.
-  Only what was logged is on it — no ghost dot and no placeholder row for a meal nobody has
-  eaten (§Principles 8). Every logged row is three targets: the exercise name opens its sheet,
-  the ✕ deletes it in two taps, and the rest of the row opens it for a correction.
+  done, what's short, the one best next action), a **day arc** (6a–11p line: logs as dots,
+  workout as a bar, NOW), then Do, Done, Eat and Body. Training is grouped the way the closed
+  day groups it — Cardio with its minutes first, then muscle headings with set counts, every
+  activity drawn exactly once — with the session's time span as a note rather than as the
+  grouping principle. Only what was logged is on it — no ghost dot and no placeholder row for a
+  meal nobody has eaten (§Principles 8). Every logged row is three targets: the exercise name
+  opens its sheet, the ✕ deletes it in two taps, and the rest of the row opens it for a
+  correction.
 - **Day** (closed) is a reading, not a replay: verdict vs the goal active that day, an **In
   short** paragraph written at day close, training by muscle group with each exercise's load and
   its delta vs last time, eating as macros vs targets + a pattern line + meals by slot, body,
@@ -270,13 +293,14 @@ GET/PUT /api/plan
 
 ## App
 
-- **Home:** eating ring (eaten / left), earned line, status line, week strip; today's entries
-  grouped into blocks; a "What should I do today?" button that opens the coach.
+- **Home:** goal and progress, weight trend, the week in two numbers, and one button into
+  Today. Nothing on it generates anything.
+- **Today:** Do / Done / Eat / Body, as above. The plan lives here, and so does the only
+  generator in the app.
 - **Log button:** one screen with three big controls — Photo, Speak, Type — and a confirm card
   (fields editable, confidence shown as a subtle marker). Save. That is the whole flow, for
   exercise and food alike.
 - **Day / history:** past days as closed daily records; a block expands to its items and photos.
-- **Coach:** the brief with the "why" expanded, previous briefs, *Regenerate*.
 - **Profile:** the plan rendered organised (weight and trend, goal and pace, daily target, diet
   style, training days, constraints, eat-back setting), each field dated; "Tell me" opens the
   same input panel; single-field tap to correct. Health sync toggle.

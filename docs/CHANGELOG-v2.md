@@ -87,6 +87,133 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-01 — one page for the open day, a landing page for the rest, and a correction that can split a record (`wp-one-today-and-correction-split`)
+
+Four things, one branch. Three of them came out of the same complaint said three different
+ways: **the app knows what it is doing and will not tell you where.**
+
+#### A — one living page for the open day
+
+There were two pages drawing today. The **Today** tab grouped training by auto-block (the
+90-minute clustering), and **`/day/<today>`**, reachable from the Days list, grouped it by
+muscle with a Cardio heading in front. The same session read two different ways depending on
+which door you came through, and the user said so.
+
+Today is now the only page for the open day.
+
+- **`lib/training-groups.ts`** — the filing rule, once, for both pages. Cardio first with the
+  day's cardio minutes; then the muscle summary's groups with their set counts; then "Also".
+  **Every activity is drawn exactly once**: cardio never files under its muscle tags (it
+  carries them to credit the body map, not to file a walk under "glutes"), and a lift that
+  touches two muscles belongs to the first heading that claims it. Pure, and tested without a
+  renderer — which heading a row lands under is a rule, and rules rot quietly inside
+  components.
+- **`components/activity-row.tsx`** — the logged-exercise row, which had been written twice
+  and had already drifted apart.
+- The **session's time span** ("7:36a–8:35a") is a note on the Training header. When a workout
+  happened is a fact about it, not a way to file it.
+- The **Days list** sends today's row to the Today tab, and **`/day/<today>` redirects** there
+  rather than drawing a second, quieter copy of the day. `app/day/[date].tsx` is the archival
+  reading of a closed day now; it still handles `is_today` defensively.
+
+#### B — Home lands, Today is where the day happens
+
+**Deliverable 3 changed direction mid-flight.** It began as a *Plan tab* — the coach page
+given a tab of its own — and that was built, then held by the user in favour of something
+better: the plan **merged into Today**, and a new **Home** tab for the days when nothing is
+happening. The Plan-tab work is kept, unmerged, on the `shelf-plan-tab` branch.
+
+The complaint behind both: *"if I want to quickly see what should I do, I have to go to the
+home page, scroll down, find that orange button."* And the deeper problem the merge fixes:
+the plan and the record of what you actually did were on two different screens, when they are
+two halves of one day.
+
+- **Tabs are now Home · Today · Days · Progress · You.** `app/(tabs)/index.tsx` is Home;
+  Today moved to `/today`.
+- **Home** — the goal and its progress, the 7-day weight and its trend, the week in two
+  numbers (sessions against what you said you train; cardio in *equivalent* minutes — light
+  ×½, moderate ×1, vigorous ×2 — against the weekly target), and one big button into Today.
+  Light on purpose, and a dead end for everything but navigation.
+- **Today** is Do / Done / Eat / Body. `components/plan-section.tsx` carries the whole coach
+  page — the Why card, the Do list with its ticks, the added-later dividers, the finisher, the
+  plan-complete card, Add / Replace, the nudge and the told adjustment — and
+  `components/eat-guidance.tsx` carries its Eat card in beside the meals, where eating is.
+  `/coach` is a redirect into `/today`; no dead routes.
+- **The hard constraint held, and it mattered more after the move than before it.** Opening a
+  tab generates nothing. Home reads `/api/coach/status` (an exists-check that cannot write);
+  Today reads `/api/coach/next?generate=false`. **"Start today's workout" is the only
+  generator in the app**, and the tests assert it on both pages — a tab is opened by accident,
+  on the way to somewhere else, dozens of times a day.
+- On a rest day nobody presses it, the Do section stays one card and a button, and meals,
+  weigh-ins and everything else work exactly as they do on a training day. Tested.
+
+#### C — a correction can replace one record with several
+
+The field report: the user logged *"4 sets of 10 at 85, the last two sets I reduced to 70"*.
+The **create** path splits that correctly (shipped in `fix-exercise-sheet-ux`). Told the same
+story about the record that was **already saved**, the model had nowhere to put a second load
+— so it wrote "2 sets at 85, 2 sets at 70" into the *description* and left `sets=4`,
+`load=null`, while a separate 2×10@70 row still stood beside it, counting two sets nobody did.
+
+A record carries ONE load. A load that changed partway through the sets is two records or it
+is nothing, and nothing in the correction path could make two.
+
+- **`revision_mode`** (`schema.ts` §ACTIVITY_REVISION_MODES) — an activities part is revised
+  through its own schema now, answering `"amend"` or `"split"`. The field is **FIRST in the
+  schema**, because structured output is decoded in field order: a mode declared after the
+  items it governs would be chosen to fit items already written. One enum on a single-branch
+  schema; the contract test proved the grammar still compiles.
+- **The mode is honoured in one direction.** A `"split"` with no more items than went in is an
+  amend; an `"amend"` with *more* items has its extras dropped — on this path the part may be
+  a row that already exists, and inventing a second one is the failure being fixed.
+- **`carryForward` carries the movement to every part of a split.** Without it a drop set
+  loses its muscle groups, and both halves fall off the body map and out from under their own
+  heading.
+- **Fields, not prose.** The prompt says so, and the summing rule is the create path's, word
+  for word: the parts add up to what was done, never a total plus a partial.
+- **Descriptions stopped repeating the fields.** One row read `4 × 10 · 4 × 10 chest press
+  machine: …` — the row drawing sets × reps from the fields and the description saying them
+  again. The description now names the movement and adds only what the fields cannot carry.
+- **Migration 0018** — `record_corrections.replaces_activity_id`. The original row is
+  corrected **in place into the first part** and keeps its id, its evidence and its own
+  history; the other parts are new rows that name what they came out of. `ON DELETE SET NULL`,
+  not `CASCADE`: deleting the original must not delete what came out of it.
+- **`POST /api/entries/movement/:id/split`** writes it in one transaction. Separate from the
+  PATCH because a PATCH moves the fields of one row and this creates rows. The app sends a
+  multi-item revision there instead of PATCHing `items[0]` and silently dropping the rest —
+  which is exactly what it used to do, with no error and no warning.
+
+#### D — saying what the app already knows
+
+- **"Last 7 days"** over the coverage figures. The colours are a rolling seven-day count and
+  the question people were left asking was whether it resets on a Monday.
+- **`app/how-it-works.tsx`** — the workings, plainly, from a quiet row on You. Twelve short
+  sections: the day as the session, the rolling coverage clock and the 10–20 sets band, the
+  neglect ledger, the 48h recovery rule, progression (hold until proved twice, then one
+  smallest step, reversed on assisted machines), gaps, cardio's equivalent minutes against the
+  WHO's 150, what a load means on a bar / dumbbell / machine, MET estimates, the arithmetic
+  check on meals, told corrections, and the coach answering only when asked. Content lives in
+  `lib/how-it-works.ts`, so a new rule is a new entry rather than a new layout — and a test
+  pins the figures, so the page cannot quietly stop being true.
+
+#### Verified
+
+- **Backend** 695 → 703, typecheck and lint clean. The one failure across a full run is the
+  known-flaky meal-consistency contract case (the model intermittently returns `kcal: null`);
+  it passes in isolation and was not weakened.
+- **Fusion contract suite: 18/18 against the real API**, including the new correction-split
+  case and an ordinary amend that must NOT split.
+- **App** 279 → 312 (21 → 22 suites), `tsc` clean, `expo lint` clean but for one pre-existing unused import in
+  `components/goal-banner.tsx`.
+
+#### Deferred
+
+- The **Plan tab** (`shelf-plan-tab`, commit 9e80c55) is kept unmerged. Nothing on the branch
+  is wanted as it stands; it is there so the work is not lost.
+- The split handles **one** record becoming several. Which of *two* originals a new part came
+  out of is not a question positions can answer, and a guessed provenance is worse than none —
+  so a many-to-many revision still records no history, as before.
+
 ### 2026-09-01 — a name you can tap, a picture you can see coming, and no empty gutter (`fix-exercise-sheet-ux`)
 
 Four screenshots from a gym on one bar of cellular, and every one of them was about the
