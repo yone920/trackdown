@@ -24,11 +24,11 @@ import type { CoverageEntry } from '@/lib/types';
 // ours — the package draws paths and reports taps, and the colours, the stroke, the legend
 // and the words come from lib/body-map.ts.
 //
-// Front and back side by side, because half a body is half an answer: the pull half of a
+// Front and back STACKED, full width each (user: side by side was too small to read or tap): the pull half of a
 // week is all on the back.
 
 /** Two figures on one row of a phone; the package scales from a ~400 px design. */
-const FIGURE_SCALE = 0.62;
+const FIGURE_SCALE = 1.9;
 
 export function BodyMap({
   coverage,
@@ -67,7 +67,7 @@ export function BodyMap({
 
   return (
     <Card testID={testID}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-around', alignItems: 'flex-start' }}>
+      <View style={{ flexDirection: 'column', alignItems: 'center', gap: 20 }}>
         {(['front', 'back'] as const).map((side) => (
           <View key={side} testID={`body-map-${side}`} style={{ alignItems: 'center' }}>
             <BodyFigure
