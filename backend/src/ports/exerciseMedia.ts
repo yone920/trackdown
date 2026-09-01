@@ -35,6 +35,23 @@ export interface ExerciseMediaStore {
 	 * otherwise be served for ever beside the new one. Returns how many were dropped.
 	 */
 	clearVariants(exerciseId: string, index: number): Promise<number>;
+	/**
+	 * Which dataset entry the frames on disk were downloaded from, recorded *beside them*
+	 * rather than only in `exercise_catalog.source_slug`.
+	 *
+	 * It is here because the column and the bytes can disagree, and did (2026-09-01): the
+	 * importer skips a frame that already exists and writes the column afterwards, so
+	 * re-pointing Bench Press at a clearer photograph moved the column while the old
+	 * picture stayed on the volume — invisibly, and for ever, because the next run then
+	 * compared the new column against the new match and saw nothing to do. What is on the
+	 * disk is the only thing that can answer "is this the right picture".
+	 *
+	 * `null` for a store that has never recorded one; the importer re-downloads that row
+	 * once, which is how a volume from before this existed corrects itself.
+	 */
+	sourceOf(exerciseId: string): Promise<string | null>;
+	/** Records it. Called after the frames are written, never before. */
+	setSource(exerciseId: string, slug: string): Promise<void>;
 	/** Files and total bytes held, for the importer's report. */
 	usage(): Promise<{ files: number; bytes: number }>;
 }

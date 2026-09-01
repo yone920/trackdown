@@ -142,11 +142,21 @@ grip beats no picture at all.
 
 Re-pointing a row is only half a fix if the old bytes stay on the volume, and they did: the
 importer skips a frame that is already on disk, so the empty-bar photographs survived the
-swap under the new slug. It now compares the row's stored `source_slug` against the entry it
-just matched and **re-downloads a frame whose source has moved** — and, because the frame's
-bytes are being replaced, drops every resized copy made from them
-(`ExerciseMediaStore.clearVariants`). A `?w=640` cached from the old picture would otherwise
-be served beside the new original for ever.
+swap under the new slug. It now **re-downloads a frame whose source has moved**, and drops
+every resized copy made from the bytes it replaces (`ExerciseMediaStore.clearVariants`) —
+a `?w=640` cached from the old picture would otherwise be served beside the new original
+for ever.
+
+**And it asks the volume, not the column.** The first attempt at this compared
+`exercise_catalog.source_slug` against the fresh match, which does not work and is worth
+writing down: the column is written *after* the downloads, so a run that re-points a row and
+skips its frames leaves the column saying the new thing about the old bytes — and the next
+run then compares new against new and sees nothing to do. That state is unreachable by any
+number of `--force` runs. The store records the slug beside the frames it describes
+(`sourceOf` / `setSource`; `<id>/source.txt` in the local adapter, which is not a `.jpg` and
+so counts as neither a picture nor a variant), and what is on the disk is what is believed.
+A volume that has never recorded one re-downloads **once**, on the next `--force`, which is
+how every volume from before this corrects itself.
 
 #### C — the affordance, and no legend
 
@@ -249,10 +259,11 @@ Two field reports fixed in the same tree and shipped here (`app/day/[date].tsx`)
   a frame whose bytes are not an image served as the original rather than as a 500.
 - `src/services/images.test.ts` (+5): the width parser on every input shape, the resize and
   its no-enlargement rule, and the throw the route's fallback is built on.
-- `src/adapters/storage/local.test.ts` (+3): a variant filed beside its original and not on
-  top of it, idempotently; a width outside the list refused before it can name a file; and
+- `src/adapters/storage/local.test.ts` (+4): a variant filed beside its original and not on
+  top of it, idempotently; a width outside the list refused before it can name a file;
   `clearVariants` dropping every width of one frame while the original and the next frame's
-  variants stay put.
+  variants stay put; and the provenance note read back, absent from `usage`, and surviving
+  a `clearVariants`.
 - `src/services/exerciseMatch.test.ts` (+3): twenty-seven phrasings of the nineteen
   stretches resolving, nothing the catalogue already owned taken from it, and the guard
   still refusing a stretch as an answer to a movement.
@@ -260,7 +271,8 @@ Two field reports fixed in the same tree and shipped here (`app/day/[date].tsx`)
   onto Chest Stretch through the alias that names it; the preferred source beating the
   derived-key hit the rules would take; the preference falling back to the rules when the
   dataset does not have the entry it names; a re-pointed row's frames replaced on disk with
-  their 640 thrown away; and a row whose entry has not moved left completely alone.
+  their 640 thrown away **while the column says otherwise**; a row whose entry has not moved
+  left completely alone; and a volume with no recorded provenance re-fetching exactly once.
 - `__tests__/exercise.test.tsx` (8 → 13): the skeleton count from the tap, none at all when
   the tap said none, the two-box fallback when nobody said, a prefetched sheet with no
   skeleton and no request, and 640 on the tiles against full size in the zoom.

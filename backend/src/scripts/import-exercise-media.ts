@@ -118,11 +118,9 @@ export async function importExerciseMedia({
 		bytesDownloaded: 0,
 	};
 
-	const { rows: catalog } = await db.query<CatalogRow & { source_slug: string | null }>(
-		`SELECT id, name, aliases, source_slug FROM exercise_catalog ORDER BY name`
+	const { rows: catalog } = await db.query<CatalogRow>(
+		`SELECT id, name, aliases FROM exercise_catalog ORDER BY name`
 	);
-	/** Which dataset entry each row's frames on disk actually came from, last time. */
-	const importedFrom = new Map(catalog.map((row) => [row.id, row.source_slug]));
 	if (catalog.length === 0) {
 		log("⚠️  The exercise catalogue is empty — run db:migrate first. Nothing to import.");
 		return empty;
@@ -164,12 +162,17 @@ export async function importExerciseMedia({
 		});
 	}
 
+	// Which dataset entry each row's frames on disk actually came from — read from the
+	// volume, not from `exercise_catalog.source_slug`, because the column is written after
+	// the downloads and can therefore say the new thing about the old bytes. That is exactly
+	// how Bench Press ended up re-pointed at the photograph with plates on the bar while the
+	// empty-bar frames stayed where they were (2026-09-01). A row with nothing recorded is
+	// re-downloaded once, which is how a volume from before this existed corrects itself.
+	const importedFrom = new Map<string, string | null>(
+		await Promise.all([...matches.keys()].map(async (id) => [id, await media.sourceOf(id)] as const))
+	);
+
 	await inParallel(jobs, CONCURRENCY, async ({ exerciseId, entry, index, imagePath }) => {
-		// A frame already on disk is skipped — unless the row is now matched to a DIFFERENT
-		// dataset entry than the one those bytes came from. Then the file is the old
-		// movement's photograph under the new movement's name, and skipping it would leave
-		// the swap invisible for ever (2026-09-01: Bench Press was re-pointed at the entry
-		// with plates on the bar, and the empty-bar frames stayed exactly where they were).
 		const restated = importedFrom.get(exerciseId) !== entry.id;
 		if (!restated && (await media.has(exerciseId, index))) {
 			alreadyPresent += 1;
@@ -194,6 +197,14 @@ export async function importExerciseMedia({
 			log(`⚠️  ${imagePath}: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	});
+
+	// What the bytes on the volume are now of, recorded beside them. After the downloads,
+	// so a run that failed halfway does not claim a picture it did not fetch.
+	for (const [exerciseId, entry] of matches) {
+		if ((frames.get(exerciseId) ?? 0) > 0 && importedFrom.get(exerciseId) !== entry.id) {
+			await media.setSource(exerciseId, entry.id).catch(() => undefined);
+		}
+	}
 
 	// One statement: the columns and the frame count that was actually achieved. Written
 	// after the downloads so `media_count` never promises a file that is not there.

@@ -12,6 +12,7 @@ export interface FakeExerciseMediaStore extends ExerciseMediaStore {
 
 export function createFakeExerciseMediaStore(): FakeExerciseMediaStore {
 	const frames = new Map<string, Buffer>();
+	const sources = new Map<string, string>();
 	// A resized variant is a key beside the original, exactly as it is a file beside it on
 	// disk (adapters/storage/exerciseMedia.ts).
 	const key = (exerciseId: string, index: number, width?: number): string =>
@@ -46,6 +47,14 @@ export function createFakeExerciseMediaStore(): FakeExerciseMediaStore {
 				}
 			}
 			return dropped;
+		},
+
+		async sourceOf(exerciseId: string): Promise<string | null> {
+			return sources.get(exerciseId) ?? null;
+		},
+
+		async setSource(exerciseId: string, slug: string): Promise<void> {
+			sources.set(exerciseId, slug);
 		},
 
 		async usage(): Promise<{ files: number; bytes: number }> {

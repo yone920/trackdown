@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { EXERCISE_MEDIA_WIDTHS, type ExerciseMediaStore } from "../../ports/exerciseMedia.js";
@@ -47,6 +47,15 @@ export function createLocalExerciseMediaStore({ root }: LocalExerciseMediaStoreO
 		// Belt and braces, as in the evidence store: the two patterns above already forbid
 		// a "..", but a store that can be talked into writing outside its root is the kind
 		// of bug worth checking twice.
+		if (!full.startsWith(absoluteRoot + path.sep)) throw new Error(`Not an exercise media path`);
+		return full;
+	}
+
+	/** The provenance note, beside the frames it describes. Never a `.jpg`, so `usage`
+	 * and `clearVariants` both step over it. */
+	function resolveSource(exerciseId: string): string {
+		if (!UUID.test(exerciseId)) throw new Error(`Not an exercise id: "${exerciseId}"`);
+		const full = path.resolve(absoluteRoot, exerciseId.toLowerCase(), "source.txt");
 		if (!full.startsWith(absoluteRoot + path.sep)) throw new Error(`Not an exercise media path`);
 		return full;
 	}
@@ -103,6 +112,23 @@ export function createLocalExerciseMediaStore({ root }: LocalExerciseMediaStoreO
 			return dropped;
 		},
 
+		async sourceOf(exerciseId: string): Promise<string | null> {
+			try {
+				const slug = await readFile(resolveSource(exerciseId), "utf8");
+				return slug.trim() || null;
+			} catch {
+				// No file, no directory, no readable disk: all of them are "we do not know",
+				// and the importer answers that by downloading the frames again.
+				return null;
+			}
+		},
+
+		async setSource(exerciseId: string, slug: string): Promise<void> {
+			const file = resolveSource(exerciseId);
+			await mkdir(path.dirname(file), { recursive: true });
+			await writeFile(file, `${slug}\n`);
+		},
+
 		async usage(): Promise<{ files: number; bytes: number }> {
 			let files = 0;
 			let bytes = 0;
@@ -120,6 +146,9 @@ export function createLocalExerciseMediaStore({ root }: LocalExerciseMediaStoreO
 					continue;
 				}
 				for (const frame of frames) {
+					// The provenance note is bookkeeping, not a picture: it is not a frame and
+					// its handful of bytes are not "illustrations on disk".
+					if (!frame.endsWith(".jpg")) continue;
 					try {
 						const info = await stat(path.join(absoluteRoot, entry, frame));
 						if (!info.isFile()) continue;
