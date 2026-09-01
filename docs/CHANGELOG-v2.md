@@ -114,7 +114,11 @@ is a sentence a picture writes in one look.
   overdue would be two answers to one question. Grey (`track`) is *nothing in four weeks*;
   above it a three-step accent ramp on the week's sets against the **10–20 band** — under
   it, in it, past it. A muscle trained ten days ago and not this week is the *faintest step*
-  and not the grey, because grey means "I have never seen this".
+  and not the grey, because grey means "I have never seen this" — and grey is
+  `days_since == null` and nothing else, which the live read is what settled: a treadmill
+  walk serves the calves and the glutes and records **no sets at all**, so a muscle can be
+  `days_since: 0` with `sets_28d: 0`, and grey there would say "not in four weeks" about
+  something done that morning.
 - **Overdue regions carry a 1.2 px accent stroke** — the only thing that distinguishes
   "never trained" from "not trained this week" on a grey region — and a legend explains
   every colour, including the outline.
