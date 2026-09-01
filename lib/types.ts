@@ -461,8 +461,28 @@ export type ExerciseSheet = {
   source: { dataset: string; slug: string } | null;
 };
 
+/**
+ * GET /api/coach/status — does today have a plan, and how far through is it. An
+ * exists-check and nothing else: it never generates a brief, which is what lets Today's
+ * button reflect the day's state without asking the coach a question on every open (user
+ * decision 2026-08-31 §1).
+ */
+export type CoachStatus = {
+  date: IsoDate;
+  has_plan: boolean;
+  headline: string | null;
+  done_count: number;
+  total_count: number;
+  /** True when every line of a non-empty plan is done. */
+  complete: boolean;
+};
+
 export type CoachNext = {
-  brief: CoachBrief;
+  /**
+   * Null when nobody has asked today and the request said not to generate one — the page
+   * load. Opening the Coach screen must never be what writes the day's advice.
+   */
+  brief: CoachBrief | null;
   stale: boolean;
   /**
    * One line saying why this is not the answer that was just asked for — set when the

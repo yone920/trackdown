@@ -4,6 +4,7 @@ import { api, tzOffsetMin, upload } from './api';
 import type {
   AnalyzeResponse,
   CoachNext,
+  CoachStatus,
   ConfirmResponse,
   DayLogView,
   DayView,
@@ -159,9 +160,15 @@ export function useProfile() {
 const COACH_NEXT: readonly unknown[] = ['coach', 'next'];
 
 /**
- * GET /api/coach/next — today's brief, cached for the day on the server. Never fetched
- * on its own: the coach is a button (concept-v2 §Principles 5), so this hook is only
- * mounted by the Coach screen.
+ * GET /api/coach/next?generate=false — today's brief **if there is one**, and `brief: null`
+ * if there is not. Never fetched on its own: the coach is a button (concept-v2 §Principles
+ * 5), so this hook is only mounted by the Coach screen.
+ *
+ * `generate=false` is the whole point. Opening the page used to generate the day's brief
+ * when there was not one yet, which made *looking* the thing that wrote the day's standing
+ * answer — a schedule with extra steps (user decision 2026-08-31 §2). The screen now draws
+ * its own "What should I do today?" button over a null brief, and the only things that ever
+ * cost a model call are taps.
  *
  * It takes no context. Anything the user types goes through {@link useAskCoach}, whose
  * answer is written straight into this entry — one request per tap on Ask, and the brief
@@ -172,31 +179,67 @@ const COACH_NEXT: readonly unknown[] = ['coach', 'next'];
 export function useCoachNext() {
   return useQuery({
     queryKey: COACH_NEXT,
-    queryFn: () => api<CoachNext>('/api/coach/next', { query: { tz: tzOffsetMin() } }),
-    // A brief costs a model call; asking again on every focus is not what the button means.
+    queryFn: () =>
+      api<CoachNext>('/api/coach/next', { query: { tz: tzOffsetMin(), generate: false } }),
+    // Free now — but the answer holds still for the day, so refetching on every focus
+    // would only replace a brief with itself.
     staleTime: 1000 * 60 * 30,
     retry: 0,
   });
 }
 
 /**
- * POST /api/coach/next/regenerate — the Ask button.
+ * GET /api/coach/status — the four numbers Today's button needs: is there a plan, what is
+ * it called, and how much of it is done (user decision 2026-08-31 §1).
+ *
+ * Safe to fetch on every open of the Today tab, and that is a property of the endpoint
+ * rather than of this hook: it is an exists-check on the server and cannot generate
+ * anything. Before it existed, the only way to ask "is there a plan?" was to ask for one.
+ */
+export function useCoachStatus() {
+  return useQuery({
+    queryKey: ['coach', 'status'],
+    queryFn: () => api<CoachStatus>('/api/coach/status', { query: { tz: tzOffsetMin() } }),
+    retry: 0,
+  });
+}
+
+/**
+ * POST /api/coach/next/regenerate — every tap that can change today's plan.
  *
  * `context` is a fact about today the next brief should account for ("knee hurts"); a
- * `revision` is an instruction about the answer itself ("make it 8 exercises"), and the
- * server hands the model the brief the user is looking at. The answer replaces the cache
- * entry directly rather than invalidating it: a refetch would throw the brief away for a
- * frame, and this response *is* the fresh one.
+ * `revision` is an instruction about the answer itself ("add core", "switch to legs"), and
+ * the server hands the model the brief the user is looking at.
+ *
+ * `mode` says which of the plan's two explicit buttons this was — `append` for *Add to
+ * today's plan*, `rewrite` for *Replace today's plan* — and the server does not let the
+ * model overrule it. The free-text box sends no mode at all: only the model has read the
+ * sentence, and its default there is to add rather than replace.
+ *
+ * The answer replaces the cache entry directly rather than invalidating it: a refetch would
+ * throw the brief away for a frame, and this response *is* the fresh one. The button on
+ * Today reads a different endpoint, so that one is invalidated.
  */
 export function useAskCoach() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ context = null, revision = null }: { context?: string | null; revision?: string | null }) =>
+    mutationFn: ({
+      context = null,
+      revision = null,
+      mode = null,
+    }: {
+      context?: string | null;
+      revision?: string | null;
+      mode?: 'append' | 'rewrite' | null;
+    }) =>
       api<CoachNext>('/api/coach/next/regenerate', {
         method: 'POST',
-        body: { tz_offset_min: tzOffsetMin(), context, revision },
+        body: { tz_offset_min: tzOffsetMin(), context, revision, mode },
       }),
-    onSuccess: (data) => qc.setQueryData(COACH_NEXT, data),
+    onSuccess: (data) => {
+      qc.setQueryData(COACH_NEXT, data);
+      qc.invalidateQueries({ queryKey: ['coach', 'status'] });
+    },
   });
 }
 

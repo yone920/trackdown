@@ -20,6 +20,18 @@ import type { BriefExercise, CoachBrief, ExerciseCompletion } from '@/lib/types'
 // place that generates advice. The brief is cached for the day on the server, so asking
 // twice is consistent and free, and *Regenerate* is explicit.
 //
+// **Opening this screen does not generate anything** (user decision 2026-08-31 §2). The
+// page load is `GET /api/coach/next?generate=false`, which answers with the day's standing
+// brief or with nothing at all; with nothing, the screen draws the question as a button and
+// waits to be pressed. It used to generate on that first GET, which made merely looking the
+// act that wrote the day's advice — and left Today's button no way to ask whether there was
+// a plan without creating one.
+//
+// Three explicit ways to change the plan, and the two that are buttons say which they are:
+// **Add to today's plan** appends under it, **Replace today's plan** rebuilds it behind a
+// confirming second tap, and the box below leaves the choice to the model, which defaults
+// to adding.
+//
 // Context comes the usual way (concept-v2 §Principles 7): the same Photo / Speak / Type
 // panel. A photo or a spoken line goes through the Log sheet in `coach_context` mode,
 // which saves it against today and every later ask reads it back.
@@ -70,6 +82,13 @@ export default function Coach() {
   const speech = useMemo(() => getSpeech(), []);
 
   const [context, setContext] = useState('');
+  /**
+   * *Replace today's plan* is the one control on this screen that can take work away, so it
+   * asks first: the first tap arms it and says what it will do, the second does it. Armed
+   * state is dropped whenever anything else happens, so it can never be pressed by accident
+   * two screens later.
+   */
+  const [replaceArmed, setReplaceArmed] = useState(false);
 
   const keyboard = useKeyboardHeight();
   const window = useWindowDimensions();
@@ -82,6 +101,12 @@ export default function Coach() {
   const asking = askCoach.isPending;
   const busy = coach.isLoading || coach.isFetching || asking;
   const action = brief?.nudge_action ?? coach.data?.nudge_action ?? null;
+  /**
+   * The server answered, and the answer was that there is no plan for today. Distinct from
+   * "still loading" and from "the request failed": only this one gets the ask button, and
+   * nothing on this screen turns it into a brief except a tap on that button.
+   */
+  const noPlan = !brief && !busy && coach.isSuccess;
 
   // Three ways this screen can have something to say above the brief, in the order they
   // matter: the server kept the old answer and said why; the request never landed; the
@@ -94,14 +119,51 @@ export default function Coach() {
    * With a brief on screen the input is an *adjustment* to it — that is what the user
    * means by typing into a page that already answered them. With no brief yet it is
    * context for the first ask. An empty box is a plain regenerate either way.
+   *
+   * No `mode`: the box does not claim to know which kind of change this is, so the server
+   * lets the model read the sentence — and tells it that an addition is the default,
+   * because the two buttons above are where a replacement is asked for out loud.
    */
   const ask = () => {
+    setReplaceArmed(false);
     const line = context.trim();
     if (!line) {
       askCoach.mutate({});
       return;
     }
     askCoach.mutate(brief ? { revision: line } : { context: line });
+    setContext('');
+  };
+
+  /**
+   * The first ask of the day, from the button that replaces the plan when there is none.
+   * This is the only thing on the screen that a page load could have done for the user, and
+   * the whole point of the fix is that it does not.
+   */
+  const askFirst = () => {
+    setReplaceArmed(false);
+    const line = context.trim();
+    askCoach.mutate(line ? { context: line } : {});
+    setContext('');
+  };
+
+  /** "Add to today's plan" — an append, decided here rather than inferred from a sentence. */
+  const addToPlan = () => {
+    setReplaceArmed(false);
+    const line = context.trim();
+    askCoach.mutate({ revision: line || 'add to the plan — a little more of what today needs', mode: 'append' });
+    setContext('');
+  };
+
+  /** "Replace today's plan": arm, say what it does, and only act on the second tap. */
+  const replacePlan = () => {
+    if (!replaceArmed) {
+      setReplaceArmed(true);
+      return;
+    }
+    setReplaceArmed(false);
+    const line = context.trim();
+    askCoach.mutate(line ? { revision: line, mode: 'rewrite' } : {});
     setContext('');
   };
 
@@ -147,7 +209,7 @@ export default function Coach() {
 
       <Eyebrow>The coach</Eyebrow>
       <Disp size={30} style={{ marginTop: 6 }}>
-        {brief?.headline ?? 'What should I do?'}
+        {brief?.headline ?? (noPlan ? 'No plan yet today' : 'What should I do?')}
       </Disp>
       {brief?.asked_at ? (
         <Sub testID="asked-at" style={[{ marginTop: 6 }, TABULAR]}>
@@ -183,6 +245,28 @@ export default function Coach() {
       {note && brief ? (
         <Card testID="coach-note" style={{ marginTop: 14, borderLeftWidth: 3, borderLeftColor: C.accent }}>
           <Sub style={{ lineHeight: 18 }}>{note}</Sub>
+        </Card>
+      ) : null}
+
+      {/* Nobody has asked today, and the page load did not ask on their behalf. This is
+          the ONLY thing that makes the first brief of the day, and it is a tap (user
+          decision 2026-08-31 §2). */}
+      {noPlan ? (
+        <Card testID="coach-no-plan" style={{ marginTop: 18 }}>
+          <Body style={{ lineHeight: 15 * 1.55 }}>
+            Nothing planned for today yet. I will read what you have logged, your goals and
+            where you are in the week, and write one.
+          </Body>
+          <View style={{ marginTop: 14 }}>
+            <Chips>
+              <Chip
+                testID="coach-ask-today"
+                label="What should I do today?"
+                variant="primary"
+                onPress={askFirst}
+              />
+            </Chips>
+          </View>
         </Card>
       ) : null}
 
@@ -300,6 +384,34 @@ export default function Coach() {
               ))}
             </Card>
           ) : null}
+
+          {/* The two things you can do to a plan, said out loud (user decision
+              2026-08-31 §3). Adding keeps everything above; replacing does not, so it
+              costs a second tap and says what it is about to do. Both take whatever is in
+              the box below as the instruction, and both work with it empty. */}
+          <View style={{ marginTop: 14 }}>
+            <Chips>
+              <Chip
+                testID="coach-add"
+                label="Add to today's plan"
+                variant="primary"
+                disabled={busy}
+                onPress={addToPlan}
+              />
+              <Chip
+                testID="coach-replace"
+                label={replaceArmed ? "Replace? This clears today's plan" : "Replace today's plan"}
+                variant="danger"
+                disabled={busy}
+                onPress={replacePlan}
+              />
+            </Chips>
+            <Sub testID="coach-plan-actions-hint" style={{ marginTop: 10, lineHeight: 18 }}>
+              {replaceArmed
+                ? 'Tap Replace again to rebuild the session. Everything above goes, ticks included.'
+                : 'Adding keeps everything above it. Type below first to say what to add, or what the new session should be.'}
+            </Sub>
+          </View>
         </Section>
       ) : null}
 
@@ -429,21 +541,17 @@ export default function Coach() {
           {speech.available ? '' : ' (Speaking needs the dev build.)'}
         </Sub>
 
+        {/* With a brief on screen this box is an adjustment to it, and it needs words to
+            be one: an empty box used to send a plain regenerate, which silently replaced
+            the plan from the least explicit control on the page. Replacing has its own
+            button now, and its own confirmation. */}
         <View style={{ marginTop: 16 }}>
           <Chips>
             <Chip
               testID="coach-regenerate"
-              label={
-                busy
-                  ? 'Thinking…'
-                  : brief
-                    ? context.trim()
-                      ? 'Adjust it'
-                      : 'Ask again'
-                    : 'Ask'
-              }
+              label={busy ? 'Thinking…' : brief ? 'Adjust it' : 'Ask'}
               variant="primary"
-              disabled={busy}
+              disabled={busy || (!!brief && context.trim() === '')}
               onPress={ask}
             />
           </Chips>

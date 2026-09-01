@@ -35,6 +35,28 @@ the build plan and concept describe every screen — follow them and the app's e
 - Prefer boring, readable code over cleverness. No new dependencies without a one-line reason in
   the changelog.
 
+## Live verification on the user's account — READ ONLY
+
+The deployed server holds a real account with a real day on it. When a work package ends
+with a check against production, that check is **GETs and nothing else**.
+
+- **Never regenerate or replace the standing coach brief**, and never any other piece of the
+  user's daily state: no `POST /api/coach/next/regenerate` (with or without a revision or a
+  `mode`), no `GET /api/coach/next` without `generate=false` — a plain GET generates the
+  day's brief when there is not one, which is a write. `GET /api/coach/status` and
+  `GET /api/coach/next?generate=false` are the two safe doors, and they exist partly for
+  this. The same goes for anything else that is one-per-day: readings, day closes, goal
+  status, the plan row.
+- **Never log, correct or delete a row on the user's account.** Not a test meal, not a
+  weigh-in, not "I'll delete it afterwards" — a deletion is a second write, and the day's
+  totals, its verdict and its coach brief have all moved by then.
+- **Write paths are verified against rows the agent created**, on an account the agent made
+  itself (sign up, exercise the path, remove what you made). If a write path cannot be
+  verified that way, it is verified in the test suite against the embedded Postgres, and the
+  report says it was not exercised live. An untested write is a smaller problem than a
+  rewritten day.
+- Report the payloads you read. "I checked it works" is not a check the user can audit.
+
 ## Reporting
 Your final message is read by the orchestrator, not the user. Return: WP name, merged commit
 sha, test counts, files of note, anything deferred or uncertain, and any question the user must

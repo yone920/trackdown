@@ -126,9 +126,15 @@ export function Section({
   );
 }
 
-export type ChipVariant = 'primary' | 'secondary';
+export type ChipVariant = 'primary' | 'secondary' | 'danger';
 
-/** Pill, 12/700. Primary is `ink` on `bg`; secondary is a 1px `track` outline. */
+/**
+ * Pill, 12/700. Primary is `ink` on `bg`; secondary is a 1px `track` outline.
+ *
+ * `danger` is the outline in accent — for a control that takes something away, like
+ * *Replace today's plan*. It is a warning, not a wall: the second tap is what commits, and
+ * the colour is there so the first one is not pressed absent-mindedly.
+ */
 export function Chip({
   label,
   onPress,
@@ -143,6 +149,7 @@ export function Chip({
   testID?: string;
 }) {
   const primary = variant === 'primary';
+  const danger = variant === 'danger';
   return (
     <Pressable
       testID={testID}
@@ -155,9 +162,14 @@ export function Chip({
         paddingVertical: 8,
         backgroundColor: primary ? C.ink : 'transparent',
         borderWidth: primary ? 0 : 1,
-        borderColor: C.track,
+        borderColor: danger ? C.accent : C.track,
       })}>
-      <Body style={{ fontFamily: FONT.semi, fontSize: 12, color: primary ? C.bg : C.ink }}>
+      <Body
+        style={{
+          fontFamily: FONT.semi,
+          fontSize: 12,
+          color: primary ? C.bg : danger ? C.accent : C.ink,
+        }}>
         {label}
       </Body>
     </Pressable>

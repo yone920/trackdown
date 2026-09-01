@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import React from 'react';
 
 import Today from '@/app/(tabs)/index';
-import type { DayActivity, DayMeal } from '@/lib/types';
+import type { CoachStatus, DayActivity, DayMeal } from '@/lib/types';
 import { makeDay, makeGoal, makeMetric, makeWeek } from './fixtures';
 
 // Today rendered against a fake API: the header, the goal banner and — the part that is a
@@ -37,16 +37,31 @@ function renderToday() {
   );
 }
 
+/** What GET /api/coach/status answers. No plan asked for yet is the default. */
+function noPlan(overrides: Partial<CoachStatus> = {}): CoachStatus {
+  return {
+    date: '2026-08-31',
+    has_plan: false,
+    headline: null,
+    done_count: 0,
+    total_count: 0,
+    complete: false,
+    ...overrides,
+  };
+}
+
 function serve({
   day = makeDay(),
   week = makeWeek(),
   goals = { active: [], history: [], no_goal: true },
-}: { day?: unknown; week?: unknown; goals?: unknown } = {}) {
+  coach = noPlan(),
+}: { day?: unknown; week?: unknown; goals?: unknown; coach?: unknown } = {}) {
   mockApi.mockImplementation((path: string) => {
     if (path.startsWith('/api/day/')) return Promise.resolve(day);
     if (path === '/api/week') return Promise.resolve(week);
     if (path === '/api/goals') return Promise.resolve(goals);
     if (path === '/api/profile') return Promise.resolve({ id: 'u', targets: {} });
+    if (path === '/api/coach/status') return Promise.resolve(coach);
     return Promise.resolve(null);
   });
 }
@@ -99,17 +114,88 @@ describe('Today', () => {
   // told a user standing in the gym that today was over — and the brief behind the button
   // is a plan for the rest of today, with the morning's work already ticked off it (user
   // decision 2026-08-31 §A4).
-  it('always asks about today, workout logged or not', async () => {
+  it('asks about today when there is no plan, workout logged or not', async () => {
     serve();
     renderToday();
     await waitFor(() => expect(screen.getByTestId('coach-button')).toBeTruthy());
     expect(screen.getByText('What should I do today?')).toBeTruthy();
+    expect(screen.queryByTestId('coach-button-sub')).toBeNull();
 
     mockApi.mockReset();
     serve({ day: makeDay({ workout_done: true }) });
     const again = renderToday();
     await waitFor(() => expect(again.getByText('What should I do today?')).toBeTruthy());
     expect(again.queryByText('What should I do tomorrow?')).toBeNull();
+  });
+
+  // ── The button reflects the day (user decision 2026-08-31 §1) ──────────────────────
+  // Asking somebody who already has a plan what they should do today is the app forgetting
+  // its own answer. The status behind this is an exists-check on the server: drawing the
+  // button costs nothing and generates nothing.
+
+  it('reads the plan from the status endpoint and never asks for a brief', async () => {
+    serve({ coach: noPlan({ has_plan: true, headline: 'Pull day', total_count: 4 }) });
+    renderToday();
+
+    await waitFor(() => expect(screen.getByText("Today's plan")).toBeTruthy());
+    expect(screen.getByTestId('coach-button-sub')).toHaveTextContent('4 moves');
+    // The two endpoints that generate a brief are not touched by drawing a button.
+    const paths = mockApi.mock.calls.map(([path]) => path);
+    expect(paths).toContain('/api/coach/status');
+    expect(paths).not.toContain('/api/coach/next');
+    expect(paths).not.toContain('/api/coach/next/regenerate');
+  });
+
+  it('counts the plan off underneath the label', async () => {
+    serve({ coach: noPlan({ has_plan: true, headline: 'Pull day', done_count: 2, total_count: 4 }) });
+    renderToday();
+
+    await waitFor(() => expect(screen.getByText("Today's plan")).toBeTruthy());
+    expect(screen.getByTestId('coach-button-sub')).toHaveTextContent('2 of 4 done');
+  });
+
+  it('says the plan is complete rather than asking the question again', async () => {
+    serve({
+      coach: noPlan({ has_plan: true, headline: 'Pull day', done_count: 4, total_count: 4, complete: true }),
+    });
+    renderToday();
+
+    await waitFor(() => expect(screen.getByTestId('coach-button-sub')).toHaveTextContent('Plan complete ✓'));
+    expect(screen.getByText("Today's plan")).toBeTruthy();
+    expect(screen.queryByText('What should I do today?')).toBeNull();
+  });
+
+  it('draws no count under a rest day, which has nothing to tick', async () => {
+    serve({ coach: noPlan({ has_plan: true, headline: 'Rest today', total_count: 0 }) });
+    renderToday();
+
+    await waitFor(() => expect(screen.getByText("Today's plan")).toBeTruthy());
+    expect(screen.queryByTestId('coach-button-sub')).toBeNull();
+  });
+
+  it('falls back to the question when the status cannot be read', async () => {
+    mockApi.mockImplementation((path: string) => {
+      if (path === '/api/coach/status') return Promise.reject(new Error('offline'));
+      if (path.startsWith('/api/day/')) return Promise.resolve(makeDay());
+      if (path === '/api/week') return Promise.resolve(makeWeek());
+      if (path === '/api/goals') return Promise.resolve({ active: [], history: [], no_goal: true });
+      return Promise.resolve({ id: 'u', targets: {} });
+    });
+    renderToday();
+
+    await waitFor(() => expect(screen.getByTestId('coach-button')).toBeTruthy());
+    // The half of the pair that promises nothing that might not be there.
+    expect(screen.getByText('What should I do today?')).toBeTruthy();
+  });
+
+  it('opens the coach page and generates nothing, either way', async () => {
+    serve({ coach: noPlan({ has_plan: true, headline: 'Pull day', done_count: 1, total_count: 3 }) });
+    renderToday();
+
+    await waitFor(() => expect(screen.getByText("Today's plan")).toBeTruthy());
+    fireEvent.press(screen.getByTestId('coach-button'));
+    expect(mockPush).toHaveBeenCalledWith('/coach');
+    expect(mockApi.mock.calls.map(([path]) => path)).not.toContain('/api/coach/next/regenerate');
   });
 
   it('marks an estimated block "est." on the training line and on the block itself', async () => {

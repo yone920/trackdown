@@ -1,6 +1,6 @@
 import type { CoachFeatures } from "../services/coach/features.js";
 import type { CoachGoal, CoachRules } from "../services/coach/rules.js";
-import type { CoachBriefOutput, CoachRevisionOutput } from "../services/coach/schema.js";
+import type { CoachBriefOutput, CoachRevisionOutput, RevisionMode } from "../services/coach/schema.js";
 
 // The coach (docs/build-plan.md §Architecture: "CoachPort: brief(inputs) → Brief (default
 // impl composes LlmPort)").
@@ -131,6 +131,21 @@ export interface BriefRevision {
 	instruction: string;
 	/** The brief they are looking at — today's current answer. */
 	current: Brief;
+	/**
+	 * Which kind of change this is, when the UI has already said (user decision 2026-08-31
+	 * §3 — the two buttons under the plan).
+	 *
+	 *   * `"append"` — *Add to today's plan*. Not the model's to overrule: the user pressed
+	 *     a button whose whole promise is that the plan above it stays.
+	 *   * `"rewrite"` — *Replace today's plan*, behind its own confirmation tap.
+	 *   * `null` — the free-text box, where only the model has read the sentence. It decides,
+	 *     and an instruction it cannot call either way is an append: replacing a plan
+	 *     somebody is halfway through is the expensive way to be wrong.
+	 *
+	 * Enforced in `services/coach/coach.ts` as well as said in the prompt — a mode the user
+	 * chose with a tap is not a suggestion.
+	 */
+	mode: RevisionMode | null;
 }
 
 export interface CoachPort {
