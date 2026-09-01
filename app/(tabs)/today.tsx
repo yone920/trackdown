@@ -2,37 +2,46 @@ import { useRouter } from 'expo-router';
 import { useCallback, useMemo } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 
-import { ActivityRow } from '@/components/activity-row';
-import { DayArc } from '@/components/day-arc';
-import { EatGuidance } from '@/components/eat-guidance';
-import { EvidenceThumbs } from '@/components/evidence';
 import { GoalBanner } from '@/components/goal-banner';
-import { IconAvatar, IconHeart } from '@/components/icons';
-import { Card, Chip, Chips, dismissDeletes, GroupHeading, Row, Section } from '@/components/kit';
+import { IconAvatar, IconChevronRight } from '@/components/icons';
+import { Card, Chip, Chips, dismissDeletes } from '@/components/kit';
 import { MetricCard } from '@/components/metric-card';
 import { PlanSection } from '@/components/plan-section';
 import { ReadingCard } from '@/components/reading-card';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
-import { clock, dateEyebrow, dateLabel, grams, kcal, slotLabel } from '@/lib/format';
+import { dateEyebrow, dateLabel, kcal } from '@/lib/format';
 import {
   localDateKey,
   useCoachNext,
   useDay,
-  useDeleteRecord,
   useGoals,
   useProfile,
   useWeek,
 } from '@/lib/queries';
 import { keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
 import { useScreenInsets } from '@/lib/screen';
-import { C, FONT, SPACE, TABULAR } from '@/lib/theme';
+import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
 import { todayCards } from '@/lib/today-cards';
-import { groupTraining, sessionSpan, splitBySource } from '@/lib/training-groups';
-import type { DayView, MealSlot } from '@/lib/types';
+import { sessionSpan, splitBySource } from '@/lib/training-groups';
+import type { DayView } from '@/lib/types';
 
-// Today (docs/design-system.md §Today). The live day: where you are, what the goal is,
-// the cards that goal decides, the model's two sentences about right now, the arc, and
-// what you have actually done — training and eating, organised the way the closed Day is.
+// Today — the working page for the open day. Top to bottom: where you are, the goal, the
+// cards that goal decides, the model's two sentences about right now, the PLAN, and then
+// one line each for what you have done and what you have eaten.
+//
+// It is short on purpose (user decision 2026-09-01, from screenshots of the merged page).
+// Three things came off it and the reason was the same each time — **it was pushing the
+// day off its own screen**:
+//
+//   * the full grouped training log and the full meal list, now behind two doors
+//     (app/today/training.tsx, app/today/eating.tsx). What stays is the state and the tap.
+//   * "The day so far" — the arc. "It is useless": the Done line already says when.
+//   * the Body numbers and the 7-day weight card, which live on Home. Neither moves over
+//     the course of a day, so neither is news here.
+//
+// And one thing came off for a different reason: the plan's own text box, its Photo/Type
+// tiles and its submit button were a SECOND input surface, which concept-v2 §Principles 7
+// forbids outright. Adjusting the plan is told through the + like everything else.
 //
 // Nothing on this screen is computed here. `/api/day/:date` answers with the totals, the
 // verdict, the blocks and the deltas; `/api/goals` with the goal and its progress. The one
@@ -45,8 +54,6 @@ const STATUS_WORDS: Record<DayView['status'], { text: string; color: string }> =
   none: { text: '—', color: C.mute },
 };
 
-const SLOT_ORDER: MealSlot[] = ['breakfast', 'lunch', 'dinner', 'snack'];
-
 export default function Today() {
   const router = useRouter();
   const insets = useScreenInsets();
@@ -58,7 +65,6 @@ export default function Today() {
   const week = useWeek();
   const goals = useGoals();
   const profile = useProfile();
-  const remove = useDeleteRecord();
   // Pull-to-refresh refreshes the plan's ticks too — the same query PlanSection reads, so
   // this costs no extra request, and `generate=false` means it can never make a plan.
   const coachNext = useCoachNext();
@@ -74,21 +80,19 @@ export default function Today() {
 
   const goal = goals.data?.active?.[0] ?? null;
   const cards = useMemo(
-    () => (day.data ? todayCards({ day: day.data, week: week.data ?? null, goal }) : []),
+    () =>
+      day.data
+        ? // The 7-day weight lives on Home (user decision 2026-09-01): it does not move
+          // over the course of a day, so it is not news on the working page.
+          todayCards({ day: day.data, week: week.data ?? null, goal }).filter(
+            (card) => card.key !== 'weight-trend',
+          )
+        : [],
     [day.data, week.data, goal],
   );
 
   const openLog = (hint?: string) =>
     router.push(hint ? { pathname: '/log', params: { hint } } : '/log');
-
-  /**
-   * Tapping a logged row opens it for a correction — the same review-and-tell screen the
-   * record view routes to (app/day/[date]/log.tsx). Editing used to be two screens deep,
-   * behind Day → "See the log as recorded"; the row you are looking at is where you notice
-   * it is wrong, so it is where the correction starts.
-   */
-  const correct = (kind: 'activity' | 'meal' | 'weight', id: string) =>
-    router.push({ pathname: '/log', params: { editDate: date, editId: id, editKind: kind } });
 
 
   if (day.isLoading && !day.data) {
@@ -114,19 +118,28 @@ export default function Today() {
   const view = day.data;
   const status = STATUS_WORDS[view.status];
   const reading = view.reading;
-  const mealsBySlot = SLOT_ORDER.map((slot) => ({
-    slot,
-    meals: view.items.meals.filter((meal) => meal.slot === slot),
-  })).filter((group) => group.meals.length > 0);
   // Training is filed the way the closed Day files it — one rule, lib/training-groups.ts.
   // Today used to group by auto-block, so the same workout looked like two different
   // workouts depending on which page you opened it from (user decision 2026-09-01).
   const { logged, health } = splitBySource(view.items.activities);
-  const { cardio, cardioMinutes, byMuscle, unfiled } = groupTraining(logged, view.muscle_summary);
   const span = sessionSpan(logged);
-  // Lifts print no calories, so their block's figure is a MET estimate (concept-v2
-  // §Calories). Say so, quietly, wherever that number is shown.
-  const earnedEstimated = view.blocks.some((block) => block.kcal_estimated);
+  const moves = logged.length + health.length;
+  // How the day is going, in one line each. Facts only: no verdict, nothing owed.
+  const doneLine =
+    moves === 0
+      ? 'Nothing logged yet'
+      : [`${kcal(view.earned)} kcal earned`, span, `${moves} ${moves === 1 ? 'move' : 'moves'}`]
+          .filter(Boolean)
+          .join(' · ');
+  const left = view.allowance == null ? null : Math.round(view.allowance - view.eaten);
+  const eatLine =
+    view.items.meals.length === 0
+      ? left == null
+        ? 'Nothing eaten yet'
+        : `Nothing eaten yet · ${kcal(left)} left`
+      : left == null
+        ? `${kcal(view.eaten)} eaten`
+        : `${kcal(view.eaten)} eaten · ${kcal(Math.abs(left))} ${left < 0 ? 'over' : 'left'}`;
 
   return (
     <ScrollView
@@ -232,16 +245,6 @@ export default function Today() {
         </View>
       ) : null}
 
-      {/* The day arc */}
-      {view.arc.length > 0 ? (
-        <Card style={{ marginTop: 12 }}>
-          <Eyebrow>The day so far</Eyebrow>
-          <View style={{ marginTop: 10 }}>
-            <DayArc events={view.arc} />
-          </View>
-        </Card>
-      ) : null}
-
       {/* Do — the day's plan, where the day is (user decision 2026-09-01). It was a page
           of its own behind an accent button at the bottom of this screen, which put the
           plan and the record of what actually happened on two different screens when they
@@ -250,148 +253,29 @@ export default function Today() {
           (components/plan-section.tsx). */}
       <PlanSection />
 
-      {/* Training, by muscle group — the same grouping the closed Day uses, because this
-          is now the only page for the open day (user decision 2026-09-01). The session's
-          time span is a NOTE on the header, not the grouping principle: when a workout
-          happened is a fact about it, not a way to file it. */}
-      <Section
+      {/* The two logs, behind doors (user decision 2026-09-01). The full grouped list of
+          what was done used to be the whole middle of this page, which pushed the plan,
+          the meals and everything else off the bottom of a real gym day. What is left here
+          is a line that says how the day is going, and a tap that opens the log.
+
+          The Eat line carries ONE calorie figure, and it is the day's own arithmetic. The
+          card that used to sit here printed the same number three times in three sizes and
+          then quoted a different one underneath, out of an older generation of the coach's
+          brief; that guidance now lives behind the door, a screen away from the number
+          that counts. Two disagreeing calorie figures on one card is worse than none. */}
+      <SummaryRow
+        testID="today-done"
         title="Done"
-        summary={logged.length === 0 && health.length === 0 ? 'Nothing yet' : `${kcal(view.earned)} kcal earned`}
-        note={[span, earnedEstimated ? 'est.' : null].filter(Boolean).join(' · ') || null}>
-        {logged.length === 0 && health.length === 0 ? (
-          <Card>
-            <Sub>No exercise logged today.</Sub>
-          </Card>
-        ) : (
-          <Card style={{ paddingVertical: 4 }}>
-            {cardio.length > 0 ? (
-              <View>
-                <GroupHeading label="Cardio" right={cardioMinutes > 0 ? `${cardioMinutes} min` : null} />
-                {cardio.map((activity, index) => (
-                  <ActivityRow
-                    key={activity.id ?? `cardio-${index}`}
-                    activity={activity}
-                    last={index === cardio.length - 1}
-                    onPress={activity.id ? () => correct('activity', activity.id as string) : undefined}
-                    onDelete={
-                      activity.id ? () => remove.mutate({ kind: 'activity', id: activity.id as string }) : undefined
-                    }
-                  />
-                ))}
-              </View>
-            ) : null}
-            {byMuscle.map((group) => (
-              <View key={group.muscle}>
-                <GroupHeading label={group.muscle} right={`${group.sets} sets`} />
-                {group.members.map((activity, index) => (
-                  <ActivityRow
-                    key={activity.id ?? `${group.muscle}-${index}`}
-                    activity={activity}
-                    last={index === group.members.length - 1}
-                    onPress={activity.id ? () => correct('activity', activity.id as string) : undefined}
-                    onDelete={
-                      activity.id ? () => remove.mutate({ kind: 'activity', id: activity.id as string }) : undefined
-                    }
-                  />
-                ))}
-              </View>
-            ))}
-            {/* Anything left over — no muscle group of its own, or one the summary does
-                not know: a class, a hike, an unrecognised movement. */}
-            {unfiled.length > 0 ? (
-              <View>
-                <GroupHeading label="Also" />
-                {unfiled.map((activity, index, all) => (
-                  <ActivityRow
-                    key={activity.id ?? `other-${index}`}
-                    activity={activity}
-                    last={index === all.length - 1}
-                    onPress={activity.id ? () => correct('activity', activity.id as string) : undefined}
-                    onDelete={
-                      activity.id ? () => remove.mutate({ kind: 'activity', id: activity.id as string }) : undefined
-                    }
-                  />
-                ))}
-              </View>
-            ) : null}
-          </Card>
-        )}
-
-        {/* Health is a source, not a section: one slim card, badged (concept-v2 §Health). */}
-        {health.length > 0 ? (
-          <Card style={{ marginTop: 10, paddingVertical: 12, flexDirection: 'row', alignItems: 'center' }}>
-            <IconHeart size={20} color={C.good} />
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Body>{health.map((activity) => activity.exercise ?? activity.description).join(' · ')}</Body>
-              <Sub style={{ marginTop: 2 }}>
-                {kcal(health.reduce((sum, activity) => sum + activity.kcal, 0))} kcal from Health
-              </Sub>
-            </View>
-            <Eyebrow style={{ color: C.good }}>Health</Eyebrow>
-          </Card>
-        ) : null}
-      </Section>
-
-      {/* Eat — the guidance and the record of eating, in that order and on one screen.
-          The guidance draws nothing at all until a plan has been asked for. */}
-      <Section
+        line={doneLine}
+        onPress={() => router.push('/today/training')}
+      />
+      <SummaryRow
+        testID="today-eat"
         title="Eat"
-        summary={`${kcal(view.eaten)} kcal${view.macros.protein_g.eaten != null ? ` · ${grams(view.macros.protein_g.eaten)} protein` : ''}`}>
-        <EatGuidance />
-        <Card style={{ marginTop: 10, paddingVertical: 4 }}>
-          {mealsBySlot.map((group) => (
-            <View key={group.slot}>
-              <GroupHeading
-                label={slotLabel(group.slot)}
-                right={`${kcal(group.meals.reduce((sum, meal) => sum + meal.kcal, 0))} kcal`}
-              />
-              {group.meals.map((meal, index) => (
-                <Row
-                  key={meal.id}
-                  testID={`row-meal-${meal.id}`}
-                  time={clock(meal.logged_at)}
-                  title={meal.description}
-                  sub={grams(meal.protein_g) ? `${grams(meal.protein_g)} protein` : null}
-                  right={kcal(meal.kcal)}
-                  onPress={() => correct('meal', meal.id)}
-                  onDelete={() => remove.mutate({ kind: 'meal', id: meal.id })}
-                  divider={index < group.meals.length - 1}>
-                  <EvidenceThumbs photos={meal.evidence} />
-                </Row>
-              ))}
-            </View>
-          ))}
+        line={eatLine}
+        onPress={() => router.push('/today/eating')}
+      />
 
-          {/* One meal logged is one meal shown. There is no row for a dinner nobody has
-              eaten: the day is a record of what happened, not a list of what is owed
-              (concept-v2 §Principles 6, user decision 2026-08-31). */}
-          {mealsBySlot.length === 0 ? (
-            <View style={{ paddingVertical: 14 }}>
-              <Sub>Nothing eaten yet today.</Sub>
-            </View>
-          ) : null}
-        </Card>
-        {view.eating_pattern ? <Sub style={{ marginTop: 10 }}>{view.eating_pattern}</Sub> : null}
-      </Section>
-
-
-      {/* Body — the weigh-in, where the day is. It lived only on the closed-day page,
-          which meant the open day could not show you a number you had just logged. */}
-      <Section title="Body">
-        <View style={{ flexDirection: 'row', gap: 10 }}>
-          <Stat label="Weight" value={view.weight.day == null ? '—' : view.weight.day.toFixed(1)} unit="lb" />
-          <Stat label="7-day avg" value={view.weight.avg_7d == null ? '—' : view.weight.avg_7d.toFixed(1)} unit="lb" />
-          <Stat
-            label="Trend"
-            value={
-              view.weight.trend_per_week == null
-                ? '—'
-                : `${view.weight.trend_per_week > 0 ? '+' : '−'}${Math.abs(view.weight.trend_per_week).toFixed(1)}`
-            }
-            unit="lb / wk"
-          />
-        </View>
-      </Section>
     </ScrollView>
   );
 }
@@ -408,14 +292,48 @@ function goalSubtitle(
   return target ? `${target}${by}` : by.trim() || null;
 }
 
-function Stat({ label, value, unit }: { label: string; value: string; unit?: string }) {
+
+/**
+ * One line about a whole section, and a tap that opens it. The logs were pushing the rest
+ * of the day off the screen (user decision 2026-09-01: "we can hide them behind a
+ * button"), so what stays on Today is the state and the door to the detail.
+ */
+function SummaryRow({
+  testID,
+  title,
+  line,
+  onPress,
+}: {
+  testID: string;
+  title: string;
+  line: string;
+  onPress: () => void;
+}) {
   return (
-    <Card style={{ flex: 1, padding: 14 }}>
-      <Eyebrow>{label}</Eyebrow>
-      <Disp size={26} style={[{ marginTop: 6 }, TABULAR]}>
-        {value}
-      </Disp>
-      {unit ? <Sub style={{ marginTop: 2 }}>{unit}</Sub> : null}
-    </Card>
+    <Pressable
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityLabel={`${title} — ${line}`}
+      onPress={onPress}
+      style={({
+        marginTop: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderRadius: RADIUS.card,
+        backgroundColor: C.card,
+        paddingVertical: 16,
+        paddingHorizontal: SPACE.card,
+        opacity: 1,
+      })}>
+      <View style={{ flex: 1 }}>
+        <Disp size={19} weight="semi">
+          {title}
+        </Disp>
+        <Sub testID={`${testID}-line`} style={[{ marginTop: 4 }, TABULAR]}>
+          {line}
+        </Sub>
+      </View>
+      <IconChevronRight size={18} color={C.mute} />
+    </Pressable>
   );
 }

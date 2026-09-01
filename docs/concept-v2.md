@@ -166,10 +166,13 @@ one.
   today's workout* with no plan, *Today · 2 of 6 done* with one. Deliberately light and
   deliberately a dead end for everything but navigation. **Nothing on Home can generate a
   plan** — the button is a door.
-- **Today** — the one page for the open day, in the order a day is lived: **Do** (the plan,
-  ticked off), **Done** (what actually happened), **Eat** (guidance, then macros and meals),
-  **Body**. There is no separate coach page: the plan and the record of what you did are two
-  halves of one day, and *Start today's workout* on this page is the only generator in the app.
+- **Today** — the working page for the open day: the header, the goal, calories left, the
+  *Right now* reading, **Do** (the plan, ticked off, with an *Adjust* door into the logger),
+  then **one line each** for Done and Eat, each opening its full log. There is no separate
+  coach page: the plan and the record of what you did are two halves of one day, and *Start
+  today's workout* on this page is the only generator in the app. Deliberately short — the
+  full logs, the day arc, the body numbers and the weight card were all taken off it
+  because they buried the day (user decision 2026-09-01).
 - **Days**, **Progress**, **You** are unchanged. Today's row in the Days list goes to the
   Today tab rather than to a second copy of today.
 

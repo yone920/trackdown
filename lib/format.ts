@@ -102,3 +102,19 @@ export function correctionLine(correction: {
   const said = `Corrected ${clock(correction.created_at)}: “${correction.instruction}”`;
   return changes ? `${said} · ${changes}` : said;
 }
+
+/**
+ * The empty plate, said once with a wink instead of three zero rows ("PROTEIN 0 g" before
+ * breakfast helps nobody — field report 2026-09-01). Picked by the clock so the line
+ * matches the meal it is waiting for; the macros and hints return with the first bite.
+ */
+export function nothingEatenYet(hour: number): string {
+  if (hour < 5) return 'Nothing eaten yet — even the fridge is still asleep.';
+  if (hour < 11)
+    return 'Nothing eaten yet. Breakfast is still a rumor — log the first bite and the breakdown wakes up.';
+  if (hour < 15)
+    return 'Still an empty plate. Say it or snap it whenever you eat, and the numbers start here.';
+  if (hour < 20)
+    return 'A whole day and zero bites logged. Iron discipline or a forgotten lunch — tell me which.';
+  return 'Nothing logged all day. If you ate, say so before the day closes — I only count what I hear about.';
+}

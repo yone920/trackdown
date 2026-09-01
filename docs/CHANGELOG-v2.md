@@ -87,6 +87,70 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-01 — the working page gets out of its own way (`wp-today-cleanup`)
+
+The merged Today page, over Metro, with screenshots. Five corrections, and four of them
+are the same correction: **it was pushing the day off its own screen.**
+
+#### The second form had to go
+
+The Do section had grown a text box, a PHOTO tile, a TYPE tile and its own submit button.
+That is a second input surface, and there is exactly one:
+
+> "there is only one way to update anything in the app and that is the logger… if needed it
+> should be a link to the logger."
+
+So the whole inline form is gone. **"Adjust the plan" is a door** into the same sheet the +
+opens (`app/log.tsx` §`adjustingPlan`): the same say / type / snap affordances, a header
+that states plainly that this changes the plan rather than recording anything you did, and
+a submission that goes straight to the coach's adjust endpoint with **append semantics
+unchanged**. Nothing is analysed and nothing is confirmed — an adjustment is not a record.
+
+The pair of chips under the plan was reworked with it, because half of their copy pointed
+at a box that no longer exists. *Adjust* opens the logger; *Replace* stays where it is as
+its own deliberate act — two taps, no words needed, and it says what it is about to do. The
+empty-day generator lost its optional context box too: **"Start today's workout" takes no
+words**, and what the coach should know about today is told through the + like everything
+else.
+
+A photo sent while adjusting takes the road it always took — saved against today as coach
+context, which every later ask reads back. The coach's adjust endpoint has nowhere to put
+an image, and pretending otherwise would have been the third input surface.
+
+#### Everything else came off the page
+
+- **The logs are behind doors.** Done and Eat are one line each — "569 kcal earned ·
+  7:36a–8:35a · 8 moves", "480 eaten · 2,385 left" — and a tap opens the full grouped log
+  (`app/today/training.tsx`, `app/today/eating.tsx`). The rows lost nothing in the move:
+  the same grouping rule, the same two-tap delete, the same tap-to-correct, the same
+  tappable names.
+- **"The day so far" is gone.** "It is useless." No replacement — the Done line already
+  says when the day happened.
+- **The Body section and the 7-day weight card are gone.** Both live on Home. Neither moves
+  over the course of a day, so neither is news on the working page.
+
+#### One number, and it is the day's own
+
+The Eat card printed **2,385 kcal left three times in three type sizes**, and then quoted a
+coach paragraph underneath saying 2,100 and 200 g — figures from an earlier generation of
+the brief. Two disagreeing calorie numbers on one card is worse than no number at all.
+
+The compact row now carries exactly one figure and it is the day's own arithmetic; the
+coach's eating guidance moved behind the door, a screen away from the number that counts.
+
+Resulting Today, top to bottom: day header → goal → calories left → Right now → Do (the
+plan, or Start) → Done → Eat → the +.
+
+#### Verified
+
+App **312 → 316** across **23 suites** (the row-level contracts moved to
+`__tests__/today-logs.test.tsx` rather than being dropped; `coach.test.tsx` rewritten to the
+door). New tests pin the things that must stay true: the adjust door opens the logger and
+writes nothing by opening, the logger's plan mode posts to the coach and never to
+`/api/log/analyze`, the arc / Body / weight card are absent, the doors navigate, and an
+over-allowance day reads "over" rather than a negative amount left. `tsc` and `expo lint`
+clean. Backend untouched — 672 unit tests green, typecheck clean.
+
 ### 2026-09-01 — one page for the open day, a landing page for the rest, and a correction that can split a record (`wp-one-today-and-correction-split`)
 
 Four things, one branch. Three of them came out of the same complaint said three different

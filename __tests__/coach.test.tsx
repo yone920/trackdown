@@ -168,47 +168,39 @@ it('asks once on open and draws the brief', async () => {
   expect(coachCalls()[0]?.[1]?.query).toMatchObject({ generate: false });
 });
 
-it('sends what you type as a revision once there is a brief, and only asks once', async () => {
+it('adjusts the plan through the ONE logger, never through a form of its own', async () => {
+  // User decision 2026-09-01: "there is only one way to update anything in the app and
+  // that is the logger". This section used to carry a text box, Photo/Type tiles and a
+  // submit button — a second input surface, which concept-v2 Principles 7 forbids.
   mockApi.mockResolvedValue(next());
   renderCoach();
   await screen.findByText('Pull day: back and shoulders');
 
-  // The box says what it is for now.
-  expect(screen.getByPlaceholderText("Adjust it — 'make it 8 exercises', 'switch to legs'…")).toBeTruthy();
+  // There is no box, and no tiles, anywhere on it.
+  expect(screen.queryByTestId('coach-context')).toBeNull();
+  expect(screen.queryByTestId('coach-photo')).toBeNull();
+  expect(screen.queryByTestId('coach-speak')).toBeNull();
+  expect(screen.queryByTestId('coach-type')).toBeNull();
 
-  mockApi.mockResolvedValue(
-    next({ brief: { ...next().brief, id: 'brief-2', headline: 'Full body: eight movements' } }),
-  );
-  fireEvent.changeText(screen.getByTestId('coach-context'), 'make it 8 exercises');
-  await act(async () => {
-    fireEvent.press(screen.getByTestId('coach-regenerate'));
-  });
-
-  await screen.findByText('Full body: eight movements');
-  // No `mode`: the box does not pretend to know whether this adds to the plan or replaces
-  // it — the server asks the model, whose default there is to add.
-  expect(asks()).toEqual([
-    { tz_offset_min: 0, context: null, revision: 'make it 8 exercises', mode: null },
-  ]);
-  // One POST for the tap — no GET fired alongside it.
-  expect(coachCalls()).toHaveLength(2);
+  fireEvent.press(screen.getByTestId('coach-adjust'));
+  // The + sheet, told plainly that it is adjusting rather than logging.
+  expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { adjustPlan: '1' } });
+  // Opening a door writes nothing.
+  expect(asks()).toEqual([]);
 });
 
-it('sends the first typed line as context, because there is no brief to revise yet', async () => {
+it("starts the day's workout with no words, and that is the only generator", async () => {
   mockApi.mockRejectedValueOnce(new Error('The coach is unavailable right now.'));
   renderCoach();
   await screen.findByText('The coach is unavailable right now.');
 
-  expect(screen.getByPlaceholderText('Only 30 minutes · knee hurts today')).toBeTruthy();
-
-  mockApi.mockResolvedValue(next());
-  fireEvent.changeText(screen.getByTestId('coach-context'), 'only 30 minutes');
   await act(async () => {
     fireEvent.press(screen.getByTestId('coach-regenerate'));
   });
 
+  // A plain ask: context is TOLD through the +, not typed into a box that lived here.
   await waitFor(() => expect(asks()).toHaveLength(1));
-  expect(asks()[0]).toMatchObject({ context: 'only 30 minutes', revision: null });
+  expect(asks()[0]).toMatchObject({ context: null, revision: null, mode: null });
 });
 
 it('keeps the brief on screen while a revision is running, and says it is working', async () => {
@@ -218,8 +210,8 @@ it('keeps the brief on screen while a revision is running, and says it is workin
 
   let settle: (value: CoachNext) => void = () => {};
   mockApi.mockReturnValueOnce(new Promise<CoachNext>((resolve) => (settle = resolve)));
-  fireEvent.changeText(screen.getByTestId('coach-context'), 'switch to legs');
-  fireEvent.press(screen.getByTestId('coach-regenerate'));
+  fireEvent.press(screen.getByTestId('coach-replace'));
+  fireEvent.press(screen.getByTestId('coach-replace'));
 
   // Mid-flight: the answer the user is reading is still there.
   expect(await screen.findByTestId('coach-working')).toBeTruthy();
@@ -241,9 +233,9 @@ it('keeps the brief and prints the note when the revision could not be made', as
   mockApi.mockResolvedValueOnce(
     next({ stale: true, note: 'That change came back with nothing to do, twice — this is still your last brief.' }),
   );
-  fireEvent.changeText(screen.getByTestId('coach-context'), 'make it 8 exercises');
+  fireEvent.press(screen.getByTestId('coach-replace'));
   await act(async () => {
-    fireEvent.press(screen.getByTestId('coach-regenerate'));
+    fireEvent.press(screen.getByTestId('coach-replace'));
   });
 
   expect(await screen.findByTestId('coach-note')).toBeTruthy();
@@ -259,9 +251,9 @@ it('keeps the brief and says so when the ask itself fails', async () => {
   await screen.findByText('Pull day: back and shoulders');
 
   mockApi.mockRejectedValueOnce(new Error('Request failed (503).'));
-  fireEvent.changeText(screen.getByTestId('coach-context'), 'harder');
+  fireEvent.press(screen.getByTestId('coach-replace'));
   await act(async () => {
-    fireEvent.press(screen.getByTestId('coach-regenerate'));
+    fireEvent.press(screen.getByTestId('coach-replace'));
   });
 
   expect(await screen.findByText('Request failed (503).')).toBeTruthy();
@@ -509,19 +501,21 @@ it('draws the ask button over an empty day, and posts nothing until it is presse
   expect(screen.queryByTestId('coach-no-plan')).toBeNull();
 });
 
-it('sends what is typed with the first ask as context, not as a revision', async () => {
-  mockApi.mockResolvedValue(next({ brief: null }));
+it('offers only the generator when there is no plan — no box, no tiles', async () => {
+  // The empty-day state. What used to be here was a context box above the button; context
+  // is told through the + now, and the button takes no words (user decision 2026-09-01).
+  mockApi.mockResolvedValue({ date: '2026-08-30', brief: null, stale: false });
   renderCoach();
-  await screen.findByTestId('coach-no-plan');
 
-  mockApi.mockResolvedValue(next());
-  fireEvent.changeText(screen.getByTestId('coach-context'), 'only 30 minutes');
+  expect(await screen.findByTestId('coach-no-plan')).toBeTruthy();
+  expect(screen.queryByTestId('coach-context')).toBeNull();
+  expect(screen.queryByTestId('coach-adjust')).toBeNull();
+  expect(screen.queryByTestId('coach-replace')).toBeNull();
+
   await act(async () => {
     fireEvent.press(screen.getByTestId('coach-regenerate'));
   });
-
-  await waitFor(() => expect(asks()).toHaveLength(1));
-  expect(asks()[0]).toMatchObject({ context: 'only 30 minutes', revision: null, mode: null });
+  expect(asks()).toEqual([{ tz_offset_min: 0, context: null, revision: null, mode: null }]);
 });
 
 it('shows no ask button while the first read is still in flight', async () => {
@@ -534,33 +528,18 @@ it('shows no ask button while the first read is still in flight', async () => {
 
 // ── Two buttons that say what they do ────────────────────────────────────────────────
 
-it('adds to the plan explicitly, and keeps everything above', async () => {
+it('the adjust door adds; it never replaces', async () => {
+  // Append semantics are unchanged — they moved into the logger (app/log.tsx
+  // §runAdjustPlan), which is where the words are now said.
   mockApi.mockResolvedValue(next());
   renderCoach();
   await screen.findByText('Pull day: back and shoulders');
 
-  fireEvent.changeText(screen.getByTestId('coach-context'), 'twenty minutes of core');
-  await act(async () => {
-    fireEvent.press(screen.getByTestId('coach-add'));
-  });
-
-  expect(asks()).toEqual([
-    { tz_offset_min: 0, context: null, revision: 'twenty minutes of core', mode: 'append' },
-  ]);
-});
-
-it('adds with an empty box too, because "more" is a complete instruction', async () => {
-  mockApi.mockResolvedValue(next());
-  renderCoach();
-  await screen.findByText('Pull day: back and shoulders');
-
-  await act(async () => {
-    fireEvent.press(screen.getByTestId('coach-add'));
-  });
-
-  expect(asks()).toHaveLength(1);
-  expect(asks()[0]).toMatchObject({ mode: 'append' });
-  expect(String(asks()[0]?.revision)).toContain('add to the plan');
+  fireEvent.press(screen.getByTestId('coach-adjust'));
+  expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { adjustPlan: '1' } });
+  // Nothing was asked, and nothing was replaced, by opening a door.
+  expect(asks()).toEqual([]);
+  expect(screen.getByText('Lat Pulldown')).toBeTruthy();
 });
 
 it('will not replace the plan on one tap', async () => {
@@ -583,20 +562,18 @@ it('replaces the plan on the second tap, and says it is a rewrite', async () => 
   renderCoach();
   await screen.findByText('Pull day: back and shoulders');
 
-  fireEvent.changeText(screen.getByTestId('coach-context'), 'switch to legs');
   fireEvent.press(screen.getByTestId('coach-replace'));
   await act(async () => {
     fireEvent.press(screen.getByTestId('coach-replace'));
   });
 
-  expect(asks()).toEqual([
-    { tz_offset_min: 0, context: null, revision: 'switch to legs', mode: 'rewrite' },
-  ]);
+  // No words needed: rebuilding the session is itself the instruction.
+  expect(asks()).toEqual([{ tz_offset_min: 0, context: null, revision: null, mode: 'rewrite' }]);
   // Disarmed again: the next tap is a first tap.
   await waitFor(() => expect(screen.getByText("Replace today's plan")).toBeTruthy());
 });
 
-it('disarms Replace when anything else is pressed', async () => {
+it('disarms Replace when the adjust door is opened instead', async () => {
   mockApi.mockResolvedValue(next());
   renderCoach();
   await screen.findByText('Pull day: back and shoulders');
@@ -604,29 +581,20 @@ it('disarms Replace when anything else is pressed', async () => {
   fireEvent.press(screen.getByTestId('coach-replace'));
   expect(screen.getByText("Replace? This clears today's plan")).toBeTruthy();
 
-  await act(async () => {
-    fireEvent.press(screen.getByTestId('coach-add'));
-  });
+  fireEvent.press(screen.getByTestId('coach-adjust'));
 
   expect(screen.getByText("Replace today's plan")).toBeTruthy();
-  expect(asks()).toHaveLength(1);
-  expect(asks()[0]).toMatchObject({ mode: 'append' });
+  expect(asks()).toEqual([]);
 });
 
-it('will not let an empty box quietly regenerate the plan', async () => {
+it('says what each control does without pointing at a box that is not there', async () => {
   mockApi.mockResolvedValue(next());
   renderCoach();
   await screen.findByText('Pull day: back and shoulders');
 
-  // It used to say "Ask again" here and send a plain regenerate — the least explicit
-  // control on the page, replacing the plan without saying so.
-  const adjust = screen.getByTestId('coach-regenerate');
-  expect(adjust).toBeDisabled();
-  fireEvent.press(adjust);
-  expect(asks()).toEqual([]);
-
-  fireEvent.changeText(screen.getByTestId('coach-context'), 'harder');
-  expect(screen.getByTestId('coach-regenerate')).not.toBeDisabled();
+  const hint = screen.getByTestId('coach-plan-actions-hint');
+  expect(hint).toHaveTextContent(/Adjusting opens the logger/);
+  expect(hint).not.toHaveTextContent(/Type below/);
 });
 
 

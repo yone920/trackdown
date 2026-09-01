@@ -122,7 +122,9 @@ describe('Today', () => {
     renderToday();
     await waitFor(() => expect(screen.getByTestId('metric-calories-left')).toBeTruthy());
     expect(screen.getByTestId('metric-weekly-deficit')).toBeTruthy();
-    expect(screen.getByTestId('metric-weight-trend')).toBeTruthy();
+    // The 7-day weight lives on Home now: it does not move over the course of a day, so
+    // it is not news on the working page (user decision 2026-09-01).
+    expect(screen.queryByTestId('metric-weight-trend')).toBeNull();
     expect(screen.queryByTestId('metric-coverage')).toBeNull();
     expect(screen.getByText('Get to 170 lb')).toBeTruthy();
   });
@@ -150,10 +152,10 @@ describe('Today', () => {
   // told a user standing in the gym that today was over — and the brief behind the button
   // is a plan for the rest of today, with the morning's work already ticked off it (user
   // decision 2026-08-31 §A4).
-  it('marks an estimated day\'s training "est." on the Training line', async () => {
-    // Lifts print no calories, so the figure is a MET estimate. It is said once now: the
-    // per-block heading it was also said on is gone, because Today no longer groups by
-    // block (user decision 2026-09-01).
+  it("does not print the day's log twice: the training figure lives behind the door", async () => {
+    // The full grouped log and its "est." qualifier moved to app/today/training.tsx; what
+    // is left here is one line (user decision 2026-09-01 — the log was pushing the day off
+    // its own screen).
     const block = {
       id: 'b1',
       title: 'Chest & Triceps',
@@ -170,51 +172,15 @@ describe('Today', () => {
       health: null,
     };
     serve({
-      day: makeDay({
-        blocks: [block],
-        earned: 264,
-        items: { meals: [], weights: [], activities: [lift()] },
-      }),
+      day: makeDay({ blocks: [block], earned: 264, items: { meals: [], weights: [], activities: [lift()] } }),
     });
     renderToday();
 
-    await waitFor(() => expect(screen.getByText(/264 kcal earned/)).toBeTruthy());
-    expect(screen.getAllByText(/est\./)).toHaveLength(1);
-    // The block's own title is no longer a heading on Today.
+    await waitFor(() => expect(screen.getByTestId('today-done-line')).toHaveTextContent(/264 kcal earned/));
+    expect(screen.getByTestId('today-done-line')).toHaveTextContent(/1 move/);
+    // Not a single row, and not the block's own title.
+    expect(screen.queryByText('Bench Press')).toBeNull();
     expect(screen.queryByText('Chest & Triceps')).toBeNull();
-  });
-
-  it('leaves training that reported its own calories unmarked', async () => {
-    const block = {
-      id: 'b1',
-      title: 'Walk',
-      start: '2026-08-30T08:00:00.000Z',
-      end: '2026-08-30T08:40:00.000Z',
-      minutes: 40,
-      kcal: 180,
-      kcal_from_health: false,
-      kcal_estimated: false,
-      exercise_count: 1,
-      activity_ids: ['a1'],
-      muscle_groups: [],
-      category: 'cardio' as const,
-      health: null,
-    };
-    serve({
-      day: makeDay({
-        blocks: [block],
-        earned: 180,
-        items: {
-          meals: [],
-          weights: [],
-          activities: [lift({ id: 'a9', exercise: 'Walk', category: 'cardio', muscle_groups: [], kcal: 180 })],
-        },
-      }),
-    });
-    renderToday();
-
-    await waitFor(() => expect(screen.getByText(/180 kcal earned/)).toBeTruthy());
-    expect(screen.queryByText(/est\./)).toBeNull();
   });
 
   // A day that has one lift and one meal in it, so a delete has something to change.
@@ -304,90 +270,6 @@ describe('Today', () => {
     return calls;
   }
 
-  it('deletes a logged exercise in two taps and the totals follow', async () => {
-    const calls = serveDeletable();
-    renderToday();
-    await waitFor(() => expect(screen.getByText('Bench Press')).toBeTruthy());
-    expect(screen.getByText(/264 kcal earned/)).toBeTruthy();
-
-    // One tap arms, and asks in the row itself.
-    fireEvent.press(screen.getByTestId('row-activity-a1-delete'));
-    expect(screen.getByText('Delete?')).toBeTruthy();
-    expect(calls.some((call) => call.method === 'DELETE')).toBe(false);
-
-    fireEvent.press(screen.getByTestId('row-activity-a1-delete-confirm'));
-    await waitFor(() => expect(screen.getByText('Nothing yet')).toBeTruthy());
-
-    expect(calls).toContainEqual({ path: '/api/entries/movement/a1', method: 'DELETE' });
-    expect(screen.queryByText('Bench Press')).toBeNull();
-    expect(screen.queryByText(/264 kcal earned/)).toBeNull();
-    expect(screen.getByText('No exercise logged today.')).toBeTruthy();
-  });
-
-  it('deletes a meal the same way, and the second tap is what does it', async () => {
-    const calls = serveDeletable();
-    renderToday();
-    await waitFor(() => expect(screen.getByText('eggs and toast')).toBeTruthy());
-
-    // Armed, then taken back by a scroll — there is no cancel button beside the pill, and
-    // that is the point of the redesign (components/kit.tsx §DeleteControl).
-    fireEvent.press(screen.getByTestId('row-meal-m1-delete'));
-    fireEvent(screen.getByTestId('today-scroll'), 'scrollBeginDrag', { nativeEvent: {} });
-    expect(screen.queryByText('Delete?')).toBeNull();
-    expect(calls.some((call) => call.method === 'DELETE')).toBe(false);
-
-    fireEvent.press(screen.getByTestId('row-meal-m1-delete'));
-    fireEvent.press(screen.getByTestId('row-meal-m1-delete-confirm'));
-    await waitFor(() => expect(screen.getByText('Nothing eaten yet today.')).toBeTruthy());
-    expect(calls).toContainEqual({ path: '/api/entries/meals/m1', method: 'DELETE' });
-  });
-
-  it('opens a training row for correction, and its name still opens the exercise', async () => {
-    serveDeletable();
-    renderToday();
-    await waitFor(() => expect(screen.getByText('Bench Press')).toBeTruthy());
-
-    // The row body is the correction — the same screen the record view routes to.
-    fireEvent.press(screen.getByTestId('row-activity-a1-open'));
-    expect(mockPush).toHaveBeenCalledWith({
-      pathname: '/log',
-      params: { editDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), editId: 'a1', editKind: 'activity' },
-    });
-
-    // The name inside it is still its own target, and it is not the correction.
-    mockPush.mockReset();
-    fireEvent.press(screen.getByLabelText('Bench Press — how it is done'));
-    expect(mockPush).toHaveBeenCalledTimes(1);
-    expect(mockPush.mock.calls[0]?.[0]).not.toMatchObject({ pathname: '/log' });
-  });
-
-  it('opens a meal row for correction', async () => {
-    serveDeletable();
-    renderToday();
-    await waitFor(() => expect(screen.getByText('eggs and toast')).toBeTruthy());
-    fireEvent.press(screen.getByTestId('row-meal-m1-open'));
-    expect(mockPush).toHaveBeenCalledWith({
-      pathname: '/log',
-      params: { editDate: expect.any(String), editId: 'm1', editKind: 'meal' },
-    });
-  });
-
-  it('shows one meal for one meal, and nothing about a dinner nobody ate', async () => {
-    serve({
-      day: makeDay({
-        items: { meals: [MEAL], activities: [], weights: [] },
-        // The server still computes it; no screen renders it (user decision 2026-08-31).
-        expected: [{ kind: 'meal', slot: 'dinner', label: 'Dinner' }],
-      }),
-    });
-    renderToday();
-    await waitFor(() => expect(screen.getByText('eggs and toast')).toBeTruthy());
-    expect(screen.getByText('Breakfast')).toBeTruthy();
-    expect(screen.queryByText('Dinner')).toBeNull();
-    expect(screen.queryByText('Expected')).toBeNull();
-    expect(screen.queryByText('Not logged yet')).toBeNull();
-  });
-
   it('shows the Right now reading as a pure card — the + is the one door to log', async () => {
     serve({
       day: makeDay({
@@ -408,260 +290,6 @@ describe('Today', () => {
     expect(screen.queryByText('Weigh in')).toBeNull();
   });
 });
-
-// Reported 2026-08-31: a row read "Lat Pulldown" over "4 × 15 lat pulldown at 60 lb" — the
-// name twice and the numbers about to be shown again. The sub-line is structured facts
-// (lib/row-facts.ts), and the sentence only when it still says something.
-describe('Today — a row never repeats itself', () => {
-  const lift = (over: Partial<DayActivity>): DayActivity => ({
-    id: 'a9',
-    logged_at: '2026-08-30T08:10:00.000Z',
-    description: '4 × 15 lat pulldown at 60 lb',
-    exercise: 'Lat Pulldown',
-    exercise_id: null,
-    equipment: null,
-    category: 'strength',
-    muscle_groups: ['lats'],
-    sets: 4,
-    reps: 15,
-    load_lb: 60,
-    duration_min: null,
-    distance_mi: null,
-    kcal: 90,
-    source: 'manual',
-    confidence: 'high',
-    block_id: null,
-    delta_vs_last: null,
-    evidence: [],
-    ...over,
-  });
-
-  const show = (activity: DayActivity) => {
-    serve({ day: makeDay({ items: { meals: [], activities: [activity], weights: [] }, earned: 90 }) });
-    renderToday();
-  };
-
-  it('prints the facts once, and not the sentence they came from', async () => {
-    show(lift({}));
-    await waitFor(() => expect(screen.getByText('Lat Pulldown')).toBeTruthy());
-    expect(screen.getByText('4 × 15 · 60 lb')).toBeTruthy();
-    expect(screen.queryByText('4 × 15 lat pulldown at 60 lb')).toBeNull();
-  });
-
-  it('keeps the words when they carry something the fields cannot', async () => {
-    show(lift({ description: '4 × 15 lat pulldown at 60 lb, last set was ugly' }));
-    await waitFor(() => expect(screen.getByText('Lat Pulldown')).toBeTruthy());
-    expect(screen.getByText(/last set was ugly/)).toBeTruthy();
-  });
-});
-
-
-// ── no dead taps on Today ────────────────────────────────────────────────────────────
-// Field report 2026-09-01: rows whose movement the catalogue never resolved did nothing
-// when their name was pressed. A name-only sheet — a title and a form video that is a
-// YouTube search — is a better answer than nothing at all.
-
-describe("Today's exercise names", () => {
-  const NAMELESS: DayActivity = {
-    id: 'a9',
-    logged_at: '2026-08-30T09:00:00.000Z',
-    description: 'that inclined machine I lay on my tummy for',
-    exercise: null,
-    exercise_id: null,
-    media_count: 0,
-    equipment: 'chest-supported row machine',
-    category: 'strength',
-    muscle_groups: ['back'],
-    sets: 3,
-    reps: 12,
-    load_lb: 45,
-    duration_min: null,
-    distance_mi: null,
-    kcal: 90,
-    source: 'fused',
-    confidence: 'low',
-    block_id: null,
-    delta_vs_last: null,
-    evidence: [],
-  };
-
-  function serveActivities(activities: DayActivity[]) {
-    mockApi.mockImplementation((path: string) => {
-      if (path.startsWith('/api/day/')) {
-        return Promise.resolve(
-          makeDay({ blocks: [], earned: 90, eaten: 0, items: { meals: [], activities, weights: [] } }),
-        );
-      }
-      if (path === '/api/week') return Promise.resolve(makeWeek());
-      if (path === '/api/goals') return Promise.resolve({ active: [], history: [], no_goal: true });
-      if (path === '/api/profile') return Promise.resolve({ id: 'u', targets: {} });
-      return Promise.resolve(null);
-    });
-  }
-
-  beforeEach(() => {
-    mockApi.mockReset();
-    mockPush.mockReset();
-  });
-
-  it('opens a row the catalogue never resolved, by its own description', async () => {
-    serveActivities([NAMELESS]);
-    renderToday();
-    await waitFor(() =>
-      expect(screen.getByText('that inclined machine I lay on my tummy for')).toBeTruthy(),
-    );
-
-    fireEvent.press(screen.getByText('that inclined machine I lay on my tummy for'));
-    expect(mockPush).toHaveBeenCalledWith({
-      pathname: '/exercise/[id]',
-      params: {
-        id: 'unknown',
-        name: 'that inclined machine I lay on my tummy for',
-        media: '0',
-      },
-    });
-  });
-
-  it('draws the glyph on the row that has pictures and not on the one that does not', async () => {
-    serveActivities([
-      {
-        ...NAMELESS,
-        id: 'a8',
-        exercise: 'Bench Press',
-        exercise_id: 'ex-bench',
-        media_count: 2,
-        description: '3 × 8 bench at 135 lb',
-      },
-      NAMELESS,
-    ]);
-    renderToday();
-    await waitFor(() => expect(screen.getByText('Bench Press')).toBeTruthy());
-
-    expect(screen.getByTestId('row-activity-a8-photo')).toBeTruthy();
-    expect(screen.queryByTestId('row-activity-a9-photo')).toBeNull();
-  });
-});
-
-describe('Today — training, grouped the way the closed Day groups it', () => {
-  // User decision 2026-09-01: Today is the only page for the open day, and it files
-  // training the way Day does — Cardio first with its minutes, then muscle headings with
-  // set counts. It used to group by auto-block, so the same workout read two ways.
-
-  const PRESS = lift({ id: 'a1', exercise: 'Bench Press', muscle_groups: ['chest', 'triceps'] });
-  const WALK = lift({
-    id: 'a2',
-    exercise: 'Incline Treadmill Walk',
-    description: 'Incline treadmill walk',
-    category: 'cardio',
-    muscle_groups: ['calves', 'glutes'],
-    duration_min: 17,
-    sets: null,
-    reps: null,
-    load_lb: null,
-    logged_at: '2026-08-30T08:35:00.000Z',
-    kcal: 146,
-  });
-  const BIKE = lift({
-    id: 'a4',
-    exercise: 'Stationary Bike',
-    description: 'Stationary bike',
-    category: 'cardio',
-    muscle_groups: [],
-    duration_min: 23,
-    sets: null,
-    reps: null,
-    load_lb: null,
-    logged_at: '2026-08-30T08:20:00.000Z',
-    kcal: 120,
-  });
-  const YOGA = lift({
-    id: 'a3',
-    exercise: 'Yoga class',
-    description: 'Yoga class',
-    category: null,
-    muscle_groups: [],
-    sets: null,
-    reps: null,
-    load_lb: null,
-    kcal: 0,
-  });
-
-  function serveTraining(activities: DayActivity[], muscles: { muscle: string; sets: number }[]) {
-    serve({
-      day: makeDay({
-        earned: 410,
-        items: { meals: [], weights: [], activities },
-        muscle_summary: muscles.map((group) => ({ ...group, exercises: [] })),
-      }),
-    });
-  }
-
-  it('draws Cardio first with its minutes, then the muscle groups with their set counts', async () => {
-    serveTraining([PRESS, WALK, BIKE], [{ muscle: 'chest', sets: 6 }]);
-    renderToday();
-
-    await waitFor(() => expect(screen.getByText('Cardio')).toBeTruthy());
-    // The heading carries the day's cardio TOTAL — 17 + 23 — which no single row prints.
-    expect(screen.getByText('40 min')).toBeTruthy();
-    expect(screen.getByText('chest')).toBeTruthy();
-    expect(screen.getByText('6 sets')).toBeTruthy();
-    expect(screen.getByText('Bench Press')).toBeTruthy();
-  });
-
-  it('draws a logged cardio activity once, under Cardio, never under its muscle tags', async () => {
-    // The same regression the Day page carries (field report 2026-09-01: one treadmill
-    // walk drawn under both "calves" and "glutes").
-    serveTraining(
-      [PRESS, WALK],
-      [
-        { muscle: 'chest', sets: 6 },
-        { muscle: 'calves', sets: 0 },
-        { muscle: 'glutes', sets: 0 },
-      ],
-    );
-    renderToday();
-
-    await waitFor(() => expect(screen.getByText('Cardio')).toBeTruthy());
-    expect(screen.getAllByText('Incline Treadmill Walk')).toHaveLength(1);
-    expect(screen.queryByText('calves')).toBeNull();
-    expect(screen.queryByText('glutes')).toBeNull();
-  });
-
-  it('files a lift under the FIRST heading that claims it, and not under both', async () => {
-    serveTraining(
-      [PRESS],
-      [
-        { muscle: 'chest', sets: 6 },
-        { muscle: 'triceps', sets: 6 },
-      ],
-    );
-    renderToday();
-
-    await waitFor(() => expect(screen.getByText('chest')).toBeTruthy());
-    expect(screen.getAllByText('Bench Press')).toHaveLength(1);
-    expect(screen.queryByText('triceps')).toBeNull();
-  });
-
-  it('puts a movement no heading knows under "Also" rather than losing it', async () => {
-    serveTraining([PRESS, YOGA], [{ muscle: 'chest', sets: 6 }]);
-    renderToday();
-
-    await waitFor(() => expect(screen.getByText('Also')).toBeTruthy());
-    expect(screen.getByText('Yoga class')).toBeTruthy();
-  });
-
-  it('keeps the session span as a note on the header, not as the grouping', async () => {
-    // When a workout happened is a fact about it, not a way to file it. The block titles
-    // that used to be the headings are gone.
-    serveTraining([PRESS, WALK], [{ muscle: 'chest', sets: 6 }]);
-    renderToday();
-
-    await waitFor(() => expect(screen.getByText('Done')).toBeTruthy());
-    const span = `${clock(PRESS.logged_at)}–${clock(WALK.logged_at)}`;
-    expect(screen.getByText(new RegExp(span))).toBeTruthy();
-  });
-});
-
 describe('Today — the plan and the day on one page', () => {
   // User decision 2026-09-01. The plan used to live on a page of its own behind a button
   // at the bottom of this one, which put what you are about to do and what you have
@@ -710,16 +338,18 @@ describe('Today — the plan and the day on one page', () => {
     );
     renderToday();
 
-    // Do — the plan, before what happened.
+    // Do — the plan, in full, before what happened. It is the only list on the page.
     await waitFor(() => expect(screen.getByText('Pull day')).toBeTruthy());
     expect(screen.getByTestId('coach-do-0')).toBeTruthy();
     expect(screen.getByText('Lat Pulldown')).toBeTruthy();
-    // Done — what actually happened, grouped.
-    expect(screen.getByText('Done')).toBeTruthy();
-    expect(screen.getByText('Bench Press')).toBeTruthy();
-    expect(screen.getByText('chest')).toBeTruthy();
-    // Eat — still here, and still about the day.
-    expect(screen.getByText('Eat')).toBeTruthy();
+    // Done and Eat are one line each, with a door (user decision 2026-09-01).
+    expect(screen.getByTestId('today-done-line')).toHaveTextContent(/1 move/);
+    expect(screen.getByTestId('today-eat')).toBeTruthy();
+    expect(screen.queryByText('Bench Press')).toBeNull();
+    // And the three things that came off the page are off it.
+    expect(screen.queryByText('The day so far')).toBeNull();
+    expect(screen.queryByText('Body')).toBeNull();
+    expect(screen.queryByTestId('coach-context')).toBeNull();
   });
 
   it('never generates a plan by being opened', async () => {
@@ -768,10 +398,9 @@ describe('Today — the plan and the day on one page', () => {
     // No plan was asked for, so the section is one card and a button — not a blank.
     await waitFor(() => expect(screen.getByTestId('coach-no-plan')).toBeTruthy());
     expect(screen.getByText("Start today's workout")).toBeTruthy();
-    // And the rest of the day is entirely usable.
-    expect(screen.getByText('eggs and toast')).toBeTruthy();
-    expect(screen.getByText('No exercise logged today.')).toBeTruthy();
-    expect(screen.getByText('Body')).toBeTruthy();
+    // And the rest of the day is entirely usable: the meal counted, on one line.
+    expect(screen.getByTestId('today-eat-line')).toHaveTextContent(/480 eaten/);
+    expect(screen.getByTestId('today-done-line')).toHaveTextContent(/Nothing logged yet/);
   });
 
   it('has no button to a plan page, because there is no plan page', async () => {
@@ -780,5 +409,80 @@ describe('Today — the plan and the day on one page', () => {
     await waitFor(() => expect(screen.getByText('Pull day')).toBeTruthy());
     expect(screen.queryByTestId('coach-button')).toBeNull();
     expect(mockPush).not.toHaveBeenCalledWith('/coach');
+  });
+});
+
+describe('Today — the doors, and what is no longer on the page', () => {
+  // User decision 2026-09-01, from screenshots of the merged page. Three things came off
+  // because they were pushing the day off its own screen, and one because it was a second
+  // input surface.
+
+  function serveDay(day: unknown) {
+    mockApi.mockImplementation((path: string) => {
+      if (path.startsWith('/api/day/')) return Promise.resolve(day);
+      if (path === '/api/week') return Promise.resolve(makeWeek());
+      if (path === '/api/goals') return Promise.resolve({ active: [], history: [], no_goal: true });
+      if (path === '/api/profile') return Promise.resolve({ id: 'u', targets: {} });
+      return Promise.resolve(null);
+    });
+  }
+
+  const MEAL: DayMeal = {
+    id: 'm1',
+    logged_at: '2026-08-30T07:30:00.000Z',
+    description: 'eggs and toast',
+    slot: 'breakfast',
+    stated_slot: null,
+    kcal: 480,
+    protein_g: 32,
+    carbs_g: 40,
+    fat_g: 20,
+    fiber_g: 4,
+    evidence: [],
+  };
+
+  it('says how the day is going in one line each, and opens the log on a tap', async () => {
+    serveDay(
+      makeDay({
+        earned: 569,
+        eaten: 480,
+        allowance: 2865,
+        items: { meals: [MEAL], activities: [lift(), lift({ id: 'a2' })], weights: [] },
+      }),
+    );
+    renderToday();
+
+    await waitFor(() => expect(screen.getByTestId('today-done-line')).toHaveTextContent(/569 kcal earned/));
+    expect(screen.getByTestId('today-done-line')).toHaveTextContent(/2 moves/);
+    fireEvent.press(screen.getByTestId('today-done'));
+    expect(mockPush).toHaveBeenCalledWith('/today/training');
+
+    // ONE calorie figure on the Eat line, and it is the day's own arithmetic. The card
+    // that used to be here printed it three times and then quoted a different one out of
+    // an older brief.
+    expect(screen.getByTestId('today-eat-line')).toHaveTextContent('480 eaten · 2,385 left');
+    fireEvent.press(screen.getByTestId('today-eat'));
+    expect(mockPush).toHaveBeenCalledWith('/today/eating');
+  });
+
+  it('counts an over-allowance day as over, not as a negative amount left', async () => {
+    serveDay(makeDay({ eaten: 2574, allowance: 2254, items: { meals: [MEAL], activities: [], weights: [] } }));
+    renderToday();
+    await waitFor(() => expect(screen.getByTestId('today-eat-line')).toHaveTextContent(/over/));
+    expect(screen.getByTestId('today-eat-line')).not.toHaveTextContent('-');
+  });
+
+  it('draws neither the arc, nor Body, nor a second form anywhere on it', async () => {
+    serveDay(makeDay({ arc: [{ at: '2026-08-30T08:10:00.000Z', kind: 'activity', label: 'Bench' }] as never }));
+    renderToday();
+
+    await waitFor(() => expect(screen.getByTestId('today-done')).toBeTruthy());
+    expect(screen.queryByText('The day so far')).toBeNull();
+    expect(screen.queryByText('Body')).toBeNull();
+    expect(screen.queryByText('7-day avg')).toBeNull();
+    // The one-door law: no input surface but the + (concept-v2 §Principles 7).
+    expect(screen.queryByTestId('coach-context')).toBeNull();
+    expect(screen.queryByTestId('coach-photo')).toBeNull();
+    expect(screen.queryByTestId('coach-type')).toBeNull();
   });
 });

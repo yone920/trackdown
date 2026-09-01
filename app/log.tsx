@@ -29,7 +29,7 @@ import { correctionLine } from '@/lib/format';
 import { composeMaxHeight, footerLift, keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
 import { MAX_PHOTOS, pickPhotos, takePhoto, type LocalPhoto } from '@/lib/photos';
 import { getSpeech } from '@/lib/ports/speech';
-import { useAnalyze, useConfirm, useDayLog, usePatchRecord, useSplitRecord } from '@/lib/queries';
+import { useAnalyze, useAskCoach, useConfirm, useDayLog, usePatchRecord, useSplitRecord } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
 import type { FusionResult, PartCorrection } from '@/lib/types';
@@ -75,7 +75,20 @@ export default function LogSheet() {
     editDate?: string;
     editId?: string;
     editKind?: string;
+    adjustPlan?: string;
   }>();
+  /**
+   * Plan-adjust mode (user decision 2026-09-01). Today's Do section used to carry its own
+   * text box, its own Photo/Type tiles and its own submit button — a second input surface,
+   * which is the one thing concept-v2 §Principles 7 forbids: "there is only one way to
+   * update anything in the app and that is the logger". So the plan is adjusted HERE, in
+   * the same sheet the + opens, with the same say / type / snap affordances.
+   *
+   * The only difference is where the words go. This is not a record of something that
+   * happened, so nothing is analysed and nothing is confirmed: the sentence goes straight
+   * to the coach's adjust endpoint, appending to today's plan rather than replacing it.
+   */
+  const adjustingPlan = params.adjustPlan === '1';
   const editId = typeof params.editId === 'string' ? params.editId : null;
   const editKind = (typeof params.editKind === 'string' ? params.editKind : null) as EditKind | null;
   const editDate = typeof params.editDate === 'string' ? params.editDate : '';
@@ -117,6 +130,7 @@ export default function LogSheet() {
   const [error, setError] = useState<string | null>(null);
 
   const analyze = useAnalyze();
+  const askCoach = useAskCoach();
   const confirm = useConfirm();
   const patch = usePatchRecord();
   const split = useSplitRecord();
@@ -164,7 +178,7 @@ export default function LogSheet() {
       const response = await analyze.mutateAsync({
         text: withText.trim() || null,
         photos: withPhotos,
-        kindHint: typeof params.hint === 'string' ? params.hint : null,
+        kindHint: adjustingPlan ? 'coach_context' : typeof params.hint === 'string' ? params.hint : null,
         clarify,
       });
       // `results` since the mixed-input fix; `result` is the old single-part shape, kept
@@ -227,9 +241,33 @@ export default function LogSheet() {
     }
   };
 
+  /**
+   * Adjusting today's plan. The words are an instruction about the plan, so they go to the
+   * coach rather than through the reader: there is no record to preview and nothing to
+   * confirm. Append semantics, unchanged — replacing a plan is a separate, deliberate act
+   * with its own confirmation, and it never happens by typing a sentence.
+   *
+   * A PHOTO is the exception, and it takes the road it always took: it is saved against
+   * today as coach context, which every later ask reads back. The coach's adjust endpoint
+   * has nowhere to put an image.
+   */
+  const runAdjustPlan = async (instruction: string) => {
+    const line = instruction.trim();
+    if (!line) return;
+    setError(null);
+    try {
+      await askCoach.mutateAsync({ revision: line, mode: 'append' });
+      router.back();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not adjust the plan.');
+    }
+  };
+
   /** Log, or Change it: the same button, doing the thing the step is for. */
   const submit = () => {
     if (revising) void runRevise(text);
+    // Words about the plan go to the coach; a photo is context and goes the usual way.
+    else if (adjustingPlan && photos.length === 0) void runAdjustPlan(text);
     else void runAnalyze(text, photos);
   };
 
@@ -379,9 +417,9 @@ export default function LogSheet() {
     step === 'say'
       ? {
           testID: 'log-submit',
-          label: revising ? 'Change it' : 'Log',
-          pendingLabel: revising ? 'Changing…' : 'Reading…',
-          pending: analyze.isPending,
+          label: revising ? 'Change it' : adjustingPlan ? 'Adjust the plan' : 'Log',
+          pendingLabel: revising ? 'Changing…' : adjustingPlan ? 'Adjusting…' : 'Reading…',
+          pending: analyze.isPending || askCoach.isPending,
           disabled: !canSubmit,
           onPress: submit,
         }
@@ -478,8 +516,19 @@ export default function LogSheet() {
               ? 'What should I change?'
               : editing
                 ? 'Fix what was saved'
-                : 'What did you do?'}
+                : adjustingPlan
+                  ? "Adjust today's plan"
+                  : 'What did you do?'}
         </Disp>
+
+        {/* Said plainly, because the sheet looks identical to the one that logs a record
+            and this one does not log anything (user decision 2026-09-01). */}
+        {step === 'say' && adjustingPlan ? (
+          <Sub testID="log-adjust-plan-note" style={{ marginTop: 10, lineHeight: 18 }}>
+            This changes today&apos;s plan — it does not log anything you did. Say what to add
+            or what to work instead, and it is added to the plan rather than replacing it.
+          </Sub>
+        ) : null}
 
         {/* The record itself is the headline; on a fresh log this line is the instruction.
             What the user *said* is provenance and it goes below the card (user decision
@@ -519,7 +568,9 @@ export default function LogSheet() {
                   ? 'Tell me what to change — “reps were 3, not 4”…'
                   : clarify
                     ? 'Answer the question…'
-                    : 'Shoulder press, three sets of ten at forty pounds…'
+                    : adjustingPlan
+                      ? 'Add some core · switch to legs · only 30 minutes…'
+                      : 'Shoulder press, three sets of ten at forty pounds…'
               }
               placeholderTextColor={C.dim}
               style={{
@@ -565,7 +616,9 @@ export default function LogSheet() {
             <Sub style={{ marginTop: 12, lineHeight: 18 }}>
               {revising
                 ? 'Say it or type it — the numbers you do not mention stay as they are.'
-                : 'Say it, snap it, or type it — any mix. Same for food, weight, goals.'}
+                : adjustingPlan
+                  ? 'Say it, snap it, or type it. A photo is saved as context for today instead.'
+                  : 'Say it, snap it, or type it — any mix. Same for food, weight, goals.'}
               {speech.available ? '' : ' (Speaking needs the dev build; typing and photos work here.)'}
             </Sub>
 

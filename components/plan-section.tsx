@@ -1,18 +1,13 @@
 import { useRouter } from 'expo-router';
-import { useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, TextInput, useWindowDimensions, View } from 'react-native';
+import { useState } from 'react';
+import { ActivityIndicator, View } from 'react-native';
 
-import { Control } from '@/components/control';
-import { IconCamera, IconKeyboard, IconMic } from '@/components/icons';
 import { BigButton, Card, Chip, Chips, GroupHeading, Row, Section, SkeletonLines } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { openExercise } from '@/lib/exercise';
 import { clock } from '@/lib/format';
-import { composeMaxHeight } from '@/lib/keyboard';
-import { getSpeech } from '@/lib/ports/speech';
 import { localDateKey, useAskCoach, useCoachNext, usePrefetchExercises, useUpdateGoal } from '@/lib/queries';
-import { useScreenInsets } from '@/lib/screen';
-import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
+import { C, TABULAR } from '@/lib/theme';
 import type { BriefExercise, CoachBrief, ExerciseCompletion } from '@/lib/types';
 
 // The day's plan, where the day is (user decision 2026-09-01). It used to be a page of its
@@ -58,11 +53,7 @@ function doneSummary(exercises: BriefExercise[]): string {
 
 export function PlanSection() {
   const router = useRouter();
-  const insets = useScreenInsets();
-  const inputRef = useRef<TextInput>(null);
-  const speech = useMemo(() => getSpeech(), []);
 
-  const [context, setContext] = useState('');
   /**
    * *Replace today's plan* is the one control on this screen that can take work away, so it
    * asks first: the first tap arms it and says what it will do, the second does it. Armed
@@ -71,7 +62,6 @@ export function PlanSection() {
    */
   const [replaceArmed, setReplaceArmed] = useState(false);
 
-  const window = useWindowDimensions();
 
   const coach = useCoachNext();
   const askCoach = useAskCoach();
@@ -112,37 +102,25 @@ export function PlanSection() {
     (askCoach.isError && !asking ? (askCoach.error as Error).message : null);
 
   /**
-   * With a brief on screen the input is an *adjustment* to it — that is what the user
-   * means by typing into a page that already answered them. With no brief yet it is
-   * context for the first ask. An empty box is a plain regenerate either way.
-   *
-   * No `mode`: the box does not claim to know which kind of change this is, so the server
-   * lets the model read the sentence — and tells it that an addition is the default,
-   * because the two buttons above are where a replacement is asked for out loud.
+   * The first ask of the day. It is the only thing in the app that writes a plan, and it
+   * is a tap — never a page load (user decision 2026-08-31 §2). No words: what the coach
+   * should know about today is told through the logger, which saves it as context and is
+   * read back by every ask.
    */
-  const ask = () => {
+  const startWorkout = () => {
     setReplaceArmed(false);
-    const line = context.trim();
-    if (!line) {
-      askCoach.mutate({});
-      return;
-    }
-    askCoach.mutate(brief ? { revision: line } : { context: line });
-    setContext('');
+    askCoach.mutate({});
   };
 
   /**
-   * The first ask of the day, from the button that replaces the plan when there is none.
-   * This is the only thing on the screen that a page load could have done for the user, and
-   * the whole point of the fix is that it does not.
+   * "Adjust the plan" — a door into the ONE input surface in the app, in plan-adjust mode
+   * (app/log.tsx §adjustingPlan). Same say / type / snap affordances as logging a meal;
+   * the sheet says plainly that it is changing the plan rather than recording anything,
+   * and the words go to the coach's adjust endpoint with append semantics.
    */
-
-  /** "Add to today's plan" — an append, decided here rather than inferred from a sentence. */
-  const addToPlan = () => {
+  const adjustPlan = () => {
     setReplaceArmed(false);
-    const line = context.trim();
-    askCoach.mutate({ revision: line || 'add to the plan — a little more of what today needs', mode: 'append' });
-    setContext('');
+    router.push({ pathname: '/log', params: { adjustPlan: '1' } });
   };
 
   /** "Replace today's plan": arm, say what it does, and only act on the second tap. */
@@ -152,12 +130,8 @@ export function PlanSection() {
       return;
     }
     setReplaceArmed(false);
-    const line = context.trim();
-    askCoach.mutate(line ? { revision: line, mode: 'rewrite' } : {});
-    setContext('');
+    askCoach.mutate({ mode: 'rewrite' });
   };
-
-  const tellIt = () => router.push({ pathname: '/log', params: { hint: 'coach_context' } });
 
   const act = () => {
     if (!action) return;
@@ -371,18 +345,23 @@ export function PlanSection() {
             </Card>
           ) : null}
 
-          {/* The two things you can do to a plan, said out loud (user decision
-              2026-08-31 §3). Adding keeps everything above; replacing does not, so it
-              costs a second tap and says what it is about to do. Both take whatever is in
-              the box below as the instruction, and both work with it empty. */}
+          {/* Adjusting the plan is TOLD, in the one place anything is told: the logger
+              (user decision 2026-09-01 — "there is only one way to update anything in the
+              app and that is the logger"). This section used to carry its own text box,
+              its own Photo/Type tiles and its own submit button, which is a second input
+              surface and the one thing concept-v2 §Principles 7 forbids.
+
+              Adding is what a told adjustment does, and it keeps everything above it.
+              Replacing does not, so it stays here as its own deliberate act: two taps, no
+              words needed, and it says what it is about to do. */}
           <View style={{ marginTop: 14 }}>
             <Chips>
               <Chip
-                testID="coach-add"
-                label="Add to today's plan"
+                testID="coach-adjust"
+                label="Adjust the plan"
                 variant="primary"
                 disabled={busy}
-                onPress={addToPlan}
+                onPress={adjustPlan}
               />
               <Chip
                 testID="coach-replace"
@@ -395,7 +374,7 @@ export function PlanSection() {
             <Sub testID="coach-plan-actions-hint" style={{ marginTop: 10, lineHeight: 18 }}>
               {replaceArmed
                 ? 'Tap Replace again to rebuild the session. Everything above goes, ticks included.'
-                : 'Adding keeps everything above it. Type below first to say what to add, or what the new session should be.'}
+                : 'Adjusting opens the logger — say what to add and it is added to the plan. Replacing starts the session over.'}
             </Sub>
           </View>
         </Section>
@@ -422,71 +401,26 @@ export function PlanSection() {
         </Card>
       ) : null}
 
-      {/* Context — the same Photo / Speak / Type panel as everywhere else. Once there is
-          a brief the box changes what it is for: you are no longer telling the coach about
-          your day, you are telling it what to change about the answer in front of you. */}
-      <Section title={brief ? 'Not quite right?' : 'Anything I should know?'}>
-        <TextInput
-          ref={inputRef}
-          testID="coach-context"
-          value={context}
-          onChangeText={setContext}
-          placeholder={
-            brief
-              ? "Adjust it — 'make it 8 exercises', 'switch to legs'…"
-              : 'Only 30 minutes · knee hurts today'
-          }
-          placeholderTextColor={C.dim}
-          multiline
-          style={{
-            minHeight: 70,
-            // Capped for the same reason as the Log sheet's box: a compose box that grows
-            // for ever ends with its caret under the keyboard (lib/keyboard.ts).
-            maxHeight: composeMaxHeight(window.height, insets.top),
-            fontFamily: FONT.medium,
-            fontSize: 15,
-            color: C.ink,
-            backgroundColor: C.card,
-            borderRadius: RADIUS.card,
-            padding: SPACE.card,
-          }}
-        />
-
-        <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
-          <Control label="Photo" onPress={tellIt} testID="coach-photo">
-            <IconCamera size={26} color={C.ink} />
-          </Control>
-          {speech.available ? (
-            <Control label="Speak" filled onPress={tellIt} testID="coach-speak">
-              <IconMic size={26} color={C.bg} />
-            </Control>
-          ) : null}
-          <Control label="Type" onPress={() => inputRef.current?.focus()} testID="coach-type">
-            <IconKeyboard size={26} color={C.ink} />
-          </Control>
-        </View>
-        <Sub style={{ marginTop: 12, lineHeight: 18 }}>
-          A photo or a spoken line is saved against today and used every time you ask.
-          {speech.available ? '' : ' (Speaking needs the dev build.)'}
-        </Sub>
-
-        {/* With a brief on screen this box is an adjustment to it, and it needs words to
-            be one: an empty box used to send a plain regenerate, which silently replaced
-            the plan from the least explicit control on the page. Replacing has its own
-            button now, and its own confirmation. */}
-        {/* One verb per page: without a plan this button IS the generator (context optional);
-            with a plan it only adjusts, and needs words to do it. The old top chip and the
-            vague "Ask" both collapsed into this. */}
+      {/* With no plan there is one thing to press, and it is the only generator in the
+          app. It takes no words: context is TOLD through the logger like everything else,
+          and a plan asked for with nothing said is still a plan built from the whole log.
+          (user decision 2026-09-01 — the box that used to sit here was a second form.) */}
+      {!brief ? (
         <View style={{ marginTop: 16 }}>
           <BigButton
             testID="coach-regenerate"
-            label={busy ? 'Thinking…' : brief ? 'Adjust the plan' : "Start today's workout"}
-            disabled={busy || (!!brief && context.trim() === '')}
+            label={busy ? 'Thinking…' : "Start today's workout"}
+            disabled={busy}
             pending={busy}
-            onPress={ask}
+            onPress={startWorkout}
           />
+          <Sub style={{ marginTop: 12, lineHeight: 18 }}>
+            Anything I should know first — only 30 minutes, knee is sore — goes in through
+            the + like everything else.
+          </Sub>
         </View>
-      </Section>
+      ) : null}
+
     </>
   );
 }

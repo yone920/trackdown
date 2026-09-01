@@ -17,7 +17,7 @@ import { Card, Chip, dismissDeletes, GroupHeading, Row, Section, Skeleton, Skele
 import { ReadingCard } from '@/components/reading-card';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { addDays } from '@/lib/days-weeks';
-import { clock, dateLabel, grams, kcal, slotLabel } from '@/lib/format';
+import { clock, dateLabel, grams, kcal, nothingEatenYet, slotLabel } from '@/lib/format';
 import { groupTraining, splitBySource } from '@/lib/training-groups';
 import { localDateKey, useDay, useDeleteRecord } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
@@ -467,22 +467,6 @@ function MacroBar({ label, line, color }: { label: string; line: MacroLine; colo
  * not once per macro: three copies of the same sentence is the empty-bar problem again in
  * words. Null when every macro has a target, which is the normal case.
  */
-/**
- * The empty plate, said once with a wink instead of three zero rows ("PROTEIN 0 g" before
- * breakfast helps nobody — field report 2026-09-01). Picked by the clock so the line
- * matches the meal it is waiting for; the macros and hints return with the first bite.
- */
-export function nothingEatenYet(hour: number): string {
-  if (hour < 5) return 'Nothing eaten yet — even the fridge is still asleep.';
-  if (hour < 11)
-    return 'Nothing eaten yet. Breakfast is still a rumor — log the first bite and the breakdown wakes up.';
-  if (hour < 15)
-    return 'Still an empty plate. Say it or snap it whenever you eat, and the numbers start here.';
-  if (hour < 20)
-    return 'A whole day and zero bites logged. Iron discipline or a forgotten lunch — tell me which.';
-  return 'Nothing logged all day. If you ate, say so before the day closes — I only count what I hear about.';
-}
-
 export function macroHint(macros: { label: string; line: MacroLine }[]): string | null {
   const missing = macros
     .filter(({ line }) => line.target == null || line.target <= 0)

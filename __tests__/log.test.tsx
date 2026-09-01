@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
 import LogSheet from '@/app/log';
@@ -22,6 +22,21 @@ jest.mock('@/lib/api', () => ({
   API_URL: 'http://test',
   ApiError: class extends Error {},
   setUnauthorizedHandler: () => {},
+}));
+
+// The sheet reads its own params (plan-adjust mode, edit mode), so this file brings its
+// own router rather than riding on the global mock's fixed empty params.
+let mockParams: Record<string, string> = {};
+const mockBack = jest.fn();
+const mockPush = jest.fn();
+jest.mock('expo-router', () => ({
+  useRouter: () => ({
+    push: (...args: unknown[]) => mockPush(...args),
+    back: (...args: unknown[]) => mockBack(...args),
+    replace: jest.fn(),
+    canGoBack: () => true,
+  }),
+  useLocalSearchParams: () => mockParams,
 }));
 
 const mockSpeech = { available: false, requestPermission: jest.fn(), start: jest.fn(), stop: jest.fn() };
@@ -93,6 +108,9 @@ const analyzed = (results: FusionResult[], evidence: unknown[] = []) => ({
 });
 
 beforeEach(() => {
+  mockParams = {};
+  mockBack.mockReset();
+  mockPush.mockReset();
   mockApi.mockReset();
   mockUpload.mockReset();
   mockSpeech.available = false;
@@ -505,5 +523,46 @@ describe('a change told to a pending log ends up in the record', () => {
     await waitFor(() => expect(mockApi).toHaveBeenCalled());
     const [, options] = mockApi.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(options.body.corrections).toEqual([]);
+  });
+});
+
+describe('the logger, adjusting the plan', () => {
+  // User decision 2026-09-01: "there is only one way to update anything in the app and
+  // that is the logger". The plan's own text box is gone; adjusting it opens THIS sheet
+  // with `adjustPlan`, and the words go to the coach instead of through the reader.
+
+  it('says plainly that it is not logging anything, and sends the words to the coach', async () => {
+    mockParams = { adjustPlan: '1' };
+    renderSheet();
+
+    expect(screen.getByText("Adjust today's plan")).toBeTruthy();
+    expect(screen.getByTestId('log-adjust-plan-note')).toHaveTextContent(/does not log anything you did/);
+    // The same three affordances as any other log — one door, one panel.
+    expect(screen.getByTestId('control-type')).toBeTruthy();
+    expect(screen.getByTestId('log-text')).toBeTruthy();
+
+    fireEvent.changeText(screen.getByTestId('log-text'), 'add twenty minutes of core');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+
+    // Straight to the coach's adjust endpoint, appending — never through /api/log/analyze,
+    // because this is not a record of something that happened.
+    const posted = mockApi.mock.calls.find(([path]) => path === '/api/coach/next/regenerate');
+    expect(posted).toBeTruthy();
+    expect((posted![1] as { body: Record<string, unknown> }).body).toMatchObject({
+      revision: 'add twenty minutes of core',
+      mode: 'append',
+      context: null,
+    });
+    expect(mockUpload).not.toHaveBeenCalled();
+    expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('is an ordinary log when nobody asked it to adjust anything', async () => {
+    mockParams = {};
+    renderSheet();
+    expect(screen.queryByTestId('log-adjust-plan-note')).toBeNull();
+    expect(screen.getByText('What did you do?')).toBeTruthy();
   });
 });
