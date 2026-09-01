@@ -55,6 +55,15 @@ you fill in every field with your best guess:
 - The numbers they gave — sets, reps, load — are facts and go in as stated, even when the
   movement is a guess. "Three sets of 12 at 45 pounds" is 3, 12 and 45 whatever the machine
   turns out to be called.
+- The one number you may compute: a PER-SIDE load, and what it means depends on the kit:
+  * Barbell: total = plates + the 45 lb bar ("45 on each side" is 135).
+  * Dumbbells ("in each hand", "two 45s", or the movement is a dumbbell one): load_lb is
+    ONE dumbbell — 45, not 90 — because that is how dumbbell work is tracked and progressed.
+  * Plate-loaded machine, or they named a machine: the plates alone (90). No bar.
+  Show the working in the description ("45/side + 45 lb bar = 135 lb"; "45 lb per
+  dumbbell") so they can see how the number was made. "Each side" with no kit named is
+  ambiguous three ways: follow any equipment words they used, else mark confidence
+  "medium" — never a confident guess.
 - "confidence": "low" or "medium" when the identification was a guess. That is what the low
   confidence is FOR. It is not a reason to return "unclear".
 The user can correct a name in one tap. They cannot correct a workout that was never saved.

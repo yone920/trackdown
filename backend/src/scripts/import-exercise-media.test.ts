@@ -202,3 +202,32 @@ describe("importing", () => {
 		expect((await row("Bench Press")).media_count).toBe(2);
 	});
 });
+
+// ── the picture, not just the movement ───────────────────────────────────────────────
+// Field report 2026-09-01: the sheet for Bench Press showed an EMPTY bar. The match was
+// correct — "Bench Press - Powerlifting" IS a bench press — and the photographs were
+// useless: the user could not tell it was a barbell and went looking for what was wrong
+// with his 135 lb log.
+
+describe("preferred sources", () => {
+	it("takes the entry with plates on the bar over the one the rules would pick", async () => {
+		const { run } = harness();
+		await run();
+		const bench = await row("Bench Press");
+		// The general rules resolve our own name through the derived key "bench press",
+		// which the Powerlifting entry claims first — PREFERRED_SOURCE_NAMES overrules it.
+		expect(bench.source_slug).toBe("Barbell_Bench_Press_-_Medium_Grip");
+		expect(bench.instructions?.[0]).toContain("flat bench");
+	});
+
+	it("is inert for a preference the dataset cannot honour", () => {
+		// A dataset without the preferred entry falls back to the rules rather than to a
+		// miss: a picture of the wrong grip beats no picture at all.
+		const withoutPreferred = DATASET_FIXTURE.filter(
+			(entry) => entry.name !== "Barbell Bench Press - Medium Grip",
+		);
+		const catalog = [{ id: "bench", name: "Bench Press", aliases: ["barbell bench press"] }];
+		const report = matchCatalog(catalog, parseDataset(withoutPreferred));
+		expect(report.matches.get("bench")?.name).toBe("Bench Press - Powerlifting");
+	});
+});

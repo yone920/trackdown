@@ -128,6 +128,18 @@ Stretch" resolves, "chest press" still does not resolve to a stretch, and `stret
 the media volume already has frames, so the new rows need one `--force` run on the host
 after the release (in the deploy notes, and in the report).
 
+#### B′ — a bench press with plates on it
+
+The sheet for **Bench Press** showed an **empty bar**. The match was correct —
+"Bench Press - Powerlifting" is a bench press — and the photographs were useless: the user
+could not tell it was a barbell at all and went looking for what was wrong with his 135 lb
+log. `PREFERRED_SOURCE_NAMES` in `services/exerciseMedia.ts` names
+**"Barbell Bench Press - Medium Grip"** instead, which is the same movement with plates on
+it. Explicit, like `AMBIGUOUS_SOURCE_NAMES` beside it and for the same reason: "prefer the
+entry whose photographs are clearer" is not a rule a computer can apply. A preference the
+dataset cannot honour is ignored rather than turned into a miss — a picture of the wrong
+grip beats no picture at all.
+
 #### C — the affordance, and no legend
 
 Names with illustrations carry a small stroke `IconPhoto`, `dim`, beside the underline.
@@ -188,7 +200,17 @@ keeps its column, so the times above and below stay in line; leaving the prop of
 list says it has no clock. Every current caller was audited; the timed lists (Today's and
 Day's meals and activities) all pass a string.
 
-#### H — Day: one row per activity, and no macros for a day with no meals
+#### H — a load per side is arithmetic, not a guess
+
+`services/fusion/prompt.ts` gains the one number the reader is allowed to compute. On a
+barbell lift the total is the plates **plus the 45 lb bar** ("45 on each side" benched is
+135); on a plate-loaded machine, or whenever the user names a machine, it is the plates
+alone, because machines have no bar; dumbbells are the per-dumbbell load. The working goes
+in the description — *"45/side + 45 lb bar = 135 lb"* — so the number can be seen being
+made, and when the kit is ambiguous it follows the user's own equipment words and drops to
+`medium` confidence rather than asking a question.
+
+#### I — Day: one row per activity, and no macros for a day with no meals
 
 Two field reports fixed in the same tree and shipped here (`app/day/[date].tsx`):
 
@@ -217,8 +239,10 @@ Two field reports fixed in the same tree and shipped here (`app/day/[date].tsx`)
 - `src/services/exerciseMatch.test.ts` (+3): twenty-seven phrasings of the nineteen
   stretches resolving, nothing the catalogue already owned taken from it, and the guard
   still refusing a stretch as an answer to a movement.
-- `src/scripts/import-exercise-media.test.ts` (+1, fixture +1): a `stretching` entry matched
-  onto Chest Stretch through the alias that names it.
+- `src/scripts/import-exercise-media.test.ts` (+3, fixture +2): a `stretching` entry matched
+  onto Chest Stretch through the alias that names it; the preferred source beating the
+  derived-key hit the rules would take; and the preference falling back to the rules when
+  the dataset does not have the entry it names.
 - `__tests__/exercise.test.tsx` (8 → 13): the skeleton count from the tap, none at all when
   the tap said none, the two-box fallback when nobody said, a prefetched sheet with no
   skeleton and no request, and 640 on the tiles against full size in the zoom.
@@ -236,6 +260,9 @@ Two field reports fixed in the same tree and shipped here (`app/day/[date].tsx`)
   the case that matters here, and "unknown" has to draw nothing rather than guess.
 - **The stretches are seeded, not imported.** `data/exercises.json` is the catalogue's source
   of truth and `db:migrate` reseeds it on every container start, so this needed no migration.
+- **A better photograph is a list, not a heuristic.** "Prefer the entry whose pictures are
+  clearer" cannot be computed; `PREFERRED_SOURCE_NAMES` holds one entry and will hold the
+  next one somebody reports.
 
 **Deferred**
 
