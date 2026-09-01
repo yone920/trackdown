@@ -28,6 +28,34 @@ export interface LoggedExercise {
 	exercise: string | null;
 	exercise_id?: string | null;
 	sets?: number | null;
+	/**
+	 * The row's own id and numbers, so the match can say WHICH records ticked a line off
+	 * (user decision 2026-09-01: the plan and the log are one section, and a checked line
+	 * shows what was actually done under what was asked for). Optional throughout: the
+	 * matcher's older callers pass names and set counts only, and the tick has never needed
+	 * more than that.
+	 */
+	id?: string | null;
+	logged_at?: string | null;
+	reps?: number | null;
+	load_lb?: number | null;
+	duration_min?: number | null;
+	kcal?: number | null;
+}
+
+/**
+ * One logged record that ticked a plan item off — enough to draw its "truth line" and to
+ * open it. The app never re-derives this matching: it is the same computation the tick is
+ * made from, and two matchers would eventually disagree about the same row.
+ */
+export interface CompletionRecord {
+	id: string;
+	logged_at: string | null;
+	sets: number | null;
+	reps: number | null;
+	load_lb: number | null;
+	duration_min: number | null;
+	kcal: number | null;
 }
 
 export interface ExerciseCompletion {
@@ -39,6 +67,15 @@ export interface ExerciseCompletion {
 	sets_prescribed: number | null;
 	/** True when something was logged but not all of it — the "2 of 3" state. */
 	partial: boolean;
+	/**
+	 * The rows that matched, in the order they were logged (additive, 2026-09-01). Several
+	 * is normal and is the whole reason this is a list: a drop set corrected into two
+	 * records is two rows against one prescribed line, and both have to be reachable.
+	 *
+	 * Only rows that carry an id appear here — a caller that matched on names alone has
+	 * nothing to point at, and an empty list is the honest answer for it.
+	 */
+	records: CompletionRecord[];
 }
 
 /**
@@ -101,17 +138,34 @@ export function matchesPlanned(planned: PlannedExercise, logged: LoggedExercise)
 export function completionFor(planned: PlannedExercise, logged: readonly LoggedExercise[]): ExerciseCompletion {
 	const matches = logged.filter((row) => matchesPlanned(planned, row));
 	const prescribed = planned.sets ?? null;
+	const records = recordsOf(matches);
 	if (matches.length === 0) {
-		return { done: false, sets_done: 0, sets_prescribed: prescribed, partial: false };
+		return { done: false, sets_done: 0, sets_prescribed: prescribed, partial: false, records };
 	}
 	const setsDone = matches.reduce((total, row) => total + (row.sets ?? 0), 0);
 	// Nothing said how many sets: any matching row is the movement done.
-	if (prescribed == null) return { done: true, sets_done: setsDone, sets_prescribed: null, partial: false };
+	if (prescribed == null) return { done: true, sets_done: setsDone, sets_prescribed: null, partial: false, records };
 	// Rows with no set count at all: the movement happened, and we cannot count it against
 	// a target, so it reads as done rather than as "0 of 3".
-	if (setsDone === 0) return { done: true, sets_done: 0, sets_prescribed: prescribed, partial: false };
+	if (setsDone === 0) return { done: true, sets_done: 0, sets_prescribed: prescribed, partial: false, records };
 	const done = setsDone >= prescribed;
-	return { done, sets_done: setsDone, sets_prescribed: prescribed, partial: !done };
+	return { done, sets_done: setsDone, sets_prescribed: prescribed, partial: !done, records };
+}
+
+/** The matched rows that can actually be pointed at, oldest first. */
+function recordsOf(matches: readonly LoggedExercise[]): CompletionRecord[] {
+	return matches
+		.filter((row): row is LoggedExercise & { id: string } => typeof row.id === "string" && row.id !== "")
+		.map((row) => ({
+			id: row.id,
+			logged_at: row.logged_at ?? null,
+			sets: row.sets ?? null,
+			reps: row.reps ?? null,
+			load_lb: row.load_lb ?? null,
+			duration_min: row.duration_min ?? null,
+			kcal: row.kcal ?? null,
+		}))
+		.sort((a, b) => (a.logged_at ?? "").localeCompare(b.logged_at ?? ""));
 }
 
 /** Every line of the Do list, in order, with its completion beside it. */

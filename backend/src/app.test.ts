@@ -3145,8 +3145,8 @@ describe("the living plan — completion, add-ons and the live Eat card", () => 
 		const first = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
 		expect(first.status).toBe(200);
 		expect(first.body.brief.workout.exercises.map((e: { completion: unknown }) => e.completion)).toEqual([
-			{ done: false, sets_done: 0, sets_prescribed: 3, partial: false },
-			{ done: false, sets_done: 0, sets_prescribed: 3, partial: false },
+			{ done: false, sets_done: 0, sets_prescribed: 3, partial: false, records: [] },
+			{ done: false, sets_done: 0, sets_prescribed: 3, partial: false, records: [] },
 		]);
 		expect(first.body.brief.workout.complete).toBe(false);
 
@@ -3154,12 +3154,20 @@ describe("the living plan — completion, add-ons and the live Eat card", () => 
 		await logLift({ description: "2 × 10 lat pulldown at 110", exercise: "Lat Pulldown", sets: 2, reps: 10, load_lb: 110 });
 		const partial = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
 		expect(partial.body.brief.id).toBe(first.body.brief.id);
-		expect(partial.body.brief.workout.exercises[0].completion).toEqual({
+		expect(partial.body.brief.workout.exercises[0].completion).toMatchObject({
 			done: false,
 			sets_done: 2,
 			sets_prescribed: 3,
 			partial: true,
 		});
+		// And it names the row that ticked it, so the app can draw the truth line under the
+		// prescription and open the record from it (user decision 2026-09-01).
+		const matched = partial.body.brief.workout.exercises[0].completion.records;
+		expect(matched).toHaveLength(1);
+		expect(matched[0]).toMatchObject({ sets: 2, reps: 10, load_lb: 110 });
+		expect(matched[0].id).toMatch(/^[0-9a-f-]{36}$/);
+		// A line nobody has done points at nothing.
+		expect(partial.body.brief.workout.exercises[1].completion.records).toEqual([]);
 		expect(partial.body.brief.workout.exercises[1].completion.done).toBe(false);
 		expect(partial.body.brief.workout.complete).toBe(false);
 

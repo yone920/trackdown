@@ -1,14 +1,25 @@
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
+import { ActivityRow } from '@/components/activity-row';
 import { BigButton, Card, Chip, Chips, GroupHeading, Row, Section, SkeletonLines } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { openExercise } from '@/lib/exercise';
-import { clock } from '@/lib/format';
-import { localDateKey, useAskCoach, useCoachNext, usePrefetchExercises, useUpdateGoal } from '@/lib/queries';
+import { clock, kcal } from '@/lib/format';
+import { matchedRecordIds, truthLine } from '@/lib/plan-truth';
+import {
+  localDateKey,
+  useAskCoach,
+  useCoachNext,
+  useDay,
+  useDeleteRecord,
+  usePrefetchExercises,
+  useUpdateGoal,
+} from '@/lib/queries';
+import { sessionSpan, splitBySource } from '@/lib/training-groups';
 import { C, TABULAR } from '@/lib/theme';
-import type { BriefExercise, CoachBrief, ExerciseCompletion } from '@/lib/types';
+import type { BriefExercise, CoachBrief, DayActivity, ExerciseCompletion } from '@/lib/types';
 
 // The day's plan, where the day is (user decision 2026-09-01). It used to be a page of its
 // own behind an accent button at the bottom of Today, which meant the answer to "what
@@ -61,9 +72,20 @@ export function PlanSection() {
    * two screens later.
    */
   const [replaceArmed, setReplaceArmed] = useState(false);
+  /**
+   * Which plan row is showing its records. A row opens what was logged against it rather
+   * than navigating away: the log is the answer to the line above it, and taking the
+   * reader off the page to see it is what the two-section layout was already doing wrong.
+   */
+  const [openPlanRow, setOpenPlanRow] = useState<number | null>(null);
 
 
   const coach = useCoachNext();
+  // The day, for the log that hangs off the plan. The same query Today runs, so this costs
+  // no extra request.
+  const date = localDateKey();
+  const day = useDay(date);
+  const remove = useDeleteRecord();
   const askCoach = useAskCoach();
   const updateGoal = useUpdateGoal();
 
@@ -83,6 +105,26 @@ export function PlanSection() {
   // already there rather than a round trip (lib/queries.ts §usePrefetchExercises). The
   // finisher goes on the list too: most of its items resolve to nothing and warm nothing,
   // and the ones that do resolve are the ones a person is most likely to be unsure about.
+  // What the plan and the log come to, together. The MATCHING is the server's — it is the
+  // same computation the ticks are made from (backend services/coach/completion.ts), and a
+  // second matcher in the app would eventually disagree with the tick beside it.
+  // Optional all the way down on purpose: this section is drawn while the day is still in
+  // flight, and a half-arrived payload is not a reason to take the plan off the screen.
+  const { logged } = splitBySource(day.data?.items?.activities ?? []);
+  const span = sessionSpan(logged);
+  const byId = useMemo(
+    () => new Map(logged.filter((activity) => activity.id).map((activity) => [activity.id as string, activity])),
+    [logged],
+  );
+  const offPlan = useMemo(() => {
+    const matched = matchedRecordIds(brief?.workout?.exercises ?? []);
+    return logged.filter((activity) => !activity.id || !matched.has(activity.id));
+  }, [logged, brief]);
+
+  /** A logged row opens for a correction, the same door the full log uses. */
+  const correct = (id: string) =>
+    router.push({ pathname: '/log', params: { editDate: date, editId: id, editKind: 'activity' } });
+
   usePrefetchExercises([
     ...(brief?.workout?.exercises ?? []).map((exercise) => ({
       id: exercise.exercise_id,
@@ -229,7 +271,14 @@ export function PlanSection() {
           day: a done item is dimmed with a ✓, a half-done one says how far in it is, and
           a finished plan says so above a list that is still all there. */}
       {brief?.workout ? (
-        <Section title="Do" summary={brief.workout.targets?.join(' · ') || null}>
+        <Section
+          title="Training"
+          summary={
+            logged.length === 0
+              ? brief.workout.targets?.join(' · ') || null
+              : `${kcal(day.data?.earned ?? 0)} kcal earned`
+          }
+          note={span}>
           <Card style={{ paddingVertical: 4 }}>
             <GroupHeading
               label={brief.workout.type ?? 'Session'}
@@ -248,6 +297,14 @@ export function PlanSection() {
                   <Row
                     testID={`coach-do-${index}`}
                     title={exercise.name}
+                    // The NAME still opens the sheet; the ROW opens what was logged against
+                    // this line (user decision 2026-09-01). Only once there is something to
+                    // open — an untouched line has nothing behind it.
+                    onPress={
+                      (exercise.completion?.records ?? []).length > 0
+                        ? () => setOpenPlanRow((current) => (current === index ? null : index))
+                        : undefined
+                    }
                     onTitlePress={() =>
                       openExercise(router, {
                         id: exercise.exercise_id,
@@ -271,6 +328,17 @@ export function PlanSection() {
                     right={tick(exercise.completion)}
                     rightColor={exercise.completion?.done ? C.good : C.mute}
                     divider={index < all.length - 1}>
+                    {/* What was actually logged against this prescription. It is the whole
+                        point of the merge: the ask and the answer on one row, so a load
+                        that dropped partway through reads without holding two lists in
+                        your head. */}
+                    {truthLine(exercise.completion) ? (
+                      <Sub
+                        testID={`coach-truth-${index}`}
+                        style={[{ marginTop: 4, color: C.good }, TABULAR]}>
+                        {truthLine(exercise.completion)}
+                      </Sub>
+                    ) : null}
                     {exercise.is_new ? (
                       <View style={{ marginTop: 6, alignSelf: 'flex-start' }}>
                         <Chip
@@ -287,9 +355,52 @@ export function PlanSection() {
                       </View>
                     ) : null}
                   </Row>
+                  {/* The records themselves, opened from the row. Every one of them, because
+                      a split record is two rows against one prescribed line and the second
+                      is not a footnote — each with its evidence, its correction and its ✕,
+                      exactly as it reads in the full log. */}
+                  {openPlanRow === index ? (
+                    <View testID={`coach-records-${index}`} style={{ paddingLeft: 12 }}>
+                      {(exercise.completion?.records ?? [])
+                        .map((record) => byId.get(record.id))
+                        .filter((activity): activity is DayActivity => Boolean(activity))
+                        .map((activity, position, all) => (
+                          <ActivityRow
+                            key={activity.id ?? position}
+                            activity={activity}
+                            last={position === all.length - 1}
+                            showDelta={false}
+                            onPress={() => correct(activity.id as string)}
+                            onDelete={() => remove.mutate({ kind: 'activity', id: activity.id as string })}
+                          />
+                        ))}
+                    </View>
+                  ) : null}
                 </View>
               </View>
             ))}
+            {/* Everything logged that no line of the plan asked for — the extra set, the
+                walk home, the whole session on a day the plan said rest. It joins the SAME
+                card, because nothing the user actually did should render in a second
+                section (user decision 2026-09-01). */}
+            {offPlan.length > 0 ? (
+              <View testID="coach-also">
+                <GroupHeading label="Also" right={`${offPlan.length} logged`} />
+                {offPlan.map((activity, position, all) => (
+                  <ActivityRow
+                    key={activity.id ?? position}
+                    activity={activity}
+                    last={position === all.length - 1}
+                    showDelta={false}
+                    onPress={activity.id ? () => correct(activity.id as string) : undefined}
+                    onDelete={
+                      activity.id ? () => remove.mutate({ kind: 'activity', id: activity.id as string }) : undefined
+                    }
+                  />
+                ))}
+              </View>
+            ) : null}
+
             {/* An empty Do list is either a rest day or a brief that failed to fill
                 itself in. The second one is never drawn as blank space: the server
                 refuses to store it, and if one ever reaches here it says so. */}

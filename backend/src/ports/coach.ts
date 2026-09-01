@@ -85,7 +85,19 @@ export interface CoachToday {
 	 * 2026-08-31: the brief is a plan with a tick beside each line, and a brief first asked
 	 * for *after* the session must acknowledge the session rather than call the day rest).
 	 */
-	logged: { exercise: string | null; exercise_id: string | null; sets: number | null; category: string | null }[];
+	logged: {
+		exercise: string | null;
+		exercise_id: string | null;
+		sets: number | null;
+		category: string | null;
+		/** The row itself, so the completion can name which records ticked a line off. */
+		id?: string | null;
+		logged_at?: string | null;
+		reps?: number | null;
+		load_lb?: number | null;
+		duration_min?: number | null;
+		kcal?: number | null;
+	}[];
 	/** Protein target for the day, so the model can talk about what is LEFT rather than the total. */
 	protein_target_g: number | null;
 }

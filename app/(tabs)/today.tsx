@@ -123,6 +123,8 @@ export default function Today() {
   // workouts depending on which page you opened it from (user decision 2026-09-01).
   const { logged, health } = splitBySource(view.items.activities);
   const span = sessionSpan(logged);
+  // The plan absorbs the log when there is one — the totals move onto its own header.
+  const hasPlan = !!coachNext.data?.brief;
   const moves = logged.length + health.length;
   // How the day is going, in one line each. Facts only: no verdict, nothing owed.
   const doneLine =
@@ -263,12 +265,18 @@ export default function Today() {
           then quoted a different one underneath, out of an older generation of the coach's
           brief; that guidance now lives behind the door, a screen away from the number
           that counts. Two disagreeing calorie figures on one card is worse than none. */}
-      <SummaryRow
-        testID="today-done"
-        title="Done"
-        line={doneLine}
-        onPress={() => router.push('/today/training')}
-      />
+      {/* With a plan, the training section IS the log: every line carries what was done
+          under what was asked for, and off-plan work joins the same card (user decision
+          2026-09-01). A second Done row would be the two-section layout coming back. With
+          no plan there is no skeleton to hang the log off, so the door stays. */}
+      {hasPlan ? null : (
+        <SummaryRow
+          testID="today-done"
+          title="Done"
+          line={doneLine}
+          onPress={() => router.push('/today/training')}
+        />
+      )}
       <SummaryRow
         testID="today-eat"
         title="Eat"

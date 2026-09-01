@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { completionFor, completionOf, matchesPlanned, planIsComplete, sameMovement } from "./completion.js";
+import {
+	completionFor,
+	completionOf,
+	matchesPlanned,
+	planIsComplete,
+	sameMovement,
+	type LoggedExercise,
+} from "./completion.js";
 
 // Ticking the plan off against the log (user decision 2026-08-31 §A1). Pure: a Do list and
 // a day's rows in, a tick per line out.
@@ -51,6 +58,7 @@ describe("the completion state of one line", () => {
 			sets_done: 0,
 			sets_prescribed: 3,
 			partial: false,
+			records: [],
 		});
 	});
 
@@ -60,6 +68,7 @@ describe("the completion state of one line", () => {
 			sets_done: 2,
 			sets_prescribed: 4,
 			partial: true,
+			records: [],
 		});
 	});
 
@@ -88,6 +97,7 @@ describe("the completion state of one line", () => {
 			sets_done: 0,
 			sets_prescribed: null,
 			partial: false,
+			records: [],
 		});
 	});
 
@@ -116,5 +126,71 @@ describe("the plan as a whole", () => {
 	it("keeps the line's own fields beside the tick", () => {
 		const [first] = completionOf([planned("Bench Press", 3)], [logged("Bench Press", 3)]);
 		expect(first).toMatchObject({ name: "Bench Press", sets: 3, completion: { done: true } });
+	});
+});
+
+describe("which records ticked a line off", () => {
+	// User decision 2026-09-01: the plan and the log are ONE section — a checked line shows
+	// what was actually done under what was asked for, and tapping it opens those records.
+	// The app is handed the matching rather than re-deriving it: two matchers would
+	// eventually disagree about the same row, and the tick would stop meaning the truth line.
+	const row = (over: Partial<LoggedExercise> = {}): LoggedExercise => ({
+		exercise: "Chest Press Machine",
+		exercise_id: null,
+		id: "a1",
+		logged_at: "2026-09-01T13:00:00.000Z",
+		sets: 2,
+		reps: 10,
+		load_lb: 85,
+		duration_min: null,
+		kcal: 60,
+		...over,
+	});
+
+	it("names every matched row, with the numbers its line will show", () => {
+		const completion = completionFor(planned("Chest Press Machine", 4), [row()]);
+		expect(completion.records).toEqual([
+			{
+				id: "a1",
+				logged_at: "2026-09-01T13:00:00.000Z",
+				sets: 2,
+				reps: 10,
+				load_lb: 85,
+				duration_min: null,
+				kcal: 60,
+			},
+		]);
+	});
+
+	it("carries BOTH halves of a split record against the one line that prescribed it", () => {
+		// The drop set, corrected into two rows (migration 0018). One prescribed line, two
+		// records, and both have to be reachable from it.
+		const completion = completionFor(planned("Chest Press Machine", 4), [
+			row({ id: "a1", logged_at: "2026-09-01T13:00:00.000Z", load_lb: 85 }),
+			row({ id: "a2", logged_at: "2026-09-01T13:05:00.000Z", load_lb: 70 }),
+		]);
+		expect(completion.done).toBe(true);
+		expect(completion.sets_done).toBe(4);
+		expect(completion.records.map((record) => record.id)).toEqual(["a1", "a2"]);
+		expect(completion.records.map((record) => record.load_lb)).toEqual([85, 70]);
+	});
+
+	it("puts them in the order they were logged, whatever order they arrive in", () => {
+		const completion = completionFor(planned("Chest Press Machine", 4), [
+			row({ id: "late", logged_at: "2026-09-01T13:05:00.000Z" }),
+			row({ id: "early", logged_at: "2026-09-01T13:00:00.000Z" }),
+		]);
+		expect(completion.records.map((record) => record.id)).toEqual(["early", "late"]);
+	});
+
+	it("says nothing it cannot point at: a row with no id is counted, never listed", () => {
+		const completion = completionFor(planned("Chest Press Machine", 4), [row({ id: null, sets: 4 })]);
+		expect(completion.done).toBe(true);
+		expect(completion.sets_done).toBe(4);
+		expect(completion.records).toEqual([]);
+	});
+
+	it("lists nothing against a line nobody has done", () => {
+		expect(completionFor(planned("Lat Pulldown", 3), [row()]).records).toEqual([]);
 	});
 });

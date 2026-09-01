@@ -167,8 +167,10 @@ one.
   deliberately a dead end for everything but navigation. **Nothing on Home can generate a
   plan** — the button is a door.
 - **Today** — the working page for the open day: the header, the goal, calories left, the
-  *Right now* reading, **Do** (the plan, ticked off, with an *Adjust* door into the logger),
-  then **one line each** for Done and Eat, each opening its full log. There is no separate
+  *Right now* reading, the **training section** — the plan, ticked off, each done line
+  showing what was actually logged under what was asked for and opening those records, with
+  off-plan work under "Also" in the same card — and then **one line for Eat**, opening its
+  log. On a day with no plan the training section is a compact row with a door instead. There is no separate
   coach page: the plan and the record of what you did are two halves of one day, and *Start
   today's workout* on this page is the only generator in the app. Deliberately short — the
   full logs, the day arc, the body numbers and the weight card were all taken off it

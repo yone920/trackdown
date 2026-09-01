@@ -380,11 +380,32 @@ export type DayLogView = {
  * How much of a prescribed line has been done today. Computed server-side against the day's
  * log on every read, so the tick follows a correction or a delete without asking.
  */
+/** One logged record that ticked a plan line off (backend services/coach/completion.ts). */
+export type CompletionRecord = {
+  id: string;
+  logged_at: string | null;
+  sets: number | null;
+  reps: number | null;
+  load_lb: number | null;
+  duration_min: number | null;
+  kcal: number | null;
+};
+
 export type ExerciseCompletion = {
   done: boolean;
   sets_done: number;
   sets_prescribed: number | null;
   partial: boolean;
+  /**
+   * The rows that matched, in the order they were logged — what the checked line's truth
+   * line says, and what tapping it opens (user decision 2026-09-01). Several is normal: a
+   * drop set corrected into two records is two rows against one prescribed line.
+   *
+   * The server computes this; the app never re-derives the matching. Optional for one
+   * release, because an older server sends a completion without it — and "I do not know
+   * which rows" is not the same as "no rows matched".
+   */
+  records?: CompletionRecord[];
 };
 
 export type BriefExercise = {

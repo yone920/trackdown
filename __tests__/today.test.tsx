@@ -342,10 +342,11 @@ describe('Today — the plan and the day on one page', () => {
     await waitFor(() => expect(screen.getByText('Pull day')).toBeTruthy());
     expect(screen.getByTestId('coach-do-0')).toBeTruthy();
     expect(screen.getByText('Lat Pulldown')).toBeTruthy();
-    // Done and Eat are one line each, with a door (user decision 2026-09-01).
-    expect(screen.getByTestId('today-done-line')).toHaveTextContent(/1 move/);
+    // With a plan, the training section IS the log: there is no second Done row, and the
+    // day's totals sit on the plan's own header (user decision 2026-09-01).
+    expect(screen.queryByTestId('today-done')).toBeNull();
+    expect(screen.getByText(/264 kcal earned/)).toBeTruthy();
     expect(screen.getByTestId('today-eat')).toBeTruthy();
-    expect(screen.queryByText('Bench Press')).toBeNull();
     // And the three things that came off the page are off it.
     expect(screen.queryByText('The day so far')).toBeNull();
     expect(screen.queryByText('Body')).toBeNull();
@@ -484,5 +485,33 @@ describe('Today — the doors, and what is no longer on the page', () => {
     expect(screen.queryByTestId('coach-context')).toBeNull();
     expect(screen.queryByTestId('coach-photo')).toBeNull();
     expect(screen.queryByTestId('coach-type')).toBeNull();
+  });
+});
+
+describe('Today — the Done door survives only where there is no plan', () => {
+  // The plan absorbs the log when there is one (user decision 2026-09-01). On a day nobody
+  // has asked for a plan there is no skeleton to hang it off, so the compact door stays.
+
+  function serveDay(day: unknown, plan: unknown) {
+    mockApi.mockImplementation((path: string) => {
+      if (path.startsWith('/api/day/')) return Promise.resolve(day);
+      if (path === '/api/week') return Promise.resolve(makeWeek());
+      if (path === '/api/goals') return Promise.resolve({ active: [], history: [], no_goal: true });
+      if (path === '/api/profile') return Promise.resolve({ id: 'u', targets: {} });
+      if (path === '/api/coach/next') return Promise.resolve(plan);
+      return Promise.resolve(null);
+    });
+  }
+
+  it('keeps the Done row and its door on a no-plan day', async () => {
+    serveDay(
+      makeDay({ earned: 264, items: { meals: [], weights: [], activities: [lift()] } }),
+      { date: '2026-08-30', brief: null, stale: false },
+    );
+    renderToday();
+
+    await waitFor(() => expect(screen.getByTestId('today-done-line')).toHaveTextContent(/264 kcal earned/));
+    fireEvent.press(screen.getByTestId('today-done'));
+    expect(mockPush).toHaveBeenCalledWith('/today/training');
   });
 });

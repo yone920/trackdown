@@ -21,12 +21,22 @@ export function ActivityRow({
   last,
   onPress,
   onDelete,
+  showDelta = true,
 }: {
   activity: DayActivity;
   /** The last row under a heading draws no divider. */
   last: boolean;
   onPress?: () => void;
   onDelete?: () => void;
+  /**
+   * The "+5 lb" / "−2 sets" line against last time. **Off inside the merged training
+   * card** (user decision 2026-09-01): there the prescription sits directly above the
+   * truth line, so the gap between what was asked for and what was done reads off the row
+   * itself, and a third comparison against a different baseline is noise on top of it.
+   * On the full log screen and on a closed Day there is no prescription to read it
+   * against, so it stays.
+   */
+  showDelta?: boolean;
 }) {
   const router = useRouter();
   return (
@@ -53,7 +63,7 @@ export function ActivityRow({
       onDelete={onDelete}
       deleteLabel={activity.exercise ?? activity.description}
       divider={!last}>
-      {activity.delta_vs_last ? (
+      {showDelta && activity.delta_vs_last ? (
         <Sub style={{ marginTop: 3, color: deltaColor(activity.delta_vs_last) }}>
           {activity.delta_vs_last.text}
         </Sub>

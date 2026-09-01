@@ -87,6 +87,58 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-01 — the plan and the log are one section (`wp-plan-log-merge`)
+
+Today had a **Do** list and a **Done** row, and they were two views of the same facts. The
+plan said *Chest Press Machine · 85 lb · 4 × 10*; the log said *2 × 10 · 85 lb* and
+*2 × 10 · 70 lb*. To see that the load had dropped partway through, the reader had to hold
+both lists in their head and match them by name — which is exactly the work the server had
+already done, because that is how the ✓ gets there.
+
+> "if it's done, it's checked, you can click it, you can see the log, everything I logged
+> about it"
+
+**The plan is the skeleton and the log hangs off it.**
+
+- Each prescribed line keeps its name (still a door to the sheet) and its prescription. Once
+  something has been logged against it, a **truth line** appears underneath — "Done 8:02a ·
+  2 × 10 @ 85 + 2 × 10 @ 70" — and **tapping the row** opens the records themselves, each
+  with its evidence, its correction and its ✕. Tapping the NAME still opens the exercise
+  sheet; the two taps do different things and always did.
+- **Several records against one line is the case this is for.** A drop set corrected into
+  two rows (migration 0018) is two records against one prescribed line, and printing only
+  the first would be the double-counting bug wearing a new hat. Both are on the line and
+  both are reachable.
+- **Off-plan work joins the same card**, under "Also", with the full logged row treatment —
+  the extra set, the walk home, cardio nobody prescribed. Nothing the user actually did
+  renders in a second section any more.
+- The section header carries the totals the Done row used to: "569 kcal earned" with the
+  session's span beside it. **The compact Done row disappears whenever a plan exists.** On a
+  no-plan day there is no skeleton to hang the log off, so the row and its door stay exactly
+  as they were, and `app/today/training.tsx` remains the full log behind them.
+- The **delta chips** ("−2 sets", "−3 min") are off inside the merged card. The prescription
+  sits directly above the truth line, so planned-versus-actual reads off the row itself; a
+  third comparison against a different baseline is noise on top of it. They stay on the full
+  log screen and on a closed Day, where there is no prescription to read against.
+  Completion math — the ✓, "2 of 4 sets", "5 of 6 done" — is untouched.
+
+**The app never matches anything.** The server already links plan items to logged records to
+make the tick, and `ExerciseCompletion.records` now carries those matches out with it —
+ids, times and numbers, oldest first. Additive and optional the whole way down, so an older
+app tolerates it and an older server just means no truth line rather than a crash. A second
+matcher in the app would eventually disagree with the tick sitting beside it, and then the
+line would stop meaning what it says.
+
+Off-plan work is a **set difference on ids the server gave**, not a second matching pass.
+
+**Verified** — backend **677** (was 672): the matcher's new half is unit-tested (both halves
+of a split against one line, logged order, a row with no id counted but not listed, nothing
+against an untouched line) and `app.test.ts` checks the ids arrive over HTTP. App **316 →
+335** across **24 suites**: `lib/plan-truth.ts` as a pure formatting rule, and the merged
+card against the real component — truth line, split parts both reachable, name-versus-row
+taps, "Also", header totals, delta chips gone, and the no-plan day keeping its door.
+`tsc` and `expo lint` clean.
+
 ### 2026-09-01 — the working page gets out of its own way (`wp-today-cleanup`)
 
 The merged Today page, over Metro, with screenshots. Five corrections, and four of them

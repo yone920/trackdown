@@ -328,6 +328,15 @@ function todayFrom(view: DayView): CoachToday {
 			exercise_id: activity.exercise_id,
 			sets: activity.sets,
 			category: activity.category,
+			// Carried so the completion can say WHICH rows ticked a line off, not just how
+			// many sets they came to (user decision 2026-09-01: the plan is the skeleton and
+			// the log hangs off it, so every checked line has to reach its records).
+			id: activity.id,
+			logged_at: activity.logged_at,
+			reps: activity.reps,
+			load_lb: activity.load_lb,
+			duration_min: activity.duration_min,
+			kcal: activity.kcal,
 		})),
 	};
 }
