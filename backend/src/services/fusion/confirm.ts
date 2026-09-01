@@ -233,6 +233,9 @@ const PROFILE_FIELD_COLUMNS = [
 	// How long a normal session is (migration 0014). A plan field like the rest: stated by
 	// talking, dated in stated_at, and read by the coach's session sizing.
 	"session_minutes",
+	// The weekly cardio aim (migration 0016). The same story again: stated by talking, dated
+	// in stated_at, and the reason the 150 on Progress can say whether anybody chose it.
+	"cardio_minutes_target",
 	"environment",
 	"equipment",
 	"eatback",

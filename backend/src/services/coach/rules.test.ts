@@ -4,6 +4,7 @@ import { activity, daysAgo, facts, meal, TODAY, weight } from "../../test/fixtur
 import { computeFeatures, type CoachFeatures } from "./features.js";
 import {
 	buildRules,
+	cardioNextMinutes,
 	cardioRule,
 	coverageRule,
 	DEFAULT_SESSION_MINUTES,
@@ -110,9 +111,40 @@ describe("the cardio rule — the week, not yesterday", () => {
 			cardioTargetMin: 150,
 		});
 		const rule = cardioRule(features);
-		// 120 min short, but the last session was 30 min: +10 % is 35, and that is the cap.
+		// Thirty minutes of running is sixty EQUIVALENT minutes (×2), so the week is 90 short
+		// rather than 120 — the whole point of counting a run as harder than a walk. The step
+		// is still one safe step on the last session: +10 % of 30 is 35, and that is the cap.
 		expect(rule.minutes_today).toBe(35);
-		expect(rule.text).toContain("120 short");
+		expect(rule.text).toContain("60 of 150 equivalent min");
+		expect(rule.text).toContain("(30 running×2)");
+		expect(rule.text).toContain("90 short");
+	});
+
+	it("offers the shortfall in both currencies, because they are the same shortfall", () => {
+		const features = computeFeatures({
+			facts: facts({ activities: [activity(daysAgo(2), { exercise: "Brisk Walk", category: "cardio", duration_min: 30 })] }),
+			cardioTargetMin: 150,
+		});
+		const rule = cardioRule(features);
+		// A brisk walk is moderate, so thirty minutes are thirty and the week is 120 short.
+		expect(rule.text).toContain("30 of 150 equivalent min");
+		expect(rule.text).toContain("(30 brisk)");
+		expect(rule.text).toContain("The whole shortfall is 120 moderate min or 60 hard.");
+		expect(rule.text).toContain("Vigorous work counts double and light work counts half");
+	});
+
+	it("divides the shortfall by the row's own multiplier, so a run is not asked for twice", () => {
+		// 40 equivalent minutes short. Paid in moderate minutes that is 40; paid in running
+		// it is 20 — and the +10 % cap on a 30-minute session does not bind either of them.
+		expect(cardioNextMinutes(40, 30)).toBe(33);
+		expect(cardioNextMinutes(40, 30, 2)).toBe(20);
+		// Light work is the other way: half as much credit, so twice as many minutes — up to
+		// the cap, which is what stops a stroll being prescribed for eighty minutes.
+		expect(cardioNextMinutes(40, 30, 0.5)).toBe(33);
+		expect(cardioNextMinutes(40, 200, 0.5)).toBe(80);
+		// The floor and the "nothing to do" answer are unmoved by the multiplier.
+		expect(cardioNextMinutes(4, 30, 2)).toBe(10);
+		expect(cardioNextMinutes(0, 30, 2)).toBeNull();
 	});
 
 	it("prescribes nothing once the week is already there", () => {
@@ -637,6 +669,7 @@ describe("the coverage rule", () => {
 			label: entry.label ?? "core",
 			days_since: entry.days_since ?? null,
 			last_date: entry.last_date ?? null,
+			sets_7d: entry.sets_7d ?? 0,
 			sets_14d: entry.sets_14d ?? 0,
 			sets_28d: entry.sets_28d ?? 0,
 			unit: entry.unit ?? ("sets" as const),

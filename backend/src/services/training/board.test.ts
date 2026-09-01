@@ -59,7 +59,7 @@ const yoga = (date: string, minutes = 30) =>
 function board(
 	input: Partial<DayFacts>,
 	extra: Partial<Parameters<typeof buildBoard>[0]> = {},
-	featureInput: { cardioTargetMin?: number | null } = {}
+	featureInput: { cardioTargetMin?: number | null; cardioTargetStatedMin?: number | null } = {}
 ): TrainingBoard {
 	const day = facts(input);
 	return buildBoard({ features: computeFeatures({ facts: day, ...featureInput }), facts: day, ...extra });
@@ -311,13 +311,76 @@ describe("the cardio next step — the week, not the last session", () => {
 });
 
 describe("frequency, cardio and body", () => {
-	it("says whether the weekly target was asked for or assumed", () => {
-		expect(board({ activities: [walk(daysAgo(1), 20)] }).cardio.target_stated).toBe(false);
-		expect(
-			board({ activities: [walk(daysAgo(1), 20)] }, { cardioTargetStated: true }).cardio.target_stated
-		).toBe(true);
+	it("says whether the weekly target was asked for, stated, or assumed", () => {
+		const assumed = board({ activities: [walk(daysAgo(1), 20)] }).cardio;
+		expect(assumed.target_stated).toBe(false);
+		expect(assumed.target_source).toBe("default");
+		expect(assumed.weekly_target_min).toBe(150);
+
+		// The profile column: said out loud once, and it beats the guideline.
+		const stated = board({ activities: [walk(daysAgo(1), 20)] }, {}, { cardioTargetStatedMin: 200 }).cardio;
+		expect(stated).toMatchObject({ target_stated: true, target_source: "stated", weekly_target_min: 200 });
+
+		// A goal that names the minutes is the more specific statement and wins over both.
+		const goal = board(
+			{ activities: [walk(daysAgo(1), 20)] },
+			{},
+			{ cardioTargetMin: 120, cardioTargetStatedMin: 200 }
+		).cardio;
+		expect(goal).toMatchObject({ target_stated: true, target_source: "goal", weekly_target_min: 120 });
 	});
 
+
+	it("carries the week in equivalent minutes, with the arithmetic behind it", () => {
+		const result = board({
+			activities: [walk(daysAgo(1), 20), run(daysAgo(2), 15)],
+		}).cardio;
+		// 35 wall-clock minutes; 20 moderate + 15 vigorous = 50 equivalent ones.
+		expect(result.minutes_this_week).toBe(35);
+		expect(result.equiv_minutes_this_week).toBe(50);
+		expect(result.short_by_min).toBe(100);
+		expect(result.equiv_text).toBe("20 incline + 15 running×2");
+		expect(result.alternatives_text).toBe("100 moderate min or 50 hard");
+		expect(result.intensity_mix).toEqual([
+			{ intensity: "moderate", minutes: 20, equiv_minutes: 20 },
+			{ intensity: "vigorous", minutes: 15, equiv_minutes: 30 },
+		]);
+		expect(result.breakdown.map((row) => row.exercise)).toEqual(["Incline Treadmill Walk", "Running"]);
+		// The bars stay wall-clock: they are what a stopwatch said, and the headline is the
+		// thing that is measured against the target.
+		expect(result.weeks.at(-1)?.minutes).toBe(35);
+	});
+
+	it("puts the class, and the rule that decided it, on every cardio row", () => {
+		const rows = board({ activities: [walk(daysAgo(1), 20), run(daysAgo(2), 15)] }).cardio.activities;
+		expect(cardioNamed(board({ activities: [walk(daysAgo(1), 20)] }), "Incline Treadmill Walk")).toMatchObject({
+			intensity: "moderate",
+			intensity_multiplier: 1,
+			intensity_why: "incline treadmill — moderate",
+		});
+		expect(rows.find((row) => row.exercise === "Running")).toMatchObject({
+			intensity: "vigorous",
+			intensity_multiplier: 2,
+			intensity_why: "running — vigorous",
+		});
+		// And the pace overrides the name where a session measured one: 30 min over 1 mile.
+		expect(cardioNamed(board({ activities: [run(daysAgo(1), 30, 1)] }), "Running")).toMatchObject({
+			intensity: "light",
+			intensity_why: "pace 30 min/mi — light",
+		});
+	});
+
+	it("asks a vigorous row for half the minutes a moderate one would owe", () => {
+		// 100 equivalent minutes short after a 15-minute run. Paid in running that is 50
+		// minutes, and the +10 % cap on the last session holds it to 17.
+		const row = cardioNamed(board({ activities: [run(daysAgo(1), 15)] }), "Running");
+		expect(row?.next.minutes).toBe(17);
+		expect(row?.next.why).toContain("This one counts ×2");
+		// The same shortfall against a moderate row is the shortfall itself, capped the same way.
+		const walked = cardioNamed(board({ activities: [walk(daysAgo(1), 15)] }), "Incline Treadmill Walk");
+		expect(walked?.next.minutes).toBe(17);
+		expect(walked?.next.why).not.toContain("counts ×");
+	});
 
 	it("buckets sessions into whole weeks ending today", () => {
 		const result = board({

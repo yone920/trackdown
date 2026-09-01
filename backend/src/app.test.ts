@@ -8,6 +8,7 @@ import { sweepUnlinkedEvidence } from "./services/evidence.js";
 import { setUserPassword } from "./services/password.js";
 import { createLogParser, type ParsedItem } from "./services/parseLog.js";
 import { createFusionAnalyzer } from "./services/fusion/analyze.js";
+import { createProfileReadings } from "./services/readings/dossier.js";
 import { createDayReadings } from "./services/readings/readings.js";
 import { buildCoachPrompt } from "./services/coach/prompt.js";
 import type { FusionResult, FusionRoute, SegmentKind } from "./services/fusion/schema.js";
@@ -40,6 +41,9 @@ const exerciseMedia = createFakeExerciseMediaStore();
 // sharing one would make a Today request eat the answer queued for the next parse.
 const coachLlm = createFakeLlm("fake-coach-model");
 const readings = createDayReadings(coachLlm);
+// The You screen's dossier, on the same fake port as the day readings — in production both
+// run on the coach model, and the tests below count calls on it.
+const profileReadings = createProfileReadings(coachLlm);
 // The brief is its own port (src/ports/coach.ts), so it gets its own fake.
 const coach = createFakeCoach("fake-coach-model");
 
@@ -88,6 +92,7 @@ beforeAll(async () => {
 		evidence: store,
 		exerciseMedia,
 		readings,
+		profileReadings,
 		coach,
 		allowedOrigins: [],
 		version: "test",
@@ -719,6 +724,7 @@ describe("fusion — confirm", () => {
 				carbs_max_g: 50,
 				training_days: 4,
 				session_minutes: null,
+				cardio_minutes_target: null,
 				environment: "gym",
 				equipment: null,
 				eatback: null,
@@ -742,6 +748,44 @@ describe("fusion — confirm", () => {
 		});
 		expect(preference.body.profile.stated_at.diet_style).toBeTruthy();
 		expect(preference.body.profile.constraints).toEqual(["bad left knee"]);
+	});
+
+	// Migration 0016. The 150 min/week on Progress was the WHO's guideline presented as the
+	// user's own number; this is the sentence that makes it theirs.
+	it("takes a spoken weekly cardio aim onto the plan, dated", async () => {
+		const res = await confirm({
+			kind: "preference",
+			text: "I want to get 200 minutes of cardio a week",
+			fields: {
+				diet_style: null,
+				protein_g: null,
+				carbs_max_g: null,
+				training_days: null,
+				session_minutes: null,
+				cardio_minutes_target: 200,
+				environment: null,
+				equipment: null,
+				eatback: null,
+				place_name: null,
+				place_kind: null,
+				experience: null,
+				background: null,
+				reference_loads: null,
+			},
+		});
+		expect(res.status).toBe(201);
+		expect(res.body.profile.cardio_minutes_target).toBe(200);
+		// Stated, with the date a human said it — which is what lets the screen tell a
+		// statement from a default (fix-safearea-target-label).
+		expect(res.body.profile.stated_at.cardio_minutes_target).toBeTruthy();
+
+		// And the board now measures the week against their number rather than the guideline.
+		const board = await request(app).get("/api/training/board?tz=0").set(auth);
+		expect(board.body.cardio).toMatchObject({
+			weekly_target_min: 200,
+			target_source: "stated",
+			target_stated: true,
+		});
 	});
 
 	it("keeps coach context without writing a log row", async () => {
@@ -4634,6 +4678,37 @@ describe("the training board", () => {
 		expect(running.next).toMatchObject({ rule: "cardio", minutes: 33, text: "33 min next" });
 		// Nobody stated a weekly figure, so the target is the WHO's and the tab may say so.
 		expect(res.body.cardio.target_stated).toBe(false);
+		expect(res.body.cardio.target_source).toBe("default");
+	});
+
+	// The week is counted in the currency the target is in: a 10 min/mi run is vigorous, so
+	// thirty minutes of it are sixty (services/coach/cardioIntensity.ts).
+	it("counts the week in equivalent minutes and shows the arithmetic", async () => {
+		const res = await request(app).get(`/api/training/board?tz=${tz}`).set(headers);
+		expect(res.body.cardio.minutes_this_week).toBe(30);
+		expect(res.body.cardio.equiv_minutes_this_week).toBe(60);
+		expect(res.body.cardio.short_by_min).toBe(90);
+		expect(res.body.cardio.equiv_text).toBe("30 running×2");
+		expect(res.body.cardio.alternatives_text).toBe("90 moderate min or 45 hard");
+		expect(res.body.cardio.intensity_mix).toEqual([{ intensity: "vigorous", minutes: 30, equiv_minutes: 60 }]);
+		expect(res.body.cardio.breakdown).toEqual([
+			{
+				exercise: "Running",
+				label: "running",
+				intensity: "vigorous",
+				multiplier: 2,
+				minutes: 30,
+				equiv_minutes: 60,
+				why: "pace 10 min/mi — vigorous",
+			},
+		]);
+		// And the row says its own class, with the rule that decided it.
+		const running = res.body.cardio.activities.find((row: { exercise: string }) => row.exercise === "Running");
+		expect(running).toMatchObject({
+			intensity: "vigorous",
+			intensity_multiplier: 2,
+			intensity_why: "pace 10 min/mi — vigorous",
+		});
 	});
 
 	it("counts sessions a week, sets per muscle group, cardio minutes and the weigh-ins", async () => {
@@ -4901,5 +4976,112 @@ describe("the corrections, kept", () => {
 		const weightId = saved.body.weight.id;
 		const rows = await db.pool.query(`SELECT id FROM record_corrections WHERE weight_id = $1`, [weightId]);
 		expect(rows.rows).toHaveLength(0);
+	});
+});
+
+// The You screen's two paragraphs (migration 0017). The point of the endpoint is that it is
+// NOT on /api/profile: the profile is invalidated after every confirmed log, and a model
+// call there would be a generation per photographed plate.
+describe("the dossier", () => {
+	const tz = tzForLocalHour(11);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+
+	const dossierAnswer = (known: string, missing: string) => ({ known, missing });
+
+	beforeAll(async () => {
+		const token = await signUp("dossier@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		await request(app).patch("/api/profile").set(headers).send({ training_days: 4, diet_style: "higher protein" });
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({
+				description: "3 × 8 bench press at 145 lb",
+				exercise: "Bench Press",
+				sets: 3,
+				reps: 8,
+				load_lb: 145,
+				kcal: 110,
+				confidence: "high",
+				logged_at: localInstant(addDays(today, -1), "18:05", tz),
+			});
+	}, 60_000);
+
+	it("generates once, stores what it wrote, and costs nothing to read again", async () => {
+		coachLlm.outputs.length = 0;
+		coachLlm.nextOutput = dossierAnswer(
+			"You train four days a week and the log agrees with you.",
+			"Tell me how long a session usually runs and I can size each plan to fit it."
+		);
+		const before = coachLlm.requests.length;
+
+		const first = await request(app).get(`/api/you?tz=${tz}`).set(headers);
+		expect(first.status).toBe(200);
+		expect(first.body.date).toBe(today);
+		expect(first.body.dossier).toMatchObject({
+			known: "You train four days a week and the log agrees with you.",
+			missing: "Tell me how long a session usually runs and I can size each plan to fit it.",
+			model: "fake-coach-model",
+		});
+		expect(coachLlm.requests.length).toBe(before + 1);
+		// The prompt the model was actually given is the real one, over the real sheet.
+		expect(coachLlm.requests.at(-1)?.system).toContain("EXACTLY TWO PARAGRAPHS");
+		expect(coachLlm.requests.at(-1)?.system).toContain("Days a week [stated");
+
+		// Read it again: the sheet has not moved, so neither has the answer, and the port is
+		// not touched at all. This is the whole reason the hash exists.
+		const second = await request(app).get(`/api/you?tz=${tz}`).set(headers);
+		expect(second.body.dossier.known).toBe(first.body.dossier.known);
+		expect(coachLlm.requests.length).toBe(before + 1);
+
+		const stored = await db.pool.query(`SELECT known, missing, kind FROM profile_readings WHERE user_id IS NOT NULL`);
+		expect(stored.rows.some((row) => row.kind === "dossier")).toBe(true);
+	});
+
+	it("is rewritten when the plan changes under it", async () => {
+		const before = coachLlm.requests.length;
+		await request(app).patch("/api/profile").set(headers).send({ session_minutes: 45 });
+
+		coachLlm.nextOutput = dossierAnswer(
+			"You train four days a week, about forty-five minutes at a time.",
+			"Name a weekly cardio number and I can measure the week against yours."
+		);
+		const res = await request(app).get(`/api/you?tz=${tz}`).set(headers);
+		expect(res.body.dossier.known).toContain("forty-five minutes");
+		expect(coachLlm.requests.length).toBe(before + 1);
+		// One row per user, rewritten in place — not a second dossier beside the first.
+		const rows = await db.pool.query(`SELECT COUNT(*)::int AS n FROM profile_readings`);
+		expect(rows.rows[0].n).toBe(1);
+	});
+
+	it("serves the last good paragraphs when the provider is down", async () => {
+		const standing = await request(app).get(`/api/you?tz=${tz}`).set(headers);
+		const known = standing.body.dossier.known;
+
+		// Move the sheet so the cache misses, and make the call fail.
+		await request(app).patch("/api/profile").set(headers).send({ training_days: 5 });
+		coachLlm.nextOutput = { known: "", missing: "" }; // fails the schema's min(1)
+
+		const res = await request(app).get(`/api/you?tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+		// Stale, and stale is the right answer: the page draws its account rows either way.
+		expect(res.body.dossier.known).toBe(known);
+	});
+
+	it("answers null rather than an error when there has never been one", async () => {
+		const token = await signUp("dossier-empty@example.com");
+		coachLlm.nextOutput = { known: "", missing: "" };
+		const res = await request(app).get(`/api/you?tz=${tz}`).set({ Authorization: `Bearer ${token}` });
+		expect(res.status).toBe(200);
+		expect(res.body.dossier).toBeNull();
+	});
+
+	it("is behind the session, like every other /api route", async () => {
+		expect((await request(app).get("/api/you?tz=0")).status).toBe(401);
+	});
+
+	it("refuses a timezone that is not one", async () => {
+		expect((await request(app).get("/api/you?tz=9999").set(headers)).status).toBe(400);
 	});
 });

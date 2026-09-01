@@ -87,6 +87,209 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-08-31 — a body instead of a bar chart, and a page that says who you are (`wp-progress-you-rework`)
+
+Five changes the user asked for after a week on the phone, and the same complaint under
+four of them: the app knew things and said them in the wrong shape. Eleven horizontal bars
+for eleven muscles. Twenty lift rows above the goals. A grid of label-and-value on the
+screen whose first law is that there are no forms. A cardio target of 150 that nobody chose,
+counting a sprint and a stroll as the same minute.
+
+#### A — the coverage ledger, drawn on a body
+
+The **sets-per-muscle bars and the "Overdue a turn · Calves · never · Core · 21 days" line
+under them are gone**, replaced by a front-and-back figure with twelve tappable regions.
+They were the same twelve numbers twice — one list sorted by volume, one by debt — in a
+vocabulary that only reads if you already know the answer. "The whole back of you is grey"
+is a sentence a picture writes in one look.
+
+- **`react-native-body-highlighter` (MIT), and the evidence for it.** Its `package.json`
+  declares one dependency, `react-native-svg ^15.9.0`, which this app already ships at
+  15.12.1; the published build is CommonJS and there is no native module anywhere in it, so
+  Expo Go and the new architecture both run it unchanged. That is the test the brief set, it
+  passed, and the hand-drawn fallback was not needed.
+- **The colour rule is ours** (`lib/body-map.ts`, pure and tested without a renderer). The
+  ledger is the only input — never `frequency.muscles`, which is the catalogue's vocabulary
+  and a different set of buckets, and a map that disagreed with the brief about what is
+  overdue would be two answers to one question. Grey (`track`) is *nothing in four weeks*;
+  above it a three-step accent ramp on the week's sets against the **10–20 band** — under
+  it, in it, past it. A muscle trained ten days ago and not this week is the *faintest step*
+  and not the grey, because grey means "I have never seen this".
+- **Overdue regions carry a 1.2 px accent stroke** — the only thing that distinguishes
+  "never trained" from "not trained this week" on a grey region — and a legend explains
+  every colour, including the outline.
+- **A tap answers with the week**: *"Biceps — 3 sets this week · last trained Tue · target
+  10+/wk"*, in a small card under the figure, dismissed by tapping the same region again.
+- The twelve map onto the package's slugs one-to-one except for two, and those two are a
+  judgement worth reading the note for: it has **no `lats` slug at all**, so `lats` takes
+  `upper-back` (the wing under the shoulder blades) and the ledger's `upper_back` takes
+  `trapezius`. `stretching` stays on the ledger and off the map — it is a category, not a
+  place on a body.
+- `CoverageEntry` gained **`sets_7d`** so the ramp and the sheet read one number. The
+  alternative was the app re-summing `frequency.muscles` over each entry's tokens, which
+  would have put a second copy of `LEDGER_MUSCLES` on the phone.
+
+#### B — six lifts, and a door to the rest (`app/lifts.tsx`)
+
+The board is one row per exercise logged in four weeks. On an account that trains properly
+that is twenty-odd rows sitting between the goals and everything else on the tab, and nobody
+reached the bottom.
+
+Progress keeps **six**, ranked the way the question is asked (`topLifts`): trained this
+week, then the ones **held mid-progression** — a hold with an eta, so there is a specific
+thing being waited for — then the ones **owed a baseline** (`new` or `reference`), then the
+rest. **"All lifts (N) →"** pushes a screen grouped by primary muscle, freshest group first,
+two lines a row (name · trend dot, then load · when) and **no advice line**: twenty "Hold
+135 lb until 3 × 8 twice"s is a to-do list the user did not write (§Principles 8). Anything
+untouched for a **fortnight** folds into *"Not trained lately"* at the end — the board's own
+window is four weeks, so ">4 weeks" would be a group that can never hold a row, and a
+fortnight is where `prescribeLoads` already decides a movement is a `restart`.
+
+The tab's order is now **goals → snapshot strip → Lifts → Cardio → Coverage → Body**, with
+the strip one line of the three numbers the sections below spell out — *"2 of 4 sessions
+this week · 50 of 150 cardio min · −0.8 lb/wk"* — so the tab answers "where do I stand"
+before anything is scrolled to. Every part of it is dropped when it is not known.
+
+#### C — a minute of cardio is not a minute of cardio
+
+150 min/week was the WHO's guideline standing in as though it were a plan, and every minute
+counted the same whether it was a stroll or a set of intervals.
+
+- **`services/coach/cardioIntensity.ts`** classifies deterministically — light ×0.5,
+  moderate ×1, vigorous ×2 — from the catalogue's category and the activity's name, with
+  **pace overriding when a distance was measured**: under 12 min/mi vigorous, 12–17.99
+  moderate, 18 and over light. Bikes, ergs, ellipticals and swims are exempt from the pace
+  rule and read by name, because a 4 min/mi cycling "pace" is not a sprint. A plain "walk",
+  a "jog" and anything unrecognised are **moderate**, which is the honest default, and each
+  answer carries its own `why`.
+- **The week reads equivalent minutes**: *"50 of 150 · 20 brisk + 15 run×2"*, with the
+  breakdown on a tap and *"Still short: 100 moderate min or 50 hard"* under it. `short_by_min`
+  is now the shortfall in equivalent minutes, and `cardioNextMinutes` divides by the
+  activity's own multiplier — so the brief and the board still quote one number, and a user
+  who only ever walks sees exactly the arithmetic they saw yesterday.
+- **`cardio_minutes_target` (migration `0016`)**, nullable, said out loud like every other
+  plan field, extracted on the plan-fields call and **nowhere near the routing union** (the
+  same assertion `session_minutes` carries). `target_source` is `goal` → `stated` →
+  `default`, and the screen says which: *"Standard guideline — tell me yours"*. That is the
+  `daily_calorie_target` lesson applied to the second number that had it.
+
+#### D — the exercise sheet, instant and photographs-first
+
+- **The "How to do it" steps are gone.** Four numbered paragraphs of dataset prose, sitting
+  where the pictures should be, on the screen a person opens standing in a gym. Two
+  photographs and a form video answer "how does this go" faster, and the video is a search,
+  so it works for the movements the dataset never described.
+- The two photos are **full width, stacked and tappable to zoom** (a `Modal`, the same one
+  the Log sheet's lightbox uses — no new dependency). While the row is in flight they are
+  two skeleton tiles of exactly that size, so nothing moves when the bytes land.
+- **`lib/exercise-cache.ts`** writes catalogue rows to a file in the cache directory and
+  reads them back into the query cache before the first screen mounts. `staleTime` and
+  `gcTime` are both `Infinity`: what a bench press works cannot go stale. Hand-rolled rather
+  than `@tanstack/react-query-persist-client` — persisting the whole cache would have meant
+  three packages and would have restored the day, the coach and the goals from disk too, and
+  a stale day is a *wrong* day. Every path in it is best-effort: no file system means no
+  cache means the screen fetches, exactly as before.
+- **`usePrefetchExercises`** warms the row and the first photograph for everything on the
+  coach's plan and the six lifts, in an effect, sequentially, with every failure swallowed.
+
+#### E — You is a dossier, not a form with the inputs taken out
+
+"How you train" and "How you eat" were two cards of label-and-value — *Days a week · 4*,
+*Diet style · —*, *Daily target · 2100* — on the screen whose first law is NO FORMS. And the
+interesting half of a plan is the half nobody has said yet, which a row reading "—" asks for
+about as persuasively as anything can.
+
+`GET /api/you` returns two paragraphs (`services/readings/dossier.ts`, migration `0017`):
+**what is known**, stated facts blended with what four weeks of logs actually show, and
+**what is missing**, every sentence an invitation with the benefit attached — *"Tell me how
+long a session usually runs and I can size each plan to fit it"*, never *"you have not told
+me"*. Page order: dossier → Constraints → Health sync → Account → one **Tell me**.
+
+The sheet the model is given labels every number with where it came from, which is the one
+thing the day sheet does not have to do: a day's calories are measured, but a plan is half
+things the user said and half things the app assumed, and a paragraph that hands a default
+back as a statement is the `daily_calorie_target` bug in prose.
+
+**Decisions**
+
+- **A dossier is not a day reading.** `profile_readings` is keyed `(user_id, kind)`;
+  keying it by date would regenerate it at every local midnight, for ever, to say the same
+  thing about a profile nobody touched.
+- **It is not a field on `GET /api/profile`.** The profile is invalidated after every
+  confirmed log, so a generated paragraph living there would be a model call per meal. `you`
+  joined `invalidateAfterLog` instead: the read is cheap and the server decides whether the
+  paragraph actually changed.
+- **`PROMPT_FINGERPRINT` now covers all three prompts**, `9bbc420b` → `ea19e0af`. One
+  fingerprint rather than three is deliberately blunt: every cached *day* reading is
+  rewritten once, on its next read, and the alternative is three things to get wrong instead
+  of one. (A literal NUL byte inside the old fingerprint template — which is why `grep` had
+  been treating `readings/prompt.ts` as binary — went with it.)
+- **The board's cardio fields hang off `cardio` and are all additive.** `short_by_min` is
+  the one whose *meaning* moved, and for a week of moderate work it is the same number it
+  always was.
+- **The lifts board narrows on Progress and nowhere else.** `GET /api/training/board` still
+  returns every row; the six are the app's choice, so an older phone is unaffected and the
+  ranking can change without a deploy.
+- **Two new dependencies**, both with a reason: `react-native-body-highlighter` (MIT) for
+  the figure — see the evidence above — and `expo-file-system`, which was already in the
+  tree transitively and is now declared, because a module this app imports directly should
+  be a dependency it names.
+- Two migrations, `0016` and `0017`.
+
+**Tests** — 669 passing, 2 skipped in `backend` (was 623/2); **255 passing in the app** (was
+224).
+
+- `src/services/coach/cardioIntensity.test.ts` (new): every rule in the table, the pace
+  override in both directions, the machine exemption, the unrecognised default, the
+  equivalent arithmetic, `equivalentText` in all three multiplier shapes and the
+  alternatives line.
+- `src/services/coach/features.test.ts`, `rules.test.ts`, `training/board.test.ts`: a mixed
+  week's equivalent minutes, the shortfall in them, the three target sources and their
+  precedence, the next step divided by the activity's own multiplier with the cap and the
+  floor still holding — and the six-history agreement between `buildBoard` and `buildRules`
+  still passing, which is the test that design exists for.
+- `src/services/fusion/fusion.test.ts`: the new plan field's bounds and default, and its
+  absence from the routing union.
+- `src/services/readings/readings.test.ts`: the dossier schema inside the 1,500-byte
+  budget, the new pinned fingerprint, the two-paragraph / no-list / invitation rules as
+  strings, and the sheet carrying the stated facts and the observed patterns and no ids.
+- `src/app.test.ts`: `GET /api/you` generating once and then costing **zero** further port
+  calls, regenerating when the profile moves, 401ing unauthenticated, and returning the
+  stale row when the provider fails; the cardio wire shape for a mixed week; and *"I want
+  200 minutes of cardio a week"* reaching the column through analyze → confirm with
+  `stated_at` set and the board then reading `target_source: "stated"`.
+- `anthropic.readings.contract.test.ts`: the dossier against the **real model**, asserting
+  two paragraphs, no bullet characters, no obligation phrasings, and a second paragraph that
+  reads as an invitation. Four for four.
+- `__tests__/body-map.test.ts` (new, 11) and `__tests__/lifts.test.tsx` (new, 5): the ramp
+  at every boundary, the slug map with no region claiming another's path, the detail line,
+  the overdue sort with "never" always first — and the grouped screen with its fortnight
+  fold, its trend dots and the absent advice line.
+- `__tests__/progress.test.tsx` (23 → 30): the figure coloured from the ledger front and
+  back with the legend, the tap and its sheet, the overdue line, the bars and the old text
+  list both **absent**; equivalent minutes with the provenance and the breakdown on a tap;
+  the top six with "All lifts (9) · 3 more" and the push it does; and the snapshot strip.
+- `__tests__/progress-sections.test.ts` (23 → 29), `you.test.tsx` (7 → 5, four of them new),
+  `exercise.test.tsx` (6 → 8) and `safe-area.test.tsx` (nine screens → ten).
+
+**Deferred**
+
+- **A cardio row's intensity is not correctable by hand.** It is inferred, it says why, and
+  the way to change it is to say what the session actually was — which is how everything
+  else on this app is corrected.
+- **The dossier has no "why do you say that".** Every fact in it is on a sheet the server
+  built, but nothing links a sentence back to the row it came from.
+- **The body map is one figure, not a history.** It is this week against the band; how a
+  muscle's volume moved over the month is a chart nobody has asked for yet.
+- **`anthropic.fusion.contract.test.ts` › "never returns a meal that is both internally
+  inconsistent and confident" is flaky against the live model, and it was before this
+  branch.** The model intermittently returns `kcal: null` for that lunch — which the schema
+  permits and best-effort logging is built for — and the assertion is `> 0`. Measured: it
+  failed 3 of 5 runs on this branch and 1 of 4 on `98c0f73` with the branch's changes
+  nowhere in the tree. Left alone rather than weakened, because loosening another work
+  package's contract assertion to make this merge green is the wrong trade. Everything else
+  is green.
+
 ### 2026-08-31 — a button that knows, and a page that stops answering unasked (`fix-plan-aware-button`)
 
 Two complaints, one root. Today's accent pill said **"What should I do today?"** to somebody

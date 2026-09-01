@@ -1,9 +1,10 @@
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Linking, Pressable, ScrollView, View } from 'react-native';
+import { useState } from 'react';
+import { Linking, Modal, Pressable, ScrollView, View } from 'react-native';
 
-import { IconChevronLeft } from '@/components/icons';
-import { Card, Section, Skeleton, SkeletonLines } from '@/components/kit';
+import { IconChevronLeft, IconClose } from '@/components/icons';
+import { Card, Section, Skeleton } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { authHeaders, exerciseMediaUrl } from '@/lib/api';
 import { formVideoUrl, NO_EXERCISE_ID } from '@/lib/exercise';
@@ -11,16 +12,25 @@ import { useExercise } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
 
-// The exercise sheet: what the movement is, in pictures and in words.
+// The exercise sheet: what the movement is, in pictures.
 //
 // Reached by tapping an exercise name anywhere it is drawn — the coach's Do list, Today,
 // Day, the DayLog. It is a *reference*, not a record: nothing here is about this user, so
 // there is no goal, no verdict and nothing to confirm.
 //
-// Two positions, the steps, the muscles, the kit. The photographs and the steps come from
-// free-exercise-db and are served from our own storage by GET /api/exercises/:id/media/:n
-// — authenticated, like every other image in this app, which is why they carry the
-// session's bearer token.
+// **It renders on the first frame** (user decision 2026-08-31). The name travels with the
+// tap, so the title, the eyebrow and the video button are all correct before any request
+// has finished; the two photographs are skeleton tiles of exactly the right size until
+// their bytes arrive, so nothing on the screen moves when they do. The catalogue row is
+// cached for the session and across launches (lib/exercise-cache.ts), and the rows for
+// everything on the coach's plan and the lifts board are prefetched, so a tap on any of
+// those is a screen that was already there.
+//
+// **The written steps are gone.** They were four numbered paragraphs of free-exercise-db
+// prose above the muscles and the kit — the thing a person is least likely to read on a
+// phone in a gym, sitting where the pictures should be. Two photographs and a form video
+// answer "how does this go" faster than any paragraph, and the video is a search, so it
+// works for the movements the dataset never described.
 //
 // **Name-only mode** is the point of the fallback: an exercise the catalogue has never
 // heard of, or one it has no illustration for (every sport, most cardio machines), still
@@ -65,6 +75,9 @@ export default function ExerciseSheetScreen() {
   // only ever adds to it.
   const name = sheet?.name ?? passedName;
   const media = sheet?.media ?? [];
+  // Which photograph is open full-screen. A picture of a movement is the whole reason for
+  // this screen and a 160 px tile is not enough of one.
+  const [zoomed, setZoomed] = useState<number | null>(null);
 
   return (
     <ScrollView
@@ -96,13 +109,17 @@ export default function ExerciseSheetScreen() {
         </Sub>
       ) : null}
 
-      {/* The two positions, side by side. While the row is being fetched they are two
-          skeleton tiles the same size and shape, so the sheet does not jump when they
-          arrive — the screen is already the right screen, it is only missing pixels. */}
-      <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
+      {/* The two positions, full width and stacked — the pictures are the sheet. While the
+          row is being fetched they are two skeleton tiles of exactly this size, so nothing
+          moves when the bytes land: the screen is already the right screen and is only
+          missing pixels.
+
+          A sheet reached with no catalogue id has nothing to fetch, so it skips straight
+          to the empty state rather than pretending to load photos that cannot exist. */}
+      <View style={{ gap: 10, marginTop: 18 }}>
         {exercise.isLoading ? (
           [0, 1].map((index) => (
-            <View key={index} style={{ flex: 1, aspectRatio: 4 / 3 }}>
+            <View key={index} style={{ width: '100%', aspectRatio: 4 / 3 }}>
               <Skeleton
                 testID={`exercise-photo-skeleton-${index}`}
                 height="100%"
@@ -112,11 +129,14 @@ export default function ExerciseSheetScreen() {
           ))
         ) : media.length > 0 ? (
           media.slice(0, 2).map((frame) => (
-            <View
+            <Pressable
               key={frame.index}
               testID={`exercise-photo-${frame.index}`}
+              accessibilityRole="imagebutton"
+              accessibilityLabel={`${name}, position ${frame.index + 1} — tap to enlarge`}
+              onPress={() => setZoomed(frame.index)}
               style={{
-                flex: 1,
+                width: '100%',
                 aspectRatio: 4 / 3,
                 borderRadius: RADIUS.tile,
                 overflow: 'hidden',
@@ -131,15 +151,14 @@ export default function ExerciseSheetScreen() {
                 // on disk means the second look at an exercise costs no request at all.
                 cachePolicy="disk"
                 recyclingKey={`${id}-${frame.index}`}
-                accessibilityLabel={`${name}, position ${frame.index + 1}`}
               />
-            </View>
+            </Pressable>
           ))
         ) : (
           <View
             testID="exercise-photos-empty"
             style={{
-              flex: 1,
+              width: '100%',
               aspectRatio: 16 / 6,
               borderRadius: RADIUS.tile,
               borderWidth: 1,
@@ -152,31 +171,6 @@ export default function ExerciseSheetScreen() {
           </View>
         )}
       </View>
-
-      {/* The steps */}
-      <Section title="How to do it">
-        <Card>
-          {exercise.isLoading ? (
-            <SkeletonLines testID="exercise-steps-skeleton" lines={4} />
-          ) : sheet && sheet.instructions.length > 0 ? (
-            sheet.instructions.map((step, index) => (
-              <View
-                key={`${index}-${step.slice(0, 12)}`}
-                testID={`exercise-step-${index}`}
-                style={{ flexDirection: 'row', marginTop: index === 0 ? 0 : 12 }}>
-                <Disp size={18} style={{ width: 26, color: C.mute }}>
-                  {String(index + 1)}
-                </Disp>
-                <Body style={{ flex: 1, lineHeight: 15 * 1.55 }}>{step}</Body>
-              </View>
-            ))
-          ) : (
-            <Sub style={{ lineHeight: 18 }}>
-              No written steps for this one — the form video below is the best guide.
-            </Sub>
-          )}
-        </Card>
-      </Section>
 
       {/* Muscles and kit */}
       {sheet && (sheet.primary_muscles.length > 0 || sheet.secondary_muscles.length > 0) ? (
@@ -218,10 +212,36 @@ export default function ExerciseSheetScreen() {
       </Pressable>
 
       {sheet?.source ? (
-        <Sub style={{ marginTop: 14, textAlign: 'center' }}>
-          {`Photos and steps: ${sheet.source.dataset}`}
-        </Sub>
+        <Sub style={{ marginTop: 14, textAlign: 'center' }}>{`Photos: ${sheet.source.dataset}`}</Sub>
       ) : null}
+
+      {/* Full screen, on a tap. A `Modal` and nothing else — the same one the Log sheet's
+          lightbox uses (components/evidence.tsx), so there is no new dependency here. */}
+      <Modal
+        visible={zoomed != null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setZoomed(null)}>
+        <Pressable
+          testID="exercise-photo-zoom"
+          accessibilityLabel="Close photo"
+          onPress={() => setZoomed(null)}
+          style={{ flex: 1, backgroundColor: '#000000EE', alignItems: 'center', justifyContent: 'center' }}>
+          {zoomed == null ? null : (
+            <Image
+              source={{ uri: exerciseMediaUrl(id, zoomed), headers: authHeaders() }}
+              style={{ width: '100%', height: '70%' }}
+              contentFit="contain"
+              cachePolicy="disk"
+              recyclingKey={`${id}-${zoomed}-zoom`}
+              accessibilityLabel={`${name}, position ${zoomed + 1}`}
+            />
+          )}
+          <View style={{ position: 'absolute', top: insets.top + 12, right: SPACE.screen }}>
+            <IconClose size={22} color={C.ink} />
+          </View>
+        </Pressable>
+      </Modal>
     </ScrollView>
   );
 }

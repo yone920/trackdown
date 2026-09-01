@@ -1,11 +1,14 @@
 import {
   cardioColumns,
+  cardioProvenance,
   frequencyColumns,
   goalCard,
   goalSections,
-  muscleBars,
+  liftGroups,
+  liftRank,
   ratePerWeek,
-  untrainedGroups,
+  snapshotStrip,
+  topLifts,
 } from '@/lib/progress-sections';
 import { makeGoal, makeMetric, makeWeek } from './fixtures';
 
@@ -262,19 +265,123 @@ describe('the board sections', () => {
     expect(columns[0]!.fraction).toBe(0.5);
   });
 
-  it('sorts the muscle bars and says what has not been trained at all', () => {
-    const bars = muscleBars([
-      { muscle: 'chest', sets_7d: 6, sets_28d: 18 },
-      { muscle: 'back', sets_7d: 0, sets_28d: 9 },
-    ]);
-    expect(bars[0]).toEqual({ label: 'Chest', fraction: 1, value: '6 this week · 18 in 4' });
-    expect(bars[1]!.fraction).toBe(0.5);
-    expect(untrainedGroups([{ muscle: 'chest' }, { muscle: 'back' }])).toContain('Lats');
-    expect(untrainedGroups([{ muscle: 'chest' }])).not.toContain('Chest');
-  });
-
   it('is muted rather than coloured when there is no goal', () => {
     expect(frequencyColumns(weeks, false)!.columns[0]!.muted).toBe(true);
     expect(cardioColumns(weeks.map((w) => ({ start: w.start, minutes: 30 })), 150, false)!.columns[0]!.muted).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lifts, at two scales (user decision 2026-08-31)
+// ---------------------------------------------------------------------------
+
+type TestLift = {
+  exercise: string;
+  days_since: number;
+  muscle_groups: string[];
+  next: { rule: string; eta: string | null };
+};
+
+const lift = (over: Partial<TestLift> & { exercise: string }): TestLift => ({
+  days_since: 2,
+  muscle_groups: ['chest'],
+  next: { rule: 'step_up', eta: null },
+  ...over,
+});
+
+describe('the lifts board, ranked', () => {
+  it('ranks a lift by what makes it interesting, in the order the question is asked', () => {
+    expect(liftRank(lift({ exercise: 'a', days_since: 6 }))).toBe('this_week');
+    // A hold with an eta is a specific thing being waited for; one without is not.
+    expect(liftRank(lift({ exercise: 'a', days_since: 9, next: { rule: 'hold', eta: '~2 wks' } }))).toBe(
+      'mid_progression',
+    );
+    expect(liftRank(lift({ exercise: 'a', days_since: 9, next: { rule: 'hold', eta: null } }))).toBe('other');
+    expect(liftRank(lift({ exercise: 'a', days_since: 9, next: { rule: 'new', eta: null } }))).toBe('baseline');
+    expect(liftRank(lift({ exercise: 'a', days_since: 9, next: { rule: 'reference', eta: null } }))).toBe('baseline');
+  });
+
+  it('keeps six, newest first inside each rank, and never reorders a tie by accident', () => {
+    const all = [
+      lift({ exercise: 'Restart Row', days_since: 20, next: { rule: 'restart', eta: null } }),
+      lift({ exercise: 'Baseline Curl', days_since: 12, next: { rule: 'new', eta: null } }),
+      lift({ exercise: 'Held Press', days_since: 10, next: { rule: 'hold', eta: '~1 wk' } }),
+      lift({ exercise: 'Bench Press', days_since: 1 }),
+      lift({ exercise: 'Zercher Squat', days_since: 1 }),
+      lift({ exercise: 'Alpha Row', days_since: 1 }),
+      lift({ exercise: 'Deadlift', days_since: 4 }),
+      lift({ exercise: 'Pull-Up', days_since: 6 }),
+    ];
+    expect(topLifts(all).map((row) => row.exercise)).toEqual([
+      // This week, most recent first; the three one-day-old rows break their tie by name.
+      'Alpha Row',
+      'Bench Press',
+      'Zercher Squat',
+      'Deadlift',
+      'Pull-Up',
+      // Then the one held mid-progression, before the baseline and the restart.
+      'Held Press',
+    ]);
+    expect(topLifts(all, 2).map((row) => row.exercise)).toEqual(['Alpha Row', 'Bench Press']);
+  });
+
+  it('groups everything by its primary muscle and folds a fortnight-old lift to the end', () => {
+    const groups = liftGroups([
+      lift({ exercise: 'Bench Press', days_since: 1, muscle_groups: ['chest', 'triceps'] }),
+      lift({ exercise: 'Lat Pulldown', days_since: 3, muscle_groups: ['lats'] }),
+      lift({ exercise: 'Incline Press', days_since: 5, muscle_groups: ['chest'] }),
+      lift({ exercise: 'Calf Raise', days_since: 14, muscle_groups: ['calves'] }),
+      lift({ exercise: 'Nameless Machine', days_since: 2, muscle_groups: [] }),
+    ]);
+    expect(groups.map((group) => group.label)).toEqual([
+      // Freshest group first: chest was trained yesterday.
+      'Chest',
+      'Other',
+      'Lats',
+      'Not trained lately',
+    ]);
+    expect(groups[0]!.lifts.map((row) => row.exercise)).toEqual(['Bench Press', 'Incline Press']);
+    expect(groups.at(-1)).toMatchObject({ key: 'stale', stale: true });
+    expect(groups.at(-1)!.lifts.map((row) => row.exercise)).toEqual(['Calf Raise']);
+  });
+});
+
+describe('the snapshot strip', () => {
+  it('says how often, how much cardio and which way the weight is going', () => {
+    expect(
+      snapshotStrip({
+        frequency: { sessions_this_week: 3, training_days_target: 4 },
+        cardio: { equiv_minutes_this_week: 50, minutes_this_week: 35, weekly_target_min: 150 },
+        body: { trend_per_week: -0.4 },
+      }),
+    ).toBe('3 of 4 sessions this week · 50 of 150 cardio min · −0.4 lb/wk');
+  });
+
+  it('drops every part nobody measured rather than printing a zero', () => {
+    expect(
+      snapshotStrip({
+        frequency: { sessions_this_week: 1, training_days_target: null },
+        cardio: { minutes_this_week: 0, weekly_target_min: 150 },
+        body: { trend_per_week: null },
+      }),
+    ).toBe('1 session this week');
+    expect(snapshotStrip(null)).toBeNull();
+    expect(snapshotStrip({})).toBeNull();
+  });
+
+  // An older server does not send the equivalent figure; the raw minutes are what it has.
+  it('falls back to raw minutes when the server has never heard of equivalent ones', () => {
+    expect(snapshotStrip({ cardio: { minutes_this_week: 35, weekly_target_min: 150 } })).toBe(
+      '35 of 150 cardio min',
+    );
+  });
+});
+
+describe('the cardio target, and where it came from', () => {
+  it('never reports a guideline nobody chose as something the user said', () => {
+    expect(cardioProvenance('default')).toBe('Standard guideline — tell me yours');
+    expect(cardioProvenance('stated')).toBe('From stated');
+    expect(cardioProvenance('goal')).toBe('From your goal');
+    expect(cardioProvenance(undefined)).toBeNull();
   });
 });

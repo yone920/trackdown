@@ -34,6 +34,34 @@ jest.mock('@/lib/auth', () => ({
   signOut: jest.fn(),
 }));
 
+/**
+ * The figure, stubbed: `react-native-body-highlighter` draws SVG paths, and a test that
+ * asserted on path data would be asserting on the package rather than on us. What is ours
+ * is the *data* handed to it — one entry per slug with the colour and the stroke the ledger
+ * decided — and the tap it reports back. So the stub renders one pressable per part,
+ * carrying exactly that.
+ */
+jest.mock('react-native-body-highlighter', () => {
+  const { Pressable } = require('react-native');
+  const ReactModule = require('react');
+  return {
+    __esModule: true,
+    default: ({ data, side, onBodyPartPress }: any) =>
+      ReactModule.createElement(
+        Pressable,
+        { testID: `figure-${side}` },
+        data.map((part: any) =>
+          ReactModule.createElement(Pressable, {
+            key: part.slug,
+            testID: `part-${side}-${part.slug}`,
+            accessibilityLabel: `${part.slug} ${part.styles.fill} ${part.styles.stroke}`,
+            onPress: () => onBodyPartPress(part),
+          }),
+        ),
+      ),
+  };
+});
+
 const BENCH = {
   exercise: 'Bench Press',
   exercise_id: 'ex-bench',
@@ -118,6 +146,17 @@ const WALK: BoardCardioRow = {
   },
 };
 
+/**
+ * The coverage ledger, as the server sends it: chest worked hard this week, biceps lightly,
+ * core three weeks ago and overdue, calves never seen at all.
+ */
+const COVERAGE = [
+  { key: 'calves', label: 'calves', days_since: null, last_date: null, sets_7d: 0, sets_14d: 0, sets_28d: 0, unit: 'sets' as const, overdue: true },
+  { key: 'core', label: 'core', days_since: 21, last_date: '2026-08-10', sets_7d: 0, sets_14d: 0, sets_28d: 3, unit: 'sets' as const, overdue: true },
+  { key: 'chest', label: 'chest', days_since: 1, last_date: '2026-08-30', sets_7d: 12, sets_14d: 18, sets_28d: 18, unit: 'sets' as const, overdue: false },
+  { key: 'biceps', label: 'biceps', days_since: 5, last_date: '2026-08-26', sets_7d: 3, sets_14d: 6, sets_28d: 9, unit: 'sets' as const, overdue: false },
+];
+
 function makeBoard(overrides: Partial<TrainingBoard> = {}): TrainingBoard {
   return {
     date: '2026-08-31',
@@ -135,6 +174,7 @@ function makeBoard(overrides: Partial<TrainingBoard> = {}): TrainingBoard {
         { muscle: 'chest', sets_7d: 6, sets_28d: 18 },
         { muscle: 'triceps', sets_7d: 3, sets_28d: 9 },
       ],
+      coverage: COVERAGE,
     },
     cardio: {
       weeks: [
@@ -142,8 +182,20 @@ function makeBoard(overrides: Partial<TrainingBoard> = {}): TrainingBoard {
         { start: '2026-08-24', minutes: 30 },
       ],
       minutes_this_week: 30,
+      equiv_minutes_this_week: 50,
       weekly_target_min: 150,
-      short_by_min: 120,
+      short_by_min: 100,
+      equiv_text: '20 brisk + 15 run×2',
+      alternatives_text: '100 moderate min or 50 hard',
+      target_source: 'default' as const,
+      breakdown: [
+        { exercise: 'Incline Treadmill Walk', intensity: 'moderate' as const, multiplier: 1, minutes: 20, equiv_minutes: 20 },
+        { exercise: 'Run', intensity: 'vigorous' as const, multiplier: 2, minutes: 15, equiv_minutes: 30 },
+      ],
+      intensity_mix: [
+        { intensity: 'moderate' as const, minutes: 20, equiv_minutes: 20 },
+        { intensity: 'vigorous' as const, minutes: 15, equiv_minutes: 30 },
+      ],
       last: { date: '2026-08-29', pace_min_mi: 10.2, distance_mi: 3 },
       best: { date: '2026-08-20', pace_min_mi: 9.4, distance_mi: 2 },
       activities: [WALK],
@@ -165,12 +217,15 @@ function makeBoard(overrides: Partial<TrainingBoard> = {}): TrainingBoard {
 
 const EMPTY_BOARD = makeBoard({
   lifts: [],
-  frequency: { weeks: [{ start: '2026-08-24', sessions: 0 }], sessions_this_week: 0, average_per_week: 0, training_days_target: null, muscles: [] },
+  frequency: { weeks: [{ start: '2026-08-24', sessions: 0 }], sessions_this_week: 0, average_per_week: 0, training_days_target: null, muscles: [], coverage: [] },
   cardio: {
     weeks: [{ start: '2026-08-24', minutes: 0 }],
     minutes_this_week: 0,
+    equiv_minutes_this_week: 0,
     weekly_target_min: 150,
     short_by_min: 150,
+    target_source: 'default',
+    breakdown: [],
     last: null,
     best: null,
     activities: [],
@@ -385,53 +440,167 @@ describe('Progress — the lifts board', () => {
     });
   });
 
-  it('is a quiet one-liner with nothing lifted', async () => {
+  it('is a quiet one-liner with nothing lifted, and offers no door to an empty room', async () => {
     serve({ board: EMPTY_BOARD });
     renderProgress();
     await waitFor(() => expect(screen.getByText('Nothing lifted in the last four weeks.')).toBeTruthy());
     expect(screen.getByTestId('lifts-empty')).toBeTruthy();
+    expect(screen.queryByTestId('all-lifts')).toBeNull();
+  });
+
+  // The board is one row per exercise logged in four weeks; on a real account that is
+  // twenty rows above the goals, the cardio and the body (user decision 2026-08-31).
+  it('keeps six and sends the rest to their own screen', async () => {
+    const many = Array.from({ length: 9 }, (_unused, index) => ({
+      ...BENCH,
+      exercise: `Lift ${index}`,
+      exercise_id: `ex-${index}`,
+      days_since: index,
+    }));
+    serve({ board: makeBoard({ lifts: many }) });
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('lifts-board')).toBeTruthy());
+
+    expect(screen.getByText('Lift 0')).toBeTruthy();
+    expect(screen.getByText('Lift 5')).toBeTruthy();
+    // Seven days on and it is not "this week"; it is on the other screen.
+    expect(screen.queryByText('Lift 7')).toBeNull();
+    expect(screen.getByTestId('all-lifts').props.accessibilityLabel).toBe('All lifts, 9');
+    expect(screen.getByText('All lifts (9) · 3 more')).toBeTruthy();
+
+    fireEvent.press(screen.getByTestId('all-lifts'));
+    expect(mockPush).toHaveBeenCalledWith('/lifts');
+  });
+
+  it('still offers the door when everything already fits', async () => {
+    serve();
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('all-lifts')).toBeTruthy());
+    expect(screen.getByText('All lifts (2)')).toBeTruthy();
   });
 });
 
-describe('Progress — frequency, cardio and body', () => {
-  it('counts sessions a week and sets per muscle group, and names what has not been trained', async () => {
+describe('Progress — the snapshot strip', () => {
+  it('answers "where do I stand" in one line, above everything it summarises', async () => {
+    serve();
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('snapshot-strip')).toBeTruthy());
+    expect(screen.getByTestId('snapshot-strip').props.children).toBe(
+      '2 of 4 sessions this week · 50 of 150 cardio min · −0.8 lb/wk',
+    );
+  });
+});
+
+describe('Progress — coverage, cardio and body', () => {
+  it('counts sessions a week, and no longer draws a bar per muscle group', async () => {
     serve();
     renderProgress();
     await waitFor(() => expect(screen.getByTestId('frequency')).toBeTruthy());
-    expect(screen.getByText('2 this week of 4')).toBeTruthy();
-    expect(screen.getByText('6 this week · 18 in 4')).toBeTruthy();
-    expect(screen.getByTestId('muscles-untrained').props.children.join('')).toContain('Lats');
-  });
-
-  // The coverage ledger, when the server sends one (user decision 2026-08-31 §B7). It
-  // replaces the older "not trained in four weeks" line rather than sitting beside it:
-  // two lists of absences on one card is one list too many.
-  it('marks the muscles the rotation is overdue, longest first', async () => {
-    serve({
-      board: makeBoard({
-        frequency: {
-          ...makeBoard().frequency,
-          coverage: [
-            { key: 'calves', label: 'calves', days_since: null, sets_14d: 0, sets_28d: 0, unit: 'sets', overdue: true },
-            { key: 'core', label: 'core', days_since: 21, sets_14d: 0, sets_28d: 3, unit: 'sets', overdue: true },
-            { key: 'chest', label: 'chest', days_since: 2, sets_14d: 6, sets_28d: 18, unit: 'sets', overdue: false },
-          ],
-        },
-      }),
-    });
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('muscles-overdue')).toBeTruthy());
-    expect(screen.getByText('Calves · never · Core · 21 days')).toBeTruthy();
-    // One list, not two.
+    expect(screen.getByText('Sessions a week')).toBeTruthy();
+    expect(screen.getByText('0.8 a week over 3 weeks')).toBeTruthy();
+    // The bars and the text list of absences are both gone: the figure says it once.
+    expect(screen.queryByText('6 this week · 18 in 4')).toBeNull();
     expect(screen.queryByTestId('muscles-untrained')).toBeNull();
+    expect(screen.queryByTestId('muscles-overdue')).toBeNull();
+    expect(screen.queryByText('Sets per muscle group · 4 weeks')).toBeNull();
   });
 
-  it('draws cardio against the plan, with the last pace', async () => {
+  // The body map (user decision 2026-08-31). The ledger is the only input, so the tab and
+  // the coach cannot disagree about what is overdue.
+  it('colours every region from the ledger, front and back, with a legend', async () => {
+    serve();
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('body-map')).toBeTruthy());
+
+    expect(screen.getByTestId('figure-front')).toBeTruthy();
+    expect(screen.getByTestId('figure-back')).toBeTruthy();
+    expect(screen.getByTestId('body-map-legend')).toBeTruthy();
+    expect(screen.getByText('10–20')).toBeTruthy();
+    expect(screen.getByText('Overdue a turn')).toBeTruthy();
+
+    // Chest: twelve sets this week, inside the band, so the middle step of the ramp.
+    expect(screen.getByTestId('part-front-chest').props.accessibilityLabel).toBe(
+      'chest #A4561E #23262D',
+    );
+    // Biceps: three sets, under the band — the faintest step, and no outline.
+    expect(screen.getByTestId('part-front-biceps').props.accessibilityLabel).toBe(
+      'biceps #5C3822 #23262D',
+    );
+    // Calves: never in four weeks, and overdue — grey, with the accent stroke.
+    expect(screen.getByTestId('part-front-calves').props.accessibilityLabel).toBe(
+      'calves #2A2E36 #FF7A1A',
+    );
+    // Core: nothing this week but three sets inside the four, so the faintest step and
+    // NOT the grey — grey means "never seen". It is also overdue, so it is outlined, and
+    // it is two paths on one ledger entry, so both of them are.
+    expect(screen.getByTestId('part-front-abs').props.accessibilityLabel).toBe(
+      'abs #5C3822 #FF7A1A',
+    );
+    expect(screen.getByTestId('part-front-obliques').props.accessibilityLabel).toBe(
+      'obliques #5C3822 #FF7A1A',
+    );
+  });
+
+  it('answers a tap on a region with its week, and closes on a second tap', async () => {
+    serve();
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('body-map-hint')).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId('part-front-biceps'));
+    await waitFor(() => expect(screen.getByTestId('body-map-detail')).toBeTruthy());
+    expect(screen.getByTestId('body-map-detail').props.accessibilityLabel).toBe(
+      'Biceps — 3 sets this week · last trained Wed · target 10+/wk',
+    );
+
+    fireEvent.press(screen.getByTestId('part-front-biceps'));
+    await waitFor(() => expect(screen.queryByTestId('body-map-detail')).toBeNull());
+  });
+
+  it('names the overdue regions under the figure, longest debt first', async () => {
+    serve();
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('body-map-overdue')).toBeTruthy());
+    expect(screen.getByTestId('body-map-overdue').props.children).toBe(
+      'Overdue: Calves · never · Core · 21 days',
+    );
+  });
+
+  it('draws cardio in equivalent minutes, with the last pace', async () => {
     serve();
     renderProgress();
     await waitFor(() => expect(screen.getByTestId('cardio')).toBeTruthy());
-    expect(screen.getByText('30 of 150 min')).toBeTruthy();
+    // Fifty, not thirty: a hard fifteen minutes counts double (user decision 2026-08-31).
+    expect(screen.getByText('50 of 150 min')).toBeTruthy();
+    expect(screen.getByText('Equivalent minutes a week')).toBeTruthy();
+    expect(screen.getByTestId('cardio-equiv-text').props.children).toBe('20 brisk + 15 run×2');
     expect(screen.getByTestId('cardio-pace').props.children.join('')).toContain('10.2 min/mi');
+  });
+
+  // The lesson `daily_calorie_target` cost (fix-safearea-target-label): a number nobody
+  // chose must never be reported back as one they did.
+  it('says the 150 is a guideline and not something the user stated', async () => {
+    serve();
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('cardio-provenance')).toBeTruthy());
+    expect(screen.getByTestId('cardio-provenance').props.children).toBe(
+      'Standard guideline — tell me yours',
+    );
+  });
+
+  it('shows what the equivalent minutes are made of, on a tap, and not before', async () => {
+    serve();
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId('cardio-equivalent')).toBeTruthy());
+    expect(screen.queryByTestId('cardio-breakdown')).toBeNull();
+
+    fireEvent.press(screen.getByTestId('cardio-equivalent'));
+    await waitFor(() => expect(screen.getByTestId('cardio-breakdown')).toBeTruthy());
+    expect(screen.getByText('Run · vigorous')).toBeTruthy();
+    expect(screen.getByText('15 min → 30')).toBeTruthy();
+    // The same shortfall said two ways, which is what equivalent minutes buy.
+    expect(screen.getByTestId('cardio-alternatives').props.children).toBe(
+      'Still short: 100 moderate min or 50 hard.',
+    );
   });
 
   // The field report (2026-08-31): "Incline Treadmill Walk · 20 min next" was a row in the

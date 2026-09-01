@@ -174,6 +174,93 @@ describe("cardio", () => {
 	it("does not count a lift as cardio", () => {
 		expect(cardioFeature(facts({ activities: [bench(daysAgo(1))] }), 150).minutes_this_week).toBe(0);
 	});
+
+	// A hundred and fifty minutes a week is a MODERATE-minutes number, and the week has to be
+	// counted in the same currency or the person who runs is told they are behind while the
+	// person who ambles is told they are fine (services/coach/cardioIntensity.ts).
+	it("weighs a mixed week into equivalent minutes", () => {
+		const cardio = cardioFeature(
+			facts({
+				activities: [
+					activity(daysAgo(1), { exercise: "Brisk Walk", category: "cardio", duration_min: 20 }),
+					activity(daysAgo(2), { exercise: "Running", category: "cardio", duration_min: 15 }),
+					activity(daysAgo(3), { exercise: "Stroll", category: "cardio", duration_min: 40 }),
+				],
+			}),
+			150
+		);
+		// 20 wall-clock + 15 + 40 = 75 minutes; 20×1 + 15×2 + 40×0.5 = 70 equivalent ones.
+		expect(cardio.minutes_this_week).toBe(75);
+		expect(cardio.equiv_minutes_this_week).toBe(70);
+		expect(cardio.short_by_min).toBe(80);
+		expect(cardio.equiv_text).toBe("40 stroll×0.5 + 20 brisk + 15 running×2");
+		expect(cardio.alternatives_text).toBe("80 moderate min or 40 hard");
+	});
+
+	it("breaks the week down largest first, with the rule that classed each row", () => {
+		const cardio = cardioFeature(
+			facts({
+				activities: [
+					activity(daysAgo(1), { exercise: "Running", category: "cardio", duration_min: 15 }),
+					activity(daysAgo(2), { exercise: "Brisk Walk", category: "cardio", duration_min: 45 }),
+					// Two sessions of the same thing are one line, summed.
+					activity(daysAgo(3), { exercise: "Brisk Walk", category: "cardio", duration_min: 15 }),
+				],
+			}),
+			150
+		);
+		expect(cardio.breakdown).toEqual([
+			{
+				exercise: "Brisk Walk",
+				label: "brisk",
+				intensity: "moderate",
+				multiplier: 1,
+				minutes: 60,
+				equiv_minutes: 60,
+				why: "brisk walk — moderate",
+			},
+			{
+				exercise: "Running",
+				label: "running",
+				intensity: "vigorous",
+				multiplier: 2,
+				minutes: 15,
+				equiv_minutes: 30,
+				why: "running — vigorous",
+			},
+		]);
+		expect(cardio.intensity_mix).toEqual([
+			{ intensity: "moderate", minutes: 60, equiv_minutes: 60 },
+			{ intensity: "vigorous", minutes: 15, equiv_minutes: 30 },
+		]);
+	});
+
+	it("is unchanged for somebody whose cardio is all moderate", () => {
+		// The property that let this land without rewriting the existing numbers: at ×1 the
+		// equivalent week and the wall-clock week are the same week.
+		const cardio = cardioFeature(facts({ activities: [run(daysAgo(1), 30), run(daysAgo(5), 25)] }), 150);
+		expect(cardio.minutes_this_week).toBe(55);
+		expect(cardio.equiv_minutes_this_week).toBe(55);
+		expect(cardio.short_by_min).toBe(95);
+	});
+
+	// Provenance, not arithmetic — the same distinction `TargetSource` makes about calories.
+	it("says where the weekly target came from: a goal, a statement, or the guideline", () => {
+		const week = facts({ activities: [run(daysAgo(1), 30)] });
+		expect(cardioFeature(week, null, null)).toMatchObject({ weekly_target_min: 150, target_source: "default" });
+		expect(cardioFeature(week, null, 200)).toMatchObject({ weekly_target_min: 200, target_source: "stated" });
+		// A goal is the more specific statement of intent and wins over the standing one.
+		expect(cardioFeature(week, 120, 200)).toMatchObject({ weekly_target_min: 120, target_source: "goal" });
+	});
+
+	it("says nothing about a week nobody has logged, rather than a zero mix", () => {
+		const cardio = cardioFeature(facts(), null);
+		expect(cardio.equiv_minutes_this_week).toBe(0);
+		expect(cardio.breakdown).toEqual([]);
+		expect(cardio.intensity_mix).toEqual([]);
+		expect(cardio.equiv_text).toBe("");
+		expect(cardio.alternatives_text).toBe("150 moderate min or 75 hard");
+	});
 });
 
 describe("adherence over 1, 3 and 7 days", () => {
@@ -295,14 +382,17 @@ describe("the coverage ledger", () => {
 		expect(ledger.map((entry) => entry.key)).toContain("upper_back");
 	});
 
-	it("counts sets in 14 and 28 days, and days since it was last served", () => {
+	it("counts sets in 7, 14 and 28 days, and days since it was last served", () => {
 		const ledger = coverageLedger(
 			facts({ activities: [squat(daysAgo(3), 4), squat(daysAgo(10), 3), squat(daysAgo(20), 5)] })
 		);
 		const quads = find(ledger, "quads");
-		expect(quads).toMatchObject({ days_since: 3, sets_14d: 7, sets_28d: 12, unit: "sets", overdue: false });
+		expect(quads).toMatchObject({ days_since: 3, sets_7d: 4, sets_14d: 7, sets_28d: 12, unit: "sets", overdue: false });
 		// The same rows pay into every muscle they name.
-		expect(find(ledger, "glutes")).toMatchObject({ sets_14d: 7, sets_28d: 12 });
+		expect(find(ledger, "glutes")).toMatchObject({ sets_7d: 4, sets_14d: 7, sets_28d: 12 });
+		// The seven-day count is what the body map colours a region by, so it is counted here
+		// rather than on the phone: LEDGER_MUSCLES' token mapping exists in one place.
+		expect(find(ledger, "chest")).toMatchObject({ sets_7d: 0, sets_28d: 0 });
 	});
 
 	it("folds the catalogue's tags into the words a lifter uses", () => {
@@ -325,6 +415,8 @@ describe("the coverage ledger", () => {
 		const ledger = coverageLedger(facts({ activities: [stretch(daysAgo(1)), stretch(daysAgo(1)), stretch(daysAgo(9))] }));
 		expect(find(ledger, STRETCHING_KEY)).toMatchObject({
 			days_since: 1,
+			// Two stretches on one day are one session, in every window.
+			sets_7d: 1,
 			sets_14d: 2,
 			sets_28d: 2,
 			unit: "sessions",

@@ -21,7 +21,9 @@ import { logRouter } from "./routes/log.js";
 import { profileRouter } from "./routes/profile.js";
 import { trainingRouter } from "./routes/training.js";
 import { weightRouter } from "./routes/weight.js";
+import { youRouter } from "./routes/you.js";
 import type { FusionAnalyzer } from "./services/fusion/analyze.js";
+import type { ProfileReadings } from "./services/readings/dossier.js";
 import type { DayReadings } from "./services/readings/readings.js";
 import type { LogParser } from "./services/parseLog.js";
 
@@ -37,6 +39,8 @@ export interface AppDeps {
 	exerciseMedia: ExerciseMediaStore;
 	/** The two generated sentences on a day, and their cache (WP3). */
 	readings: DayReadings;
+	/** The You screen's dossier, and its cache (migration 0017). */
+	profileReadings: ProfileReadings;
 	/** The on-demand brief behind GET /api/coach/next (WP5). */
 	coach: CoachPort;
 	allowedOrigins: string[];
@@ -56,6 +60,7 @@ export function createApp({
 	evidence,
 	exerciseMedia,
 	readings,
+	profileReadings,
 	coach,
 	allowedOrigins,
 	version,
@@ -111,6 +116,7 @@ export function createApp({
 	app.use(dayRouter(pool, readings));
 	app.use(goalsRouter(pool));
 	app.use(trainingRouter(pool));
+	app.use(youRouter(pool, profileReadings));
 	app.use(coachRouter(pool, coach, readings));
 
 	app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {

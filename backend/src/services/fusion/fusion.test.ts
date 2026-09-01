@@ -358,6 +358,35 @@ describe("the model-facing schema", () => {
 		expect(JSON.stringify(z.toJSONSchema(FusionRouteOutputSchema))).not.toContain("session_minutes");
 	});
 
+	/**
+	 * The weekly cardio aim (migration 0016), on the same second call and for the same
+	 * reason. It exists so that the 150 on Progress can say whether anybody chose it.
+	 */
+	it("carries the weekly cardio target on the second call, not on the routing schema", () => {
+		const fields = ProfileFieldsSchema.parse({
+			diet_style: null,
+			protein_g: null,
+			carbs_max_g: null,
+			training_days: null,
+			session_minutes: null,
+			cardio_minutes_target: 200,
+			environment: null,
+			equipment: null,
+			eatback: null,
+			experience: null,
+			background: null,
+			reference_loads: null,
+		});
+		expect(fields).toMatchObject({ cardio_minutes_target: 200 });
+		// Absent is "nobody said" — which is what makes the 150 a guideline rather than a claim.
+		expect(ProfileFieldsSchema.parse({ ...fields, cardio_minutes_target: undefined })?.cardio_minutes_target).toBeNull();
+		// Zero is a real answer ("I'm not doing cardio right now"); a typo is not.
+		expect(ProfileFieldsSchema.safeParse({ ...fields, cardio_minutes_target: 0 }).success).toBe(true);
+		expect(ProfileFieldsSchema.safeParse({ ...fields, cardio_minutes_target: 5000 }).success).toBe(false);
+		expect(ProfileFieldsSchema.safeParse({ ...fields, cardio_minutes_target: -10 }).success).toBe(false);
+		expect(JSON.stringify(z.toJSONSchema(FusionRouteOutputSchema))).not.toContain("cardio_minutes_target");
+	});
+
 	it("keeps the routing schema to one branch of the union plus a list of bare kinds", () => {
 		const answer = FusionRouteOutputSchema.parse({
 			result: { kind: "weight", weight_lb: 181, confidence: "high" },
@@ -411,7 +440,7 @@ describe("the model-facing schema", () => {
 		const statement = FusionRouteSchema.parse({ kind: "statement", scope: "constraint", text: "bad left knee" });
 		expect(toFusionResult(statement)).toEqual({ kind: "constraint", text: "bad left knee", fields: null });
 		// The plan fields, when there were any, come from the second call.
-		expect(toFusionResult(statement, { fields: { diet_style: "keto", protein_g: null, carbs_max_g: 50, training_days: null, session_minutes: null, environment: null, equipment: null, eatback: null, experience: null, background: null, reference_loads: null, place_name: null, place_kind: null } })).toMatchObject({
+		expect(toFusionResult(statement, { fields: { diet_style: "keto", protein_g: null, carbs_max_g: 50, training_days: null, session_minutes: null, cardio_minutes_target: null, environment: null, equipment: null, eatback: null, experience: null, background: null, reference_loads: null, place_name: null, place_kind: null } })).toMatchObject({
 			kind: "constraint",
 			fields: { diet_style: "keto", carbs_max_g: 50 },
 		});

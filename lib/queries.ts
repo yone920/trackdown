@@ -1,6 +1,9 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Image } from 'expo-image';
+import { useEffect } from 'react';
 
-import { api, tzOffsetMin, upload } from './api';
+import { api, authHeaders, exerciseMediaUrl, tzOffsetMin, upload } from './api';
+import { rememberExercise } from './exercise-cache';
 import type {
   AnalyzeResponse,
   CoachNext,
@@ -20,6 +23,7 @@ import type {
   Profile,
   TrainingBoard,
   WeekView,
+  YouView,
 } from './types';
 
 // Every screen's data, and the only place a URL appears twice (lib/api.ts is the
@@ -39,7 +43,11 @@ export function localDateKey(d: Date = new Date()): IsoDate {
 
 /** Everything a confirmed log can have changed. One list, so no screen goes stale. */
 export function invalidateAfterLog(qc: ReturnType<typeof useQueryClient>): void {
-  for (const key of ['day', 'week', 'days', 'goals', 'profile', 'coach', 'training'])
+  // `you` is on the list because the dossier is written out of the profile, the goals and
+  // four weeks of logs: a stated constraint changes what it should say. The server still
+  // decides whether that is a new paragraph — it hashes its own inputs — so an invalidation
+  // here costs a read and only sometimes a generation.
+  for (const key of ['day', 'week', 'days', 'goals', 'profile', 'coach', 'training', 'you'])
     qc.invalidateQueries({ queryKey: [key] });
 }
 
@@ -98,8 +106,13 @@ export function useDayLog(date: IsoDate) {
 /**
  * GET /api/exercises/:id — the catalogue row behind a tapped exercise name. Skipped when
  * the id is not one (lib/exercise.ts §NO_EXERCISE_ID): the sheet is name-only then, and a
- * request that can only 404 is not worth making. The catalogue does not change while an
- * app is open, so this is cached for the session.
+ * request that can only 404 is not worth making.
+ *
+ * `staleTime: Infinity` and `gcTime: Infinity`, because a catalogue row cannot go stale:
+ * what a bench press works and what it needs is the same answer for every account and does
+ * not change between releases. Each answer is also written to disk
+ * (lib/exercise-cache.ts), so the *first* tap after a cold launch is instant too — which
+ * is the one anybody notices.
  */
 export function useExercise(id: string | null) {
   const known = !!id && UUID.test(id);
@@ -107,11 +120,89 @@ export function useExercise(id: string | null) {
     queryKey: ['exercise', id],
     enabled: known,
     staleTime: Infinity,
-    queryFn: () => api<ExerciseSheet>(`/api/exercises/${id}`),
+    gcTime: Infinity,
+    queryFn: () => fetchExercise(id as string),
   });
 }
 
+async function fetchExercise(id: string): Promise<ExerciseSheet> {
+  const sheet = await api<ExerciseSheet>(`/api/exercises/${id}`);
+  rememberExercise(sheet);
+  return sheet;
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Warms the sheets for the exercises already on screen — the coach's Do list and the lifts
+ * board (user decision 2026-08-31: "prefetch details and the first photo for exercises
+ * visible on the coach plan and lifts board").
+ *
+ * The row and the first photograph, which together are everything the sheet draws above
+ * the fold. Deliberately cheap and deliberately quiet:
+ *
+ *   * `prefetchQuery` with the same `staleTime` is a no-op for anything already cached, so
+ *     the list can be handed over on every render and only ever fetches what is new.
+ *   * It runs in an effect rather than during render, so a slow catalogue never delays a
+ *     screen that has everything it needs to draw.
+ *   * Failures are swallowed. A prefetch that fails costs the user nothing: the sheet
+ *     fetches on the tap, exactly as it did before this existed.
+ */
+export function usePrefetchExercises(ids: readonly (string | null | undefined)[]): void {
+  const qc = useQueryClient();
+  // The ids as one string, so the effect re-runs when the *set* changes rather than on
+  // every render that rebuilt the array.
+  const key = ids.filter((id): id is string => !!id && UUID.test(id)).join(',');
+
+  useEffect(() => {
+    if (!key) return;
+    let cancelled = false;
+    const run = async () => {
+      for (const id of key.split(',')) {
+        if (cancelled) return;
+        try {
+          await qc.prefetchQuery({
+            queryKey: ['exercise', id],
+            staleTime: Infinity,
+            gcTime: Infinity,
+            queryFn: () => fetchExercise(id),
+          });
+          const sheet = qc.getQueryData<ExerciseSheet>(['exercise', id]);
+          // The first frame only: the second is below the fold and the tap will fetch it
+          // in the time it takes to scroll.
+          if (sheet && sheet.media.length > 0) {
+            await Image.prefetch(exerciseMediaUrl(id, 0), { headers: authHeaders() }).catch(() => false);
+          }
+        } catch {
+          // See above: a prefetch is an optimisation and never a requirement.
+        }
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [key, qc]);
+}
+
+/**
+ * GET /api/you — the dossier (backend services/readings/dossier.ts). Its own endpoint
+ * rather than a field on `GET /api/profile`, and that is the whole reason it exists
+ * separately: the profile is invalidated after every single log
+ * ({@link invalidateAfterLog}), so a generated paragraph living on it would be a model
+ * call per meal.
+ *
+ * Half an hour of `staleTime`, because the server caches the paragraph on its own inputs
+ * hash anyway — this only stops the screen asking twice in one sitting.
+ */
+export function useYou() {
+  return useQuery({
+    queryKey: ['you'],
+    queryFn: () => api<YouView>('/api/you', { query: { tz: tzOffsetMin() } }),
+    staleTime: 1000 * 60 * 30,
+    retry: 0,
+  });
+}
 
 /** GET /api/goals — active goals in priority order, with progress, plus history. */
 export function useGoals() {

@@ -7,6 +7,7 @@ import Coach from '@/app/coach';
 import Day from '@/app/day/[date]';
 import DayLog from '@/app/day/[date]/log';
 import ExerciseSheet from '@/app/exercise/[id]';
+import Lifts from '@/app/lifts';
 import LogSheet from '@/app/log';
 import Days from '@/app/(tabs)/days';
 import Progress from '@/app/(tabs)/progress';
@@ -68,8 +69,8 @@ beforeEach(() => {
       return Promise.resolve({
         date: '2026-08-29',
         lifts: [],
-        frequency: { weeks: [], sessions_this_week: 0, average_per_week: 0, training_days_target: null, muscles: [] },
-        cardio: { weeks: [], minutes_this_week: 0, weekly_target_min: 150, short_by_min: 150, last: null, best: null },
+        frequency: { weeks: [], sessions_this_week: 0, average_per_week: 0, training_days_target: null, muscles: [], coverage: [] },
+        cardio: { weeks: [], minutes_this_week: 0, equiv_minutes_this_week: 0, weekly_target_min: 150, short_by_min: 150, target_source: 'default', breakdown: [], last: null, best: null },
         body: { latest: null, latest_date: null, avg_7d: null, trend_per_week: null, series: [] },
       });
     return Promise.resolve(null);
@@ -87,6 +88,7 @@ const SCREENS: [name: string, Screen: () => React.ReactElement, testID: string][
   ['Day', Day, 'day-scroll'],
   ['DayLog', DayLog, 'day-log-scroll'],
   ['Exercise', ExerciseSheet, 'exercise-scroll'],
+  ['Lifts', Lifts, 'lifts-scroll'],
 ];
 
 async function paddingTopOf(Screen: () => React.ReactElement, testID: string, insets: EdgeInsets) {

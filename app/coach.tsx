@@ -10,7 +10,7 @@ import { openExercise } from '@/lib/exercise';
 import { clock } from '@/lib/format';
 import { composeMaxHeight, keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
 import { getSpeech } from '@/lib/ports/speech';
-import { localDateKey, useAskCoach, useCoachNext, useUpdateGoal } from '@/lib/queries';
+import { localDateKey, useAskCoach, useCoachNext, usePrefetchExercises, useUpdateGoal } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
 import type { BriefExercise, CoachBrief, ExerciseCompletion } from '@/lib/types';
@@ -107,6 +107,11 @@ export default function Coach() {
    * nothing on this screen turns it into a brief except a tap on that button.
    */
   const noPlan = !brief && !busy && coach.isSuccess;
+
+  // The sheets for everything on the plan, warmed while the user is reading it. Tapping a
+  // movement's name in a gym should not be a round trip (lib/queries.ts §usePrefetchExercises).
+  // The finisher's items carry no catalogue id, so there is nothing to warm for them.
+  usePrefetchExercises((brief?.workout?.exercises ?? []).map((exercise) => exercise.exercise_id));
 
   // Three ways this screen can have something to say above the brief, in the order they
   // matter: the server kept the old answer and said why; the request never landed; the

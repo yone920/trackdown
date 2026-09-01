@@ -1,10 +1,12 @@
 import type pg from "pg";
 import type { LoadDirection } from "../../db/exercises.js";
 import { catalogFactsFor, EMPTY_CATALOG_FACTS, type CatalogFacts } from "../coach/catalog.js";
+import { classifyCardio, type CardioIntensity } from "../coach/cardioIntensity.js";
 import {
 	computeFeatures,
 	isCardio,
 	WEEK_DAYS,
+	type CardioBreakdownRow,
 	type CardioFeature,
 	type CoachFeatures,
 	type CoverageEntry,
@@ -149,6 +151,15 @@ export interface BoardCardioRow {
 	best_pace_min_mi: number | null;
 	/** "20 min · 1.2 mi · 16.7 min/mi" — minutes, distance, pace. Never "lb". */
 	summary_text: string;
+	/**
+	 * What a minute of this is worth against the weekly target — light ×0.5, moderate ×1,
+	 * vigorous ×2 (services/coach/cardioIntensity.ts). Decided from the catalogue's category
+	 * and the row's own name, with the session's pace overriding both when it measured one.
+	 */
+	intensity: CardioIntensity;
+	intensity_multiplier: number;
+	/** Which rule decided it: "pace 16.7 min/mi — moderate", "run — vigorous". */
+	intensity_why: string;
 	/** Minutes, or pace when the sessions carried a distance: "+5 min in four weeks". */
 	delta_text: string | null;
 	/** Pace only. See `cardioSentiment`: a shorter walk is not a step backwards. */
@@ -178,9 +189,31 @@ export interface BoardFrequency {
 
 export interface BoardCardio {
 	weeks: { start: IsoDate; minutes: number }[];
+	/** Wall-clock minutes this week. Still here: it is what a stopwatch said. */
 	minutes_this_week: number;
+	/**
+	 * The week in the currency the target is in — light ×0.5, moderate ×1, vigorous ×2
+	 * (services/coach/cardioIntensity.ts). "50 of 150" is these; the bars are the raw ones.
+	 */
+	equiv_minutes_this_week: number;
 	weekly_target_min: number;
+	/**
+	 * Where the target came from: a goal that named weekly minutes, the profile column the
+	 * user stated out loud (migration 0016), or the WHO's guideline standing in. The screen
+	 * says which, because a guideline presented as the user's own number is the mistake
+	 * `daily_calorie_target` made.
+	 */
+	target_source: "goal" | "stated" | "default";
+	/** Target − this week's EQUIVALENT minutes; 0 when the week is already there. */
 	short_by_min: number;
+	/** The arithmetic behind the headline: "20 brisk + 15 run×2". "" with nothing logged. */
+	equiv_text: string;
+	/** "22 moderate min or 11 hard" — the shortfall in both currencies. Null when there is none. */
+	alternatives_text: string | null;
+	/** This week's activities, largest first, each with what it was worth. The tap sheet. */
+	breakdown: CardioBreakdownRow[];
+	/** The same week folded into the three classes; only the ones with minutes in them. */
+	intensity_mix: { intensity: CardioIntensity; minutes: number; equiv_minutes: number }[];
 	/** The most recent paced session, and the fastest in the window. Null with no distance. */
 	last: { date: IsoDate; pace_min_mi: number; distance_mi: number } | null;
 	best: { date: IsoDate; pace_min_mi: number; distance_mi: number } | null;
@@ -197,9 +230,12 @@ export interface BoardCardio {
 	 */
 	activities: BoardCardioRow[];
 	/**
-	 * True when a goal named the weekly minutes, rather than the WHO's 150 standing in. It
-	 * is the difference between a section with nothing in it and a section a user asked for
-	 * and has not fed yet — the first is hidden, the second says so quietly.
+	 * True when a goal or the profile named the weekly minutes, rather than the WHO's 150
+	 * standing in. It is the difference between a section with nothing in it and a section a
+	 * user asked for and has not fed yet — the first is hidden, the second says so quietly.
+	 *
+	 * Kept beside `target_source`, which is the same fact with the third case named: an app
+	 * built before the source existed still reads this one and still draws the right thing.
 	 */
 	target_stated: boolean;
 }
@@ -360,12 +396,22 @@ export function cardioDelta(series: readonly BoardCardioPoint[]): { text: string
  * and says so in its own `why` ("cardio volume follows the week, not the session"). That is
  * a description of what happened; a board row has to say what to do next.
  */
-export function cardioNextFor(feature: ExerciseFeature, cardio: CardioFeature): BoardCardioNext {
+export function cardioNextFor(
+	feature: ExerciseFeature,
+	cardio: CardioFeature,
+	multiplier = 1
+): BoardCardioNext {
 	const last = feature.last.duration_min;
 	const said = last == null ? null : `${Math.round(last)} min`;
-	const week = `${cardio.minutes_this_week} of ${cardio.weekly_target_min} min this week`;
+	const week = `${cardio.equiv_minutes_this_week} of ${cardio.weekly_target_min} equivalent min this week`;
+	// The debt is in equivalent minutes and this row is paid in its own: a run pays it off
+	// twice as fast as a stroll, so a row about a run asks for half as many minutes.
+	const rate =
+		multiplier === 1
+			? ""
+			: ` This one counts ×${multiplier}, so ${multiplier > 1 ? "fewer" : "more"} minutes of it clear the same shortfall.`;
 
-	const minutes = cardioNextMinutes(cardio.short_by_min, last);
+	const minutes = cardioNextMinutes(cardio.short_by_min, last, multiplier);
 	if (minutes == null) {
 		return {
 			rule: "cardio",
@@ -382,8 +428,8 @@ export function cardioNextFor(feature: ExerciseFeature, cardio: CardioFeature): 
 		text: `${minutes} min next`,
 		eta: null,
 		why: said
-			? `${week}, ${cardio.short_by_min} short. One safe step on the last ${said} is ${minutes} min (+10 %, capped by the shortfall).`
-			: `${week}, ${cardio.short_by_min} short. Nothing timed yet, so ${minutes} min is where this starts.`,
+			? `${week}, ${cardio.short_by_min} short. One safe step on the last ${said} is ${minutes} min (+10 %, capped by the shortfall).${rate}`
+			: `${week}, ${cardio.short_by_min} short. Nothing timed yet, so ${minutes} min is where this starts.${rate}`,
 	};
 }
 
@@ -555,8 +601,6 @@ export interface BuildBoardInput {
 	/** Catalogue ids by lower-cased exercise name, so a row can open its sheet. */
 	exerciseIds?: Record<string, string | null>;
 	trainingDaysTarget?: number | null;
-	/** True when a goal named the weekly cardio minutes rather than the WHO default. */
-	cardioTargetStated?: boolean;
 }
 
 /** Features + prescriptions in, board out. No SQL, no clock, no provider. */
@@ -566,7 +610,6 @@ export function buildBoard({
 	catalog = EMPTY_CATALOG_FACTS,
 	exerciseIds = {},
 	trainingDaysTarget = null,
-	cardioTargetStated = false,
 }: BuildBoardInput): TrainingBoard {
 	const gap = gapRule(features.days_since_last_workout);
 	// The coach's own call, with the coach's own inputs. Reference loads are deliberately
@@ -629,7 +672,7 @@ export function buildBoard({
 		date: facts.date,
 		lifts,
 		frequency: frequencyOf(facts, features, trainingDaysTarget),
-		cardio: cardioOf(facts, features, cardio, cardioTargetStated),
+		cardio: cardioOf(facts, features, cardio),
 		body: bodyOf(facts, features),
 	};
 }
@@ -668,6 +711,12 @@ function cardioRowOf(
 	const delta = cardioDelta(points);
 	const last = points[points.length - 1] as BoardCardioPoint;
 	const paces = points.map((point) => point.pace_min_mi).filter((pace): pace is number => pace != null);
+	// The row's class is read from its most recent session, which is the one it describes.
+	const klass = classifyCardio({
+		exercise: feature.exercise,
+		category: feature.category,
+		paceMinMi: last.pace_min_mi,
+	});
 
 	return {
 		exercise: feature.exercise,
@@ -681,10 +730,13 @@ function cardioRowOf(
 		pace_min_mi: last.pace_min_mi,
 		best_pace_min_mi: paces.length === 0 ? null : Math.min(...paces),
 		summary_text: cardioSummary(last),
+		intensity: klass.intensity,
+		intensity_multiplier: klass.multiplier,
+		intensity_why: klass.why,
 		delta_text: delta.text,
 		sentiment: delta.sentiment,
 		series: thinned(points),
-		next: cardioNextFor(feature, cardio),
+		next: cardioNextFor(feature, cardio, klass.multiplier),
 	};
 }
 
@@ -722,12 +774,7 @@ function frequencyOf(
 	};
 }
 
-function cardioOf(
-	facts: DayFacts,
-	features: CoachFeatures,
-	activities: BoardCardioRow[],
-	targetStated: boolean
-): BoardCardio {
+function cardioOf(facts: DayFacts, features: CoachFeatures, activities: BoardCardioRow[]): BoardCardio {
 	const end = facts.date;
 	const window = facts.activities.filter(
 		(activity) => inLastWeeks(activity.date, end, BOARD_WEEKS) && isCardio(activity)
@@ -756,12 +803,20 @@ function cardioOf(
 	return {
 		weeks,
 		minutes_this_week: features.cardio.minutes_this_week,
+		equiv_minutes_this_week: features.cardio.equiv_minutes_this_week,
 		weekly_target_min: features.cardio.weekly_target_min,
+		target_source: features.cardio.target_source,
 		short_by_min: features.cardio.short_by_min,
+		equiv_text: features.cardio.equiv_text,
+		alternatives_text: features.cardio.alternatives_text,
+		breakdown: features.cardio.breakdown,
+		intensity_mix: features.cardio.intensity_mix,
 		last,
 		best,
 		activities,
-		target_stated: targetStated,
+		// One fact, said twice: the boolean is what the shipped app reads, the source is what
+		// the new one draws the provenance line from.
+		target_stated: features.cardio.target_source !== "default",
 	};
 }
 
@@ -809,11 +864,14 @@ export async function loadBoard(db: Queryable, userId: string, { tzOffsetMin, no
 	const date = localDay(now, tzOffsetMin).date;
 	const facts = await loadFacts(db, userId, { date, from: addDays(date, -(BOARD_DAYS - 1)), tzOffsetMin });
 
-	const { rows } = await db.query<{ training_days: number | null }>(
-		`SELECT training_days FROM profiles WHERE id = $1`,
+	const { rows } = await db.query<{ training_days: number | null; cardio_minutes_target: number | null }>(
+		`SELECT training_days, cardio_minutes_target FROM profiles WHERE id = $1`,
 		[userId]
 	);
 	const trainingDaysTarget = rows[0]?.training_days ?? null;
+	// The standing aim, said out loud once (migration 0016). A goal that names the minutes
+	// still wins over it; the WHO's 150 is what is left when neither exists.
+	const cardioTargetStatedMin = rows[0]?.cardio_minutes_target ?? null;
 
 	// The cardio bars are drawn against the plan's intent, so the goal's own weekly minutes
 	// win over the WHO default when a goal names them (services/coach/features.ts).
@@ -828,7 +886,7 @@ export async function loadBoard(db: Queryable, userId: string, { tzOffsetMin, no
 
 	// The eating half of the feature set is not read by anything on this board, so it is not
 	// loaded: a training screen should not cost a TDEE computation.
-	const features = computeFeatures({ facts, trainingDaysTarget, cardioTargetMin });
+	const features = computeFeatures({ facts, trainingDaysTarget, cardioTargetMin, cardioTargetStatedMin });
 
 	const names = features.exercises.map((exercise) => exercise.exercise);
 	const catalog = await catalogFactsFor(db, names);
@@ -843,7 +901,6 @@ export async function loadBoard(db: Queryable, userId: string, { tzOffsetMin, no
 		catalog,
 		exerciseIds,
 		trainingDaysTarget,
-		cardioTargetStated: cardioTargetMin != null,
 	});
 }
 
