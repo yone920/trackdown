@@ -2,16 +2,15 @@ import { useRouter } from 'expo-router';
 import { useCallback, useMemo } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 
+import { ActivityRow } from '@/components/activity-row';
 import { DayArc } from '@/components/day-arc';
 import { EvidenceThumbs } from '@/components/evidence';
 import { GoalBanner } from '@/components/goal-banner';
-import { IconAvatar } from '@/components/icons';
+import { IconAvatar, IconHeart } from '@/components/icons';
 import { Card, Chip, Chips, dismissDeletes, GroupHeading, Row, Section } from '@/components/kit';
 import { MetricCard } from '@/components/metric-card';
 import { ReadingCard } from '@/components/reading-card';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
-import { openExercise } from '@/lib/exercise';
-import { activitySubLine } from '@/lib/row-facts';
 import { clock, dateEyebrow, dateLabel, grams, kcal, slotLabel } from '@/lib/format';
 import {
   localDateKey,
@@ -25,7 +24,8 @@ import {
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
 import { todayCards } from '@/lib/today-cards';
-import type { CoachStatus, DayView, DeltaVsLast, MealSlot } from '@/lib/types';
+import { groupTraining, sessionSpan, splitBySource } from '@/lib/training-groups';
+import type { CoachStatus, DayView, MealSlot } from '@/lib/types';
 
 // Today (docs/design-system.md §Today). The live day: where you are, what the goal is,
 // the cards that goal decides, the model's two sentences about right now, the arc, and
@@ -114,7 +114,12 @@ export default function Today() {
     slot,
     meals: view.items.meals.filter((meal) => meal.slot === slot),
   })).filter((group) => group.meals.length > 0);
-  const standalone = view.items.activities.filter((activity) => activity.block_id === null);
+  // Training is filed the way the closed Day files it — one rule, lib/training-groups.ts.
+  // Today used to group by auto-block, so the same workout looked like two different
+  // workouts depending on which page you opened it from (user decision 2026-09-01).
+  const { logged, health } = splitBySource(view.items.activities);
+  const { cardio, cardioMinutes, byMuscle, unfiled } = groupTraining(logged, view.muscle_summary);
+  const span = sessionSpan(logged);
   // Lifts print no calories, so their block's figure is a MET estimate (concept-v2
   // §Calories). Say so, quietly, wherever that number is shown.
   const earnedEstimated = view.blocks.some((block) => block.kcal_estimated);
@@ -227,106 +232,86 @@ export default function Today() {
         </Card>
       ) : null}
 
-      {/* Training */}
+      {/* Training, by muscle group — the same grouping the closed Day uses, because this
+          is now the only page for the open day (user decision 2026-09-01). The session's
+          time span is a NOTE on the header, not the grouping principle: when a workout
+          happened is a fact about it, not a way to file it. */}
       <Section
         title="Training"
-        summary={
-          view.blocks.length === 0 && standalone.length === 0
-            ? 'Nothing yet'
-            : `${kcal(view.earned)} kcal earned`
-        }
-        note={earnedEstimated ? 'est.' : null}>
-        {view.blocks.length === 0 && standalone.length === 0 ? (
+        summary={logged.length === 0 && health.length === 0 ? 'Nothing yet' : `${kcal(view.earned)} kcal earned`}
+        note={[span, earnedEstimated ? 'est.' : null].filter(Boolean).join(' · ') || null}>
+        {logged.length === 0 && health.length === 0 ? (
           <Card>
             <Sub>No exercise logged today.</Sub>
           </Card>
         ) : (
           <Card style={{ paddingVertical: 4 }}>
-            {view.blocks.map((block) => {
-              const members = view.items.activities.filter((a) => a.block_id === block.id);
-              return (
-                <View key={block.id}>
-                  <GroupHeading
-                    label={block.title}
-                    right={`${clock(block.start)}–${clock(block.end)} · ${kcal(block.kcal)} kcal`}
-                    note={block.kcal_estimated ? 'est.' : null}
-                  />
-                  {members.map((activity, index) => (
-                    <Row
-                      key={activity.id ?? `${block.id}-${index}`}
-                      testID={activity.id ? `row-activity-${activity.id}` : undefined}
-                      time={clock(activity.logged_at)}
-                      title={activity.exercise ?? activity.description}
-                      onTitlePress={() =>
-                        openExercise(router, {
-                          // A row with no resolved movement is still a row with a name on
-                          // it, and its description opens the sheet in name-only mode. A
-                          // title that does nothing when pressed reads as a broken app
-                          // (field report 2026-09-01).
-                          id: activity.exercise_id,
-                          name: activity.exercise ?? activity.description,
-                          mediaCount: activity.media_count,
-                        })
-                      }
-                      titleMedia={activity.media_count}
-                      sub={activitySubLine(activity)}
-                      right={activity.kcal > 0 ? kcal(activity.kcal) : null}
-                      onPress={activity.id ? () => correct('activity', activity.id as string) : undefined}
-                      onDelete={
-                        activity.id
-                          ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
-                          : undefined
-                      }
-                      deleteLabel={activity.exercise ?? activity.description}
-                      divider={index < members.length - 1}>
-                      {activity.delta_vs_last ? (
-                        <Sub style={{ marginTop: 3, color: deltaColor(activity.delta_vs_last) }}>
-                          {activity.delta_vs_last.text}
-                        </Sub>
-                      ) : null}
-                      <EvidenceThumbs photos={activity.evidence} />
-                    </Row>
-                  ))}
-                </View>
-              );
-            })}
-            {standalone.length > 0 ? (
+            {cardio.length > 0 ? (
               <View>
-                <GroupHeading label="Also today" />
-                {standalone.map((activity, index) => (
-                  <Row
-                    key={activity.id ?? `standalone-${index}`}
-                    testID={activity.id ? `row-activity-${activity.id}` : undefined}
-                    time={clock(activity.logged_at)}
-                    title={activity.exercise ?? activity.description}
-                    onTitlePress={() =>
-                      openExercise(router, {
-                        id: activity.exercise_id,
-                        name: activity.exercise ?? activity.description,
-                        mediaCount: activity.media_count,
-                      })
-                    }
-                    titleMedia={activity.media_count}
-                    sub={
-                      activity.source === 'health'
-                        ? ['From Health', activitySubLine(activity)].filter(Boolean).join(' · ')
-                        : activitySubLine(activity)
-                    }
-                    right={activity.kcal > 0 ? kcal(activity.kcal) : null}
+                <GroupHeading label="Cardio" right={cardioMinutes > 0 ? `${cardioMinutes} min` : null} />
+                {cardio.map((activity, index) => (
+                  <ActivityRow
+                    key={activity.id ?? `cardio-${index}`}
+                    activity={activity}
+                    last={index === cardio.length - 1}
                     onPress={activity.id ? () => correct('activity', activity.id as string) : undefined}
                     onDelete={
-                      activity.id
-                        ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
-                        : undefined
+                      activity.id ? () => remove.mutate({ kind: 'activity', id: activity.id as string }) : undefined
                     }
-                    deleteLabel={activity.exercise ?? activity.description}
-                    divider={index < standalone.length - 1}
+                  />
+                ))}
+              </View>
+            ) : null}
+            {byMuscle.map((group) => (
+              <View key={group.muscle}>
+                <GroupHeading label={group.muscle} right={`${group.sets} sets`} />
+                {group.members.map((activity, index) => (
+                  <ActivityRow
+                    key={activity.id ?? `${group.muscle}-${index}`}
+                    activity={activity}
+                    last={index === group.members.length - 1}
+                    onPress={activity.id ? () => correct('activity', activity.id as string) : undefined}
+                    onDelete={
+                      activity.id ? () => remove.mutate({ kind: 'activity', id: activity.id as string }) : undefined
+                    }
+                  />
+                ))}
+              </View>
+            ))}
+            {/* Anything left over — no muscle group of its own, or one the summary does
+                not know: a class, a hike, an unrecognised movement. */}
+            {unfiled.length > 0 ? (
+              <View>
+                <GroupHeading label="Also" />
+                {unfiled.map((activity, index, all) => (
+                  <ActivityRow
+                    key={activity.id ?? `other-${index}`}
+                    activity={activity}
+                    last={index === all.length - 1}
+                    onPress={activity.id ? () => correct('activity', activity.id as string) : undefined}
+                    onDelete={
+                      activity.id ? () => remove.mutate({ kind: 'activity', id: activity.id as string }) : undefined
+                    }
                   />
                 ))}
               </View>
             ) : null}
           </Card>
         )}
+
+        {/* Health is a source, not a section: one slim card, badged (concept-v2 §Health). */}
+        {health.length > 0 ? (
+          <Card style={{ marginTop: 10, paddingVertical: 12, flexDirection: 'row', alignItems: 'center' }}>
+            <IconHeart size={20} color={C.good} />
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Body>{health.map((activity) => activity.exercise ?? activity.description).join(' · ')}</Body>
+              <Sub style={{ marginTop: 2 }}>
+                {kcal(health.reduce((sum, activity) => sum + activity.kcal, 0))} kcal from Health
+              </Sub>
+            </View>
+            <Eyebrow style={{ color: C.good }}>Health</Eyebrow>
+          </Card>
+        ) : null}
       </Section>
 
       {/* Eating */}
@@ -425,19 +410,6 @@ function coachButtonProgress(status: CoachStatus | null): string | null {
   return status.done_count === 0
     ? `${status.total_count} moves`
     : `${status.done_count} of ${status.total_count} done`;
-}
-
-/**
- * Green for progress, amber for a step back, quiet for neither. Read from `sentiment`, not
- * from which way the number went: on an assisted machine the load is the help the machine
- * gives, so "-5 lb" is less help and is the good news. `direction` is the fallback for a
- * response from a build before the field existed.
- */
-function deltaColor(delta: DeltaVsLast): string {
-  const sentiment = delta.sentiment ?? (delta.direction === 'up' ? 'good' : delta.direction === 'down' ? 'watch' : 'neutral');
-  if (sentiment === 'good') return C.good;
-  if (sentiment === 'watch') return C.accent;
-  return C.mute;
 }
 
 /** The line under the goal's title: what it is measured on, and where it finishes. */
