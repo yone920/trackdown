@@ -549,7 +549,7 @@ describe('Progress — coverage, cardio and body', () => {
     fireEvent.press(screen.getByTestId('part-front-biceps'));
     await waitFor(() => expect(screen.getByTestId('body-map-detail')).toBeTruthy());
     expect(screen.getByTestId('body-map-detail').props.accessibilityLabel).toBe(
-      'Biceps — 3 sets this week · last trained Wed · target 10+/wk',
+      'Biceps — 3 sets this week · last trained Wed · target 10+ sets/wk',
     );
 
     fireEvent.press(screen.getByTestId('part-front-biceps'));

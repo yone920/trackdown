@@ -159,14 +159,20 @@ export function lastTrainedWords(daysSince: number | null, lastDate: string | nu
 /** The sheet's one line. The band is quoted as a floor, because the top of it is not a wall. */
 export function regionDetail(region: Omit<BodyRegion, 'detail'>): string {
   const noun = region.unit === 'sessions' ? 'session' : 'set';
+  // A muscle can be served with zero sets — a walk works the glutes and calves but records
+  // no strength volume. Colour and numbers must tell one story, so that case says where the
+  // credit came from instead of the contradictory "0 sets this week" beside an orange region.
+  const cardioCredit = region.days_since != null && region.sets_28d === 0;
   const volume =
     region.days_since == null
       ? 'nothing in four weeks'
-      : `${region.sets_7d} ${noun}${region.sets_7d === 1 ? '' : 's'} this week`;
+      : cardioCredit
+        ? 'no strength sets — credited from cardio'
+        : `${region.sets_7d} ${noun}${region.sets_7d === 1 ? '' : 's'} this week`;
   return [
     `${region.label} — ${volume}`,
     lastTrainedWords(region.days_since, region.last_date),
-    `target ${SET_BAND_LOW}+/wk`,
+    `target ${SET_BAND_LOW}+ sets/wk`,
   ].join(' · ');
 }
 

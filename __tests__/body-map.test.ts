@@ -109,7 +109,7 @@ describe('the detail line', () => {
     const [region] = bodyRegions([
       entry({ key: 'biceps', label: 'biceps', sets_7d: 3, days_since: 5, last_date: '2026-08-25' }),
     ]).filter((each) => each.key === 'biceps');
-    expect(region!.detail).toBe('Biceps — 3 sets this week · last trained Tue · target 10+/wk');
+    expect(region!.detail).toBe('Biceps — 3 sets this week · last trained Tue · target 10+ sets/wk');
   });
 
   it('counts one set as a set and a stretch in sessions', () => {
