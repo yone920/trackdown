@@ -66,6 +66,18 @@ export function IconDays(p: IconProps) {
   );
 }
 
+/** Eat — a fork and a knife. */
+export function IconEat(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Path d="M7 3v7a2.5 2.5 0 0 1-2.5 2.5A2.5 2.5 0 0 1 2 10V3" {...base(p)} />
+      <Line x1={4.5} y1={12.5} x2={4.5} y2={21} {...base(p)} />
+      <Path d="M16 3c-1.7 1-2.5 2.8-2.5 5s.8 3.5 2.5 4v9" {...base(p)} />
+      <Line x1={20} y1={3} x2={20} y2={21} {...base(p)} />
+    </Frame>
+  );
+}
+
 /** Progress — a rising line. */
 export function IconProgress(p: IconProps) {
   return (

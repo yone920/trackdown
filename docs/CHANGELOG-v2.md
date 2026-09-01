@@ -87,6 +87,58 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-01 — a page for eating, and five tabs instead of six (`wp-eat-page`)
+
+Training had a plan, a log, a coverage map and a whole tab. Eating had a compact row and a
+door. This is the other half of the day getting a page.
+
+**The tab bar is Home · Today · Eat · Progress · You.** Days folded into Progress — the list
+of closed days is the top section of that page now (`components/days-list.tsx`), with every
+row, verdict, tally and tap exactly as the tab drew them. What changed is the container: a
+FlatList became plain views, because a list inside a scrolling page is two scrollers
+fighting, and paging became an *Earlier days* button, because "load more at the bottom" has
+no bottom to reach inside a longer page. `/days` redirects to `/progress`.
+
+**The Eat page is four layers, and the order is the argument.**
+
+1. **Today** — what is left of the day, from `computeDay`, which is the same arithmetic
+   Today's compact row shows. One authoritative figure; two screens must never disagree
+   about one day's calories.
+2. **The week, COMPUTED** — `services/eating/features.ts`. A rolling seven days from the
+   logged meals: average calories, protein, carbohydrate, fat and fibre, each against a
+   target that says where it came from. Nothing on this layer came out of a model.
+   - **A day nobody logged is an absence, not a zero.** The divisor is days that had food on
+     them, and the page says how many those were — an average over two days is called a thin
+     week rather than passed off as a trend.
+   - **"Stated" means the user actually said it.** The day view's macro targets are
+     *derived*, so the week is measured against the profile's own columns instead; where
+     there is nothing, protein is derived from body weight at 0.7 g/lb and the fibre
+     guideline (25–38 g) stands in — and each says which it did. Handing a default back as
+     the user's own aim is the thing that field exists to prevent.
+   - Outliers name what stood out about the most recent logged day, and are silent when
+     nothing did. A page that always has a complaint on it is a page people stop reading.
+3. **The direction, WRITTEN** — the one generated thing on the page, and it is a **reading,
+   not a brief**: cached in `day_readings` (migration 0019) against the week's own inputs
+   hash, so opening the page when nothing has moved costs nothing, and it is never
+   scheduled and never nags. Nutrient direction only — the prompt forbids naming a dish, a
+   meal or a food in as many words, because that is the line the user drew: *"it doesn't
+   have to be a dish… general direction of nutrients."* It is handed the computed averages,
+   the user's diet style and preferences, and the guardrails (protein 0.7–1 g/lb, the fibre
+   band, carbs sized to training) — never the meal rows.
+4. **The food log** — the by-slot list, absorbed from `app/today/eating.tsx`, which is gone.
+   Today's compact Eat row now opens the tab. No dead routes.
+
+An empty week generates nothing at all: no model call, no paragraph. A concern invented
+about a week that has not happened is worse than silence.
+
+**Verified** — backend **677 → 705**: the features module as pure arithmetic (window math,
+which targets are stated versus derived versus guideline, the outlier rules, an empty week),
+the direction's cache key, the prompt's own contract, and the route end to end including
+*generates nothing on a warm open* and *writes a new one once the week moves*. App **337 →
+346** across **25 suites**: all four layers, both empty states, the meal row's correct and
+delete, no input surface on the page, and the `/days` redirect. `tsc` and `expo lint` clean
+on both sides.
+
 ### 2026-09-01 — the plan and the log are one section (`wp-plan-log-merge`)
 
 Today had a **Do** list and a **Done** row, and they were two views of the same facts. The

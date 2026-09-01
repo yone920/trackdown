@@ -3,8 +3,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import React from 'react';
 
 import Coach from '@/app/coach';
+import DaysRoute from '@/app/days';
 import Day from '@/app/day/[date]';
-import Days from '@/app/(tabs)/days';
+import Progress from '@/app/(tabs)/progress';
 import { makeDayRow, makeWeek } from './fixtures';
 
 // One living page for the open day (user decision 2026-09-01). The Today tab is it; the
@@ -73,7 +74,7 @@ describe('the Days list', () => {
   it("sends today's row to the Today tab, not to a second copy of today", async () => {
     const today = todayKey();
     serveDays([makeDayRow({ date: today, is_today: true })]);
-    wrap(<Days />);
+    wrap(<Progress />);
 
     await waitFor(() => expect(screen.getByTestId(`day-${today}`)).toBeTruthy());
     fireEvent.press(screen.getByTestId(`day-${today}`));
@@ -83,7 +84,7 @@ describe('the Days list', () => {
 
   it('still opens a closed day on its own page', async () => {
     serveDays([makeDayRow({ date: '2026-08-29', is_today: false })]);
-    wrap(<Days />);
+    wrap(<Progress />);
 
     await waitFor(() => expect(screen.getByTestId('day-2026-08-29')).toBeTruthy());
     fireEvent.press(screen.getByTestId('day-2026-08-29'));
@@ -110,6 +111,15 @@ describe('a deep link to /day/<today>', () => {
 
     await waitFor(() => expect(screen.getByTestId('day-scroll')).toBeTruthy());
     expect(mockReplace).not.toHaveBeenCalledWith('/today');
+  });
+});
+
+describe('Days, folded into Progress', () => {
+  // User decision 2026-09-01: five tabs, not six — the list of closed days is a section of
+  // Progress rather than a destination of its own. Every row, verdict and tap survived.
+  it('redirects /days to Progress — no dead route', () => {
+    render(<DaysRoute />);
+    expect(mockRedirect).toHaveBeenCalledWith('/progress');
   });
 });
 

@@ -5,6 +5,7 @@ import { useEffect } from 'react';
 import { api, authHeaders, exerciseMediaUrl, SHEET_PHOTO_WIDTH, tzOffsetMin, upload } from './api';
 import { rememberExercise } from './exercise-cache';
 import type {
+  EatingView,
   AnalyzeResponse,
   CoachNext,
   CoachStatus,
@@ -47,7 +48,7 @@ export function invalidateAfterLog(qc: ReturnType<typeof useQueryClient>): void 
   // four weeks of logs: a stated constraint changes what it should say. The server still
   // decides whether that is a new paragraph — it hashes its own inputs — so an invalidation
   // here costs a read and only sometimes a generation.
-  for (const key of ['day', 'week', 'days', 'goals', 'profile', 'coach', 'training', 'you'])
+  for (const key of ['day', 'week', 'days', 'goals', 'profile', 'coach', 'training', 'you', 'eating'])
     qc.invalidateQueries({ queryKey: [key] });
 }
 
@@ -63,6 +64,18 @@ export function useDay(date: IsoDate, options: { enabled?: boolean } = {}) {
     // stops asking for a day it is about to redirect away from (user decision 2026-09-01).
     enabled: !!date && options.enabled !== false,
     queryFn: () => api<DayView>(`/api/day/${date}`, { query: { tz: tzOffsetMin() } }),
+  });
+}
+
+/**
+ * GET /api/eating — the Eat page in one request: today's numbers, the computed week, and
+ * the written direction. The direction is a cached READING, so opening the page when
+ * nothing has moved generates nothing.
+ */
+export function useEating() {
+  return useQuery({
+    queryKey: ['eating'],
+    queryFn: () => api<EatingView>('/api/eating', { query: { tz: tzOffsetMin() } }),
   });
 }
 
@@ -92,7 +105,9 @@ export function useDaysPages(limit = 21) {
     initialPageParam: undefined as IsoDate | undefined,
     queryFn: ({ pageParam }) =>
       api<DaysView>('/api/days', { query: { tz: tzOffsetMin(), before: pageParam, limit } }),
-    getNextPageParam: (last) => last.next_before ?? undefined,
+    // Optional: this list is a section of Progress now, so it renders against whatever
+    // else that page is loading — and a page that has not arrived is not a cursor.
+    getNextPageParam: (last) => last?.next_before ?? undefined,
   });
 }
 

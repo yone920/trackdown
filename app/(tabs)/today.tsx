@@ -281,7 +281,7 @@ export default function Today() {
         testID="today-eat"
         title="Eat"
         line={eatLine}
-        onPress={() => router.push('/today/eating')}
+        onPress={() => router.push('/eat')}
       />
 
     </ScrollView>

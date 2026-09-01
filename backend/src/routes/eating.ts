@@ -51,13 +51,22 @@ export function eatingRouter(pool: pg.Pool, readings: DayReadings): Router {
 		]);
 
 		const goal = goals[0] ?? null;
+		// **Only what the user actually SAID counts as stated.** The day view's macro targets
+		// are derived — the server works them out from the profile and the TDEE — and handing
+		// one of those back as "your aim" is the thing the whole `source` field exists to
+		// prevent (readings/prompt.ts: "never hand a default back to the user as their own").
+		// So the week is measured against the profile's own columns; where there is nothing,
+		// features.ts derives protein from body weight and stands the fibre guideline in, and
+		// each says which it did.
+		//
+		// Layer 1 is untouched by this: today's numbers come off `view.macros` exactly as
+		// Today's own row does, because two screens must never disagree about one day.
 		const targets: EatingTargets = {
-			// The day view already worked out what the targets are, from the plan row and the
-			// profile; reading them again here would be a second answer to one question.
-			protein_g: view.macros.protein_g.target,
-			carbs_max_g: view.macros.carbs_g.target,
-			fat_g: view.macros.fat_g.target,
-			fiber_g: view.macros.fiber_g.target,
+			protein_g: (profile?.protein_g as number | null) ?? null,
+			carbs_max_g: (profile?.carbs_max_g as number | null) ?? null,
+			// Nobody states a fat or fibre aim today; both columns would be here if they did.
+			fat_g: null,
+			fiber_g: null,
 			weight_lb: view.weight.avg_7d ?? view.weight.day ?? null,
 			losing: goal?.kind === "lose_fat",
 		};

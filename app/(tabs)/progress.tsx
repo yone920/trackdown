@@ -31,6 +31,7 @@ import {
   useUpdateGoal,
   useWeek,
 } from '@/lib/queries';
+import { DaysList } from '@/components/days-list';
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
 import type { BoardCardioRow, BoardLift, GoalRecord, GoalWithProgress, TrainingBoard } from '@/lib/types';
@@ -136,6 +137,10 @@ export default function Progress() {
         paddingBottom: 140,
       }}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.mute} />}>
+      {/* The record first, the analysis of it after (user decision 2026-09-01: Days folded
+          in here rather than keeping a tab of its own). Every row, verdict and tap is the
+          Days tab's — only the container changed. */}
+      <DaysList />
       <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
         <View style={{ flex: 1 }}>
           <Eyebrow>{active.length === 0 ? 'No goal set' : `${active.length} active`}</Eyebrow>

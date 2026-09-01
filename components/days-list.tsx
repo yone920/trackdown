@@ -1,23 +1,24 @@
 import { useRouter } from 'expo-router';
 import { useMemo } from 'react';
-import { ActivityIndicator, FlatList, Pressable, View } from 'react-native';
+import { ActivityIndicator, Pressable, View } from 'react-native';
 
 import { IconChevronRight } from '@/components/icons';
-import { Card, Chip } from '@/components/kit';
+import { Card, Chip, Section } from '@/components/kit';
 import { Disp, Eyebrow, Sub } from '@/components/type';
 import { groupByWeek, weekdayLabel, type WeekGroup } from '@/lib/days-weeks';
-import { localDateKey, useDaysPages, useGoals, useWeek } from '@/lib/queries';
-import { useScreenInsets } from '@/lib/screen';
-import { C, SPACE, TABULAR } from '@/lib/theme';
+import { localDateKey, useDaysPages, useWeek } from '@/lib/queries';
+import { C, TABULAR } from '@/lib/theme';
 import type { DayRow, Verdict } from '@/lib/types';
 
-// Days (docs/design-system.md §Days). Every day the user has logged, newest first,
-// grouped by the week it belongs to, each week carrying its own tally. Tap a day and you
-// get the reading of it.
+// The days, as a SECTION (user decision 2026-09-01: Days folds into Progress, and the tab
+// bar goes to five — Home · Today · Eat · Progress · You). Every day the user has logged,
+// newest first, grouped by the week it belongs to, each week carrying its own tally.
 //
-// The grouping and the tally arithmetic are lib/days-weeks.ts — pure and tested there.
-// This file is the list: week headings and day rows, paging with the server's
-// `next_before` cursor when the user reaches the bottom.
+// Nothing about a row changed in the move: the verdict dot, the tally, the day number and
+// where a tap goes are all exactly what the Days tab drew. What changed is the container —
+// a FlatList became plain views, because a list inside a scrolling page is two scrollers
+// fighting. Paging is a button instead of an edge, for the same reason: "load more when you
+// reach the bottom" has no bottom to reach inside a longer page.
 
 const DOT: Record<Verdict, string> = {
   served: C.good,
@@ -26,68 +27,31 @@ const DOT: Record<Verdict, string> = {
   none: C.track,
 };
 
-type Item = { type: 'week'; group: WeekGroup } | { type: 'day'; row: DayRow };
-
-function flatten(groups: WeekGroup[]): Item[] {
-  return groups.flatMap((group) => [
-    { type: 'week' as const, group },
-    ...group.days.map((row) => ({ type: 'day' as const, row })),
-  ]);
-}
-
-export default function Days() {
+export function DaysList() {
   const router = useRouter();
-  const insets = useScreenInsets();
-
   const days = useDaysPages();
   const week = useWeek();
-  const goals = useGoals();
-  const goal = goals.data?.active?.[0] ?? null;
 
-  const rows = useMemo(() => (days.data?.pages ?? []).flatMap((page) => page.days), [days.data]);
-  const items = useMemo(() => flatten(groupByWeek(rows, week.data ?? null)), [rows, week.data]);
-
+  // Defensive on purpose: this is a SECTION of a page now, so it renders inside whatever
+  // else that page is loading, and a half-arrived page is not a reason to take Progress
+  // down with it.
+  const rows = useMemo(() => (days.data?.pages ?? []).flatMap((page) => page?.days ?? []), [days.data]);
+  const groups = useMemo(() => groupByWeek(rows, week.data ?? null), [rows, week.data]);
   const empty = !days.isLoading && rows.length === 0;
 
   /**
    * Today's row goes to the Today TAB, not to `/day/<today>` (user decision 2026-09-01).
    * The open day has one page and it is the tab; the day page is the archival reading of a
-   * day that has closed. Two live pages for the same day was the confusion this removes.
+   * day that has closed.
    */
   const openDay = (date: string) =>
     date === localDateKey() ? router.push('/today') : router.push(`/day/${date}`);
 
   return (
-    <FlatList
-      testID="days-list"
-      style={{ flex: 1, backgroundColor: C.bg }}
-      data={items}
-      keyExtractor={(item) => (item.type === 'week' ? `w-${item.group.key}` : `d-${item.row.date}`)}
-      contentContainerStyle={{
-        paddingHorizontal: SPACE.screen,
-        paddingTop: insets.top + 12,
-        paddingBottom: 140,
-      }}
-      refreshing={days.isRefetching}
-      onRefresh={() => {
-        days.refetch();
-        week.refetch();
-      }}
-      onEndReachedThreshold={0.6}
-      onEndReached={() => {
-        if (days.hasNextPage && !days.isFetchingNextPage) days.fetchNextPage();
-      }}
-      ListHeaderComponent={
-        <View style={{ paddingBottom: 8 }}>
-          <Eyebrow>{goal ? goal.title : 'No goal set'}</Eyebrow>
-          <Disp size={30} style={{ marginTop: 6 }}>
-            Days
-          </Disp>
-        </View>
-      }
-      ListEmptyComponent={
-        empty ? (
-          <Card style={{ marginTop: 18 }}>
+    <Section title="Days" summary={rows.length > 0 ? `${rows.length} logged` : null}>
+      <View testID="days-list">
+        {empty ? (
+          <Card>
             <Disp size={22}>Nothing logged yet</Disp>
             <Sub style={{ marginTop: 8, lineHeight: 19 }}>
               Every day you log closes itself into a record. The first one shows up here.
@@ -96,27 +60,35 @@ export default function Days() {
               <Chip label="Log something" variant="primary" onPress={() => router.push('/log')} />
             </View>
           </Card>
-        ) : (
-          <View style={{ paddingTop: 40, alignItems: 'center' }}>
+        ) : null}
+
+        {!empty && rows.length === 0 ? (
+          <View style={{ paddingTop: 24, alignItems: 'center' }}>
             <ActivityIndicator color={C.mute} />
           </View>
-        )
-      }
-      ListFooterComponent={
-        days.isFetchingNextPage ? (
-          <View style={{ paddingTop: 20, alignItems: 'center' }}>
-            <ActivityIndicator color={C.mute} />
+        ) : null}
+
+        {groups.map((group) => (
+          <View key={group.key}>
+            <WeekHeading group={group} />
+            {group.days.map((row) => (
+              <DayListRow key={row.date} row={row} onPress={() => openDay(row.date)} />
+            ))}
           </View>
-        ) : null
-      }
-      renderItem={({ item }) =>
-        item.type === 'week' ? (
-          <WeekHeading group={item.group} />
-        ) : (
-          <DayListRow row={item.row} onPress={() => openDay(item.row.date)} />
-        )
-      }
-    />
+        ))}
+
+        {days.hasNextPage ? (
+          <View style={{ marginTop: 18, alignSelf: 'flex-start' }}>
+            <Chip
+              testID="days-more"
+              label={days.isFetchingNextPage ? 'Loading…' : 'Earlier days'}
+              disabled={days.isFetchingNextPage}
+              onPress={() => days.fetchNextPage()}
+            />
+          </View>
+        ) : null}
+      </View>
+    </Section>
   );
 }
 

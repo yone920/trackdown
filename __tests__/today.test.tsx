@@ -463,7 +463,9 @@ describe('Today — the doors, and what is no longer on the page', () => {
     // an older brief.
     expect(screen.getByTestId('today-eat-line')).toHaveTextContent('480 eaten · 2,385 left');
     fireEvent.press(screen.getByTestId('today-eat'));
-    expect(mockPush).toHaveBeenCalledWith('/today/eating');
+    // Eating has its own tab now (user decision 2026-09-01); the door stays, the target
+    // changed, and app/today/eating.tsx was absorbed into it.
+    expect(mockPush).toHaveBeenCalledWith('/eat');
   });
 
   it('counts an over-allowance day as over, not as a negative amount left', async () => {

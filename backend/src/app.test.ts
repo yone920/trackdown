@@ -5325,3 +5325,101 @@ describe("the dossier", () => {
 		expect((await request(app).get("/api/you?tz=9999").set(headers)).status).toBe(400);
 	});
 });
+
+// ── the Eat page ─────────────────────────────────────────────────────────────────────
+// Three layers, and only the middle one is arithmetic (concept-v2 §Principles 4). The one
+// that is written follows the READINGS rule: cached against the week's inputs hash, so
+// opening the page when nothing has moved costs nothing and generates nothing.
+
+describe("the Eat page", () => {
+	const tz = tzForLocalHour(15);
+	const today = localDay(new Date(), tz).date;
+	const yesterday = addDays(today, -1);
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("eater@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		await request(app)
+			.patch("/api/profile")
+			.set(headers)
+			.send({ sex: "male", birth_year: new Date().getUTCFullYear() - 38, height_cm: 180, protein_g: 160, carbs_max_g: 150 });
+
+		const meal = (date: string, time: string, body: Record<string, unknown>) =>
+			request(app)
+				.post("/api/entries/meals")
+				.set(headers)
+				.send({ logged_at: localInstant(date, time, tz), ...body });
+
+		await meal(yesterday, "13:00", { description: "rice and chicken", kcal: 900, protein_g: 60, carbs_g: 190, fat_g: 20, fiber_g: 6 });
+		await meal(today, "08:00", { description: "eggs and toast", kcal: 500, protein_g: 35, carbs_g: 40, fat_g: 22, fiber_g: 5 });
+		await meal(today, "13:00", { description: "salad", kcal: 600, protein_g: 45, carbs_g: 50, fat_g: 25, fiber_g: 9 });
+	});
+
+	it("answers with the day, the computed week and the written direction", async () => {
+		coachLlm.nextOutput = { text: "Protein is the one to move: you are averaging well under the mark." };
+		const res = await request(app).get(`/api/eating?tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+
+		// Layer 1 — the day's own arithmetic, the SAME numbers Today shows.
+		expect(res.body.today.eaten).toBe(1100);
+		expect(res.body.today.macros.protein_g.eaten).toBe(80);
+		expect(res.body.today.macros.carbs_g.target).toBe(150);
+		expect(res.body.today.meals).toHaveLength(2);
+
+		// Layer 2 — the rolling week, computed. Two days had food on them, so the divisor
+		// is two: a day nobody logged is an absence, not a day of eating nothing.
+		expect(res.body.week.days_logged).toBe(2);
+		expect(res.body.week.protein.avg_per_day).toBe(70);
+		expect(res.body.week.protein).toMatchObject({ target: 160, source: "stated", direction: "at_least" });
+		expect(res.body.week.carbs).toMatchObject({ target: 150, direction: "at_most" });
+		// Nobody states a fibre target; the guideline stands in and says so.
+		expect(res.body.week.fiber.source).toBe("guideline");
+
+		// Layer 3 — the written direction.
+		expect(res.body.direction.text).toMatch(/Protein is the one to move/);
+		expect(res.body.direction.kind).toBe("eating_direction");
+	});
+
+	it("generates nothing at all on a warm open", async () => {
+		// The reading contract, and the reason this is a reading rather than a brief.
+		coachLlm.nextOutput = { text: "This must never be reached." };
+		const before = coachLlm.requests.length;
+		const res = await request(app).get(`/api/eating?tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+		expect(coachLlm.requests).toHaveLength(before);
+		expect(res.body.direction.text).toMatch(/Protein is the one to move/);
+	});
+
+	it("writes a new one once the week underneath it moves", async () => {
+		await request(app)
+			.post("/api/entries/meals")
+			.set(headers)
+			.send({
+				description: "steak",
+				kcal: 700,
+				protein_g: 80,
+				carbs_g: 5,
+				fat_g: 40,
+				fiber_g: 2,
+				logged_at: localInstant(today, "19:00", tz),
+			});
+		coachLlm.nextOutput = { text: "Protein has come up; hold it there and watch the fibre." };
+		const res = await request(app).get(`/api/eating?tz=${tz}`).set(headers);
+		expect(res.body.direction.text).toMatch(/Protein has come up/);
+		expect(res.body.week.protein.avg_per_day).toBe(110);
+	});
+
+	it("says nothing rather than inventing a concern about an empty week", async () => {
+		const token = await signUp("never-eaten@example.com");
+		const res = await request(app)
+			.get(`/api/eating?tz=${tz}`)
+			.set({ Authorization: `Bearer ${token}` });
+
+		expect(res.status).toBe(200);
+		expect(res.body.week.days_logged).toBe(0);
+		expect(res.body.week.protein.avg_per_day).toBeNull();
+		// No paragraph, and no model call to produce one.
+		expect(res.body.direction).toBeNull();
+	});
+});

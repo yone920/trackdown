@@ -15,7 +15,10 @@ export default function TabLayout() {
             nothing is (user decision 2026-09-01). */}
         <Tabs.Screen name="index" options={{ title: 'Home' }} />
         <Tabs.Screen name="today" options={{ title: 'Today' }} />
-        <Tabs.Screen name="days" options={{ title: 'Days' }} />
+        {/* Eat is a tab and Days is not (user decision 2026-09-01): eating is the half of
+            the day that had no page of its own, and the list of closed days is a section of
+            Progress rather than a destination. Five tabs, not six. */}
+        <Tabs.Screen name="eat" options={{ title: 'Eat' }} />
         <Tabs.Screen name="progress" options={{ title: 'Progress' }} />
       </Tabs>
     </View>

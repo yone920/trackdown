@@ -9,7 +9,7 @@ import ExerciseSheet from '@/app/exercise/[id]';
 import Lifts from '@/app/lifts';
 import LogSheet from '@/app/log';
 import Home from '@/app/(tabs)/index';
-import Days from '@/app/(tabs)/days';
+import Eat from '@/app/(tabs)/eat';
 import Progress from '@/app/(tabs)/progress';
 import Today from '@/app/(tabs)/today';
 import You from '@/app/you';
@@ -81,7 +81,7 @@ beforeEach(() => {
 const SCREENS: [name: string, Screen: () => React.ReactElement, testID: string][] = [
   ['Home', Home, 'home-scroll'],
   ['Today', Today, 'today-scroll'],
-  ['Days', Days, 'days-list'],
+  ['Eat', Eat, 'eat-scroll'],
   ['Progress', Progress, 'progress-scroll'],
   ['You', You, 'you-scroll'],
   ['Log', LogSheet, 'log-scroll'],

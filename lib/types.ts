@@ -998,3 +998,54 @@ export type TrainingBoard = {
     series: { date: IsoDate; value: number }[];
   };
 };
+
+// ---------------------------------------------------------------------------
+// The Eat page (GET /api/eating — backend/src/routes/eating.ts)
+// ---------------------------------------------------------------------------
+
+export type MacroAverage = {
+  avg_per_day: number | null;
+  target: number | null;
+  direction: 'at_least' | 'at_most';
+  /** Where the target came from — the page says when a number is standing in. */
+  source: 'stated' | 'derived' | 'guideline' | 'none';
+};
+
+export type EatingDay = {
+  date: IsoDate;
+  kcal: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+  fiber_g: number;
+  meals: number;
+};
+
+export type EatingWeek = {
+  days: EatingDay[];
+  /** The divisor, said out loud: days that actually had food logged on them. */
+  days_logged: number;
+  avg_kcal: number | null;
+  protein: MacroAverage;
+  carbs: MacroAverage;
+  fat: MacroAverage;
+  fiber: MacroAverage;
+  outliers: string[];
+};
+
+export type EatingView = {
+  date: IsoDate;
+  today: {
+    eaten: number;
+    target: number | null;
+    allowance: number | null;
+    remaining: number | null;
+    status: DayView['status'];
+    macros: DayView['macros'];
+    meals: DayMeal[];
+    eating_pattern: string | null;
+  };
+  week: EatingWeek;
+  /** The one written layer. Null when there is nothing to steer yet. */
+  direction: Reading | null;
+};

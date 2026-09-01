@@ -2,16 +2,15 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
-import EatingLog from '@/app/today/eating';
 import TrainingLog from '@/app/today/training';
 import { clock } from '@/lib/format';
 import type { DayActivity, DayMeal } from '@/lib/types';
 import { makeDay } from './fixtures';
 
-// The two logs Today hides behind doors (user decision 2026-09-01: "we can hide them
-// behind a button... They both can have their own button"). Everything the rows could do
-// on Today they still do here — the grouping, the deletes, the corrections, the names —
-// because the log did not change, only where it is kept.
+// The training log Today hides behind a door on a no-plan day. Everything the rows could
+// do on Today they still do here — the grouping, the deletes, the corrections, the names.
+//
+// The eating half moved to the Eat tab (user decision 2026-09-01) and is tested there.
 
 const mockApi = jest.fn();
 jest.mock('@/lib/api', () => ({
@@ -90,7 +89,6 @@ function wrap(node: React.ReactElement) {
 }
 
 const renderTraining = () => wrap(<TrainingLog />);
-const renderEating = () => wrap(<EatingLog />);
 
 beforeEach(() => {
   mockApi.mockReset();
@@ -380,18 +378,6 @@ describe('taking something back, from the log it is in', () => {
     expect(screen.queryByText('Bench Press')).toBeNull();
   });
 
-  it('deletes a meal the same way, and the second tap is what does it', async () => {
-    const calls = serveDeletable();
-    renderEating();
-    await waitFor(() => expect(screen.getByText('eggs and toast')).toBeTruthy());
-
-    fireEvent.press(screen.getByTestId('row-meal-m1-delete'));
-    expect(calls.some((call) => call.method === 'DELETE')).toBe(false);
-    fireEvent.press(screen.getByTestId('row-meal-m1-delete-confirm'));
-
-    await waitFor(() => expect(screen.queryByText('eggs and toast')).toBeNull());
-    expect(calls).toContainEqual({ path: '/api/entries/meals/m1', method: 'DELETE' });
-  });
 
   it('opens a training row for correction, dated today', async () => {
     serve({ day: makeDay({ items: { meals: [], activities: [lift()], weights: [] } }) });
@@ -405,34 +391,6 @@ describe('taking something back, from the log it is in', () => {
     });
   });
 
-  it('opens a meal row for correction', async () => {
-    serve({ day: makeDay({ items: { meals: [MEAL], activities: [], weights: [] } }) });
-    renderEating();
-    await waitFor(() => expect(screen.getByText('eggs and toast')).toBeTruthy());
 
-    fireEvent.press(screen.getByTestId('row-meal-m1'));
-    expect(mockPush).toHaveBeenCalledWith({
-      pathname: '/log',
-      params: { editDate: expect.any(String), editId: 'm1', editKind: 'meal' },
-    });
-  });
 
-  it('shows one meal for one meal, and nothing about a dinner nobody ate', async () => {
-    serve({ day: makeDay({ eaten: 480, items: { meals: [MEAL], activities: [], weights: [] } }) });
-    renderEating();
-
-    await waitFor(() => expect(screen.getByText('eggs and toast')).toBeTruthy());
-    expect(screen.getByText('Breakfast')).toBeTruthy();
-    // No row for a meal nobody has eaten (concept-v2 §Principles 8).
-    expect(screen.queryByText('Dinner')).toBeNull();
-    expect(screen.queryByText('Lunch')).toBeNull();
-  });
-
-  it('says the plate is empty with a wink, and draws no zero macro rows', async () => {
-    serve({ day: makeDay({ eaten: 0, items: { meals: [], activities: [], weights: [] } }) });
-    renderEating();
-
-    await waitFor(() => expect(screen.getByTestId('eating-empty')).toBeTruthy());
-    expect(screen.queryByTestId('macro-Protein')).toBeNull();
-  });
 });

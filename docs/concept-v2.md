@@ -153,7 +153,7 @@ day is judged against the goal active **that day**.
 The input classifier routes statements to: log · goal · constraint · preference · coach context,
 always showing what it understood before saving.
 
-## The tabs — Home · Today · Days · Progress · You
+## The tabs — Home · Today · Eat · Progress · You
 
 Revised 2026-09-01. The app used to land on Today, which is the right page when something is
 happening and the wrong one when nothing is: a rest morning opened on an empty log and a plan
@@ -175,8 +175,13 @@ one.
   today's workout* on this page is the only generator in the app. Deliberately short — the
   full logs, the day arc, the body numbers and the weight card were all taken off it
   because they buried the day (user decision 2026-09-01).
-- **Days**, **Progress**, **You** are unchanged. Today's row in the Days list goes to the
-  Today tab rather than to a second copy of today.
+- **Eat** — the other half of the day, in four layers: today's numbers (the same arithmetic
+  Today shows), the rolling seven-day averages against their targets — **computed**, with
+  each target saying whether it was stated, derived or a guideline — a short **written**
+  paragraph on which way to steer the nutrients (never a dish), and the food log. The
+  paragraph is a cached reading, so opening the page generates nothing.
+- **Progress** now opens with the **Days** list; there is no Days tab. **You** is unchanged.
+  Today's row in the Days list goes to the Today tab rather than to a second copy of today.
 
 ## The two day views
 
