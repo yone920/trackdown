@@ -87,6 +87,137 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-08-31 — a button that knows, and a page that stops answering unasked (`fix-plan-aware-button`)
+
+Two complaints, one root. Today's accent pill said **"What should I do today?"** to somebody
+who had asked at seven and had a plan with two of four items already ticked; and the only
+way to find out whether there *was* a plan was to ask for one, because `GET /api/coach/next`
+generated the day's brief when there was not one. So the button could not know, and opening
+the Coach screen was itself the act that wrote the day's advice — a schedule with extra
+steps, which is the one thing concept-v2 §Principles 5 says the coach is not.
+
+#### A — two read-only doors, and neither can reach the model
+
+`GET /api/coach/status?tz=` is new: `{ date, has_plan, headline, done_count, total_count,
+complete }`, and that is all of it. `GET /api/coach/next` takes `generate=false`, reads the
+standing brief and answers **`brief: null`** when there is none.
+
+The guarantee is structural rather than careful. `briefStatus()` and `standingBrief()` in
+`services/coach/coach.ts` **do not take a `CoachPort`** — there is no flag to get wrong and
+no branch to fall through, because there is nothing in scope to generate with. The status
+route does not run the day close either: closing a day writes a reading, and drawing a
+button is not a reason to write anything.
+
+The count comes from `completionOf`, the same matcher the ticks on the Coach screen come
+from, over the same day view — so the button and the page cannot disagree about how far
+through the plan you are. `briefStatus` is deliberately the cheaper of the two: one brief
+row, one name lookup and `computeDay`, rather than the features, the goals and the whole
+rule set that `standingBrief` needs.
+
+#### B — the button says which day it is standing in
+
+- **No plan** — *"What should I do today?"*, exactly as before, and the tap opens the Coach
+  screen, which asks on demand.
+- **A plan** — **"Today's plan"** with the count underneath: *"4 moves"*, *"2 of 4 done"*,
+  or **"Plan complete ✓"**. A rest day (a plan with nothing to tick) carries no count. The
+  tap only opens the page; nothing on Today generates anything, ever.
+- **A status that has not arrived** reads as the question. It is the half of the pair that
+  promises nothing that might not be there, and the tap does the same thing either way.
+
+#### C — the Coach page asks for a tap
+
+With `brief: null` the screen draws one card and one button — *What should I do today?* —
+and that button is the only thing on the page that can make the first brief of the day.
+Anything typed into the box before pressing it goes as `context`, as it always did.
+
+#### D — three ways to change a plan, two of them explicit
+
+Under the Do list, where the plan is:
+
+- **"Add to today's plan"** — the append path, surfaced. Everything above it stays.
+- **"Replace today's plan"** — outlined in accent, and armed rather than fired: the first
+  tap changes it to **"Replace? This clears today's plan"** and says *"Everything above
+  goes, ticks included"*; the second does it. Pressing anything else disarms it.
+- **The box** sends no mode at all. Only the model has read the sentence, so it still
+  decides — but its **tie-break flipped to append**. It used to be rewrite, reasoning that a
+  rewrite is always a complete answer; that is true and it was the wrong thing to optimise.
+  Now that Replace exists as its own button behind its own confirmation, an ambiguous line
+  typed into the box has a cheap way to be wrong (two movements too many, under the plan)
+  and an expensive one (the plan gone).
+
+`BriefRevision.mode` carries the button's choice to the prompt — *"THE USER PRESSED 'Add to
+today's plan'. THIS IS AN APPEND and the decision is already made"* — and is **enforced in
+`askUsable`**, which merges by `revision.mode ?? answer.revision_mode`. A promise the model
+can overrule by answering "rewrite" is not a promise, and this is the same file that already
+learnt that a rule living only in a prompt is a suggestion. `assertUsableRevision` now takes
+the effective mode too, so an answer is checked against the rule the merge will actually use.
+
+**And the box's empty state stopped being a silent regenerate.** *Ask again* with nothing
+typed used to POST a plain regenerate — the least explicit control on the page, replacing
+the plan without saying so. It is *Adjust it*, disabled until there are words in the box.
+
+**Decisions**
+
+- **`generate` defaults to TRUE on the route.** An app built before this field existed asks
+  the question it always asked and gets the answer it always got; only the new app sends
+  `generate=false`. The opposite default would have turned every phone still on the previous
+  build into one that never generates a brief at all.
+- **`brief` became nullable rather than the route 404ing or inventing an empty brief.** "No
+  plan yet" is a state the screen draws, not an error it recovers from — and an empty brief
+  would have been a lie the app then had to detect.
+- **The status endpoint is not `/api/coach/next` with a flag.** Two callers with two
+  budgets: Today draws on every open and wants six fields, the Coach screen opens rarely and
+  wants everything. Folding them together would have made the cheap call pay for the
+  expensive one's inputs.
+- **`done_count` counts done lines, not sets.** It is the same number the group heading
+  prints; a second arithmetic for the same sentence is a second answer.
+- **The confirmation is a second tap, not a modal.** Every other destructive control in this
+  app arms and waits (`DELETE_ARM_MS`, the row's ✕), and a plan is not more dangerous than a
+  logged meal.
+- No new dependencies. No migration. No model-facing schema changed — `revision_mode` is the
+  same field it was; the mode is decided before the call rather than by it.
+
+**Tests** — 623 passing, 2 skipped in `backend` (was 613/2); 224 passing in the app (was 209).
+
+- `src/app.test.ts` (+10): the status payload with no plan and the page load's `brief: null`,
+  both asserting **zero `CoachPort` calls** and zero rows written; the count moving 0 → 1 → 2
+  and `complete` turning true across two logged lifts, still with the coach asked nothing;
+  the page load serving the standing plan *with* its ticks, its `nutrition_now` and
+  `stale: true`; an app that sends no `generate` at all still generating; a bad tz and an
+  unauthenticated status read; and the two forced modes — an Add that appends over a model
+  answering `"rewrite"` (and is refused when it adds nothing, checked against the merge's
+  rule rather than the label), a confirmed Replace that rewrites over a model answering
+  `"append"`, the box leaving the mode to the model, and an unknown mode rejected. The
+  prompt assertions cover all three: `THIS IS AN APPEND`, `THIS IS A REWRITE`, and the box's
+  *"it is an APPEND"* tie-break.
+- `anthropic.coach.contract.test.ts` — **the flipped tie-break cost a contract run to get
+  right, which is the second time this field has.** With the first wording — *"its default is
+  an ADDITION"* — the live model read **"give me 7-8 workouts"** as an append, and it is not:
+  a count for the whole session is a statement about what today IS. The default stands, and
+  the block now names the shape that is not covered by it (a number, a length or an intensity
+  describing the WHOLE session) before falling through to append. The three existing revision
+  cases pass unchanged against the live model, which is what they are for.
+- `__tests__/today.test.tsx` (+6): the two labels and the sub-line in all four states
+  (`4 moves`, `2 of 4 done`, `Plan complete ✓`, and none on a rest day); the button reading
+  `/api/coach/status` and neither of the two endpoints that generate; the fall back to the
+  question when the status read fails; and the tap that only navigates.
+- `__tests__/coach.test.tsx` (+9): the page load carrying `generate: false`; the ask card
+  over a null brief with nothing POSTed until it is pressed, and the typed line going as
+  `context`; no ask button while the read is in flight; Add sending `mode: "append"` with and
+  without a typed line; Replace refusing the first tap, committing on the second, and
+  disarming when anything else is pressed; and the empty box no longer able to regenerate.
+
+**Deferred**
+
+- **The status is not pushed.** A plan finished on another device shows up on the next open
+  or pull-to-refresh. A socket for a six-field read is not worth its reconnect logic.
+- **`headline` is carried and not drawn on the button.** "Today's plan" reads better at pill
+  width than a truncated *"Pull day: back and shoul…"*, and the headline is the first thing
+  on the next screen. The field is there for a caller that wants it.
+- **Nothing undoes a Replace.** The old brief is still in `coach_briefs` — every distinct
+  answer is a row — so restoring one is a read away, but there is no screen for it and the
+  confirmation is the guard for now.
+
 ### 2026-08-31 — a treadmill between two barbells, and three charts of nothing (`fix-board-split`)
 
 Three screenshots from the phone, all of them the same mistake in different clothes: a

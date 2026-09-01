@@ -3194,6 +3194,269 @@ describe("the living plan — completion, add-ons and the live Eat card", () => 
 	});
 });
 
+// ── Field fix: the button knows, and looking never writes ────────────────────────────
+// Two failures with one root (user decision 2026-08-31 §1–§2): the only way to find out
+// whether today had a plan was to ASK for one. Today's button said "What should I do
+// today?" to somebody who had already been answered, and the Coach screen generated the
+// day's standing brief simply by being opened. Both doors are read-only now, and neither
+// of the functions behind them is handed a CoachPort to generate with.
+
+describe("the day's plan, read without writing one", () => {
+	const tz = tzForLocalHour(10);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+
+	const logLift = (values: Record<string, unknown>) =>
+		request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({ logged_at: localInstant(today, "09:10", tz), ...values });
+
+	beforeAll(async () => {
+		const token = await signUp("look@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+	}, 60_000);
+
+	afterEach(() => {
+		coach.nextBrief = SAMPLE_BRIEF;
+		coach.briefs.length = 0;
+		coach.revisedBriefs.length = 0;
+	});
+
+	it("says there is no plan, and asking that question does not make one", async () => {
+		const before = coach.inputs.length;
+
+		const status = await request(app).get(`/api/coach/status?tz=${tz}`).set(headers);
+		expect(status.status).toBe(200);
+		expect(status.body).toMatchObject({
+			date: today,
+			has_plan: false,
+			headline: null,
+			done_count: 0,
+			total_count: 0,
+			complete: false,
+		});
+
+		// Opening the Coach screen: the same question, in the shape the page needs.
+		const page = await request(app).get(`/api/coach/next?tz=${tz}&generate=false`).set(headers);
+		expect(page.status).toBe(200);
+		expect(page.body.brief).toBeNull();
+		expect(page.body.stale).toBe(false);
+		// It still carries what the screen draws around a brief it does not have.
+		expect(page.body.gap).toMatchObject({ level: expect.any(String) });
+		expect(page.body.nudge_action).toBeNull();
+
+		// Not one model call between them, and nothing written down.
+		expect(coach.inputs.length).toBe(before);
+		expect(await countBriefs(today, "look@example.com")).toBe(0);
+	});
+
+	it("counts the plan off against the log once there is one, still without asking", async () => {
+		// SAMPLE_BRIEF prescribes Lat Pulldown 3 × 10 and Overhead Press 3 × 8.
+		const asked = await request(app).post("/api/coach/next/regenerate").set(headers).send({ tz_offset_min: tz });
+		expect(asked.status).toBe(200);
+		const callsAfterAsking = coach.inputs.length;
+
+		const fresh = await request(app).get(`/api/coach/status?tz=${tz}`).set(headers);
+		expect(fresh.body).toMatchObject({
+			has_plan: true,
+			headline: SAMPLE_BRIEF.headline,
+			done_count: 0,
+			total_count: 2,
+			complete: false,
+		});
+
+		await logLift({ description: "3 × 10 lat pulldown at 110", exercise: "Lat Pulldown", sets: 3, reps: 10, load_lb: 110 });
+		const partway = await request(app).get(`/api/coach/status?tz=${tz}`).set(headers);
+		expect(partway.body).toMatchObject({ has_plan: true, done_count: 1, total_count: 2, complete: false });
+
+		await logLift({ description: "3 × 8 overhead press at 65", exercise: "Overhead Press", sets: 3, reps: 8, load_lb: 65 });
+		const finished = await request(app).get(`/api/coach/status?tz=${tz}`).set(headers);
+		expect(finished.body).toMatchObject({ done_count: 2, total_count: 2, complete: true });
+
+		// Three status reads and two logs, and the coach was asked nothing by any of them.
+		expect(coach.inputs.length).toBe(callsAfterAsking);
+	});
+
+	it("serves the standing plan on the page load, with its ticks, and generates nothing", async () => {
+		const before = coach.inputs.length;
+		const briefsBefore = await countBriefs(today, "look@example.com");
+
+		const page = await request(app).get(`/api/coach/next?tz=${tz}&generate=false`).set(headers);
+		expect(page.status).toBe(200);
+		expect(page.body.brief.headline).toBe(SAMPLE_BRIEF.headline);
+		// The same live state the generating path attaches: ticks, and the Eat card's numbers.
+		expect(page.body.brief.workout.exercises.map((e: { completion: { done: boolean } }) => e.completion.done)).toEqual([
+			true,
+			true,
+		]);
+		expect(page.body.brief.workout.complete).toBe(true);
+		expect(page.body.brief.nutrition_now).toBeTruthy();
+		// The log has moved since the brief was written, and the page is told so.
+		expect(page.body.stale).toBe(true);
+
+		expect(coach.inputs.length).toBe(before);
+		expect(await countBriefs(today, "look@example.com")).toBe(briefsBefore);
+	});
+
+	it("still generates for an app that does not know about the flag", async () => {
+		const token = await signUp("old-build@example.com");
+		const old = { Authorization: `Bearer ${token}` };
+		const before = coach.inputs.length;
+		// No `generate` in the query at all: the behaviour every build before today had.
+		const res = await request(app).get(`/api/coach/next?tz=0`).set(old);
+		expect(res.status).toBe(200);
+		expect(res.body.brief.headline).toBe(SAMPLE_BRIEF.headline);
+		expect(coach.inputs.length).toBe(before + 1);
+	});
+
+	it("refuses an impossible timezone on the status read, and an unauthenticated one", async () => {
+		expect((await request(app).get(`/api/coach/status?tz=999`).set(headers)).status).toBe(400);
+		expect((await request(app).get(`/api/coach/status?tz=${tz}`)).status).toBe(401);
+	});
+});
+
+// ── Field fix: two buttons that mean what they say ───────────────────────────────────
+// The free-text box leaves the mode to the model, which is right — only the model has read
+// the sentence. *Add to today's plan* and *Replace today's plan* do not: the user pressed a
+// button, and a button whose promise the model can overrule is not a button (user decision
+// 2026-08-31 §3).
+
+describe("append and replace, chosen by the user rather than the model", () => {
+	const tz = tzForLocalHour(16);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("modes@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+	}, 60_000);
+
+	afterEach(() => {
+		coach.nextBrief = SAMPLE_BRIEF;
+		coach.briefs.length = 0;
+		coach.revisedBriefs.length = 0;
+	});
+
+	/** A revision answer that claims to be a rewrite — one exercise, a new headline. */
+	const claimsRewrite = {
+		...SAMPLE_BRIEF,
+		headline: "Leg day — the model rebuilt it",
+		why: "Twenty minutes of core on the end.",
+		workout: {
+			type: "strength",
+			targets: ["core"],
+			exercises: [{ name: "Plank", load_lb: null, sets: 3, reps: null, minutes: 1, note: null, is_new: false }],
+			finisher: [],
+		},
+		revision_mode: "rewrite",
+	};
+
+	it("appends when the user pressed Add, whatever mode the model answered with", async () => {
+		const before = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		const originals = before.body.brief.workout.exercises.map((e: { name: string }) => e.name);
+		expect(originals.length).toBeGreaterThan(0);
+
+		coach.revisedBriefs.push(claimsRewrite);
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "twenty minutes of core", mode: "append" });
+
+		expect(res.status).toBe(200);
+		// The plan is still there with the addition under it — the model said "rewrite" and
+		// the button outranked it.
+		expect(res.body.brief.workout.exercises.map((e: { name: string }) => e.name)).toEqual([...originals, "Plank"]);
+		expect(res.body.brief.headline).toBe(before.body.brief.headline);
+		expect(res.body.brief.workout.exercises.at(-1).added_at).toMatch(/\d/);
+
+		// And the model was told, rather than asked.
+		const revision = coach.revisions.at(-1);
+		expect(revision?.mode).toBe("append");
+		expect(buildCoachPrompt(coach.inputs.at(-1)!, revision)).toContain("THIS IS AN APPEND");
+	});
+
+	it("refuses an Add that adds nothing, even when the model called it a rewrite", async () => {
+		const before = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		const briefsBefore = await countBriefs(today, "modes@example.com");
+		const nothing = { ...claimsRewrite, workout: { ...claimsRewrite.workout, exercises: [] } };
+		coach.revisedBriefs.push(nothing, nothing);
+
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "add something", mode: "append" });
+
+		// Checked against the rule the MERGE uses, not the label the model wrote: as a
+		// rewrite this would have thrown for a different reason, and as an append with an
+		// empty list it is the guard that was already there.
+		expect(res.status).toBe(200);
+		expect(res.body.stale).toBe(true);
+		expect(res.body.brief.id).toBe(before.body.brief.id);
+		expect(await countBriefs(today, "modes@example.com")).toBe(briefsBefore);
+	});
+
+	it("replaces the plan when the user confirmed Replace, whatever mode the model answered with", async () => {
+		await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		coach.revisedBriefs.push({
+			...claimsRewrite,
+			headline: "Leg day",
+			workout: {
+				type: "strength",
+				targets: ["quads"],
+				exercises: [{ name: "Back Squat", load_lb: 185, sets: 3, reps: 5, minutes: null, note: null, is_new: false }],
+				finisher: [],
+			},
+			// The model reads "legs" as an addition; the user pressed Replace and confirmed it.
+			revision_mode: "append",
+		});
+
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "legs", mode: "rewrite" });
+
+		expect(res.status).toBe(200);
+		expect(res.body.brief.headline).toBe("Leg day");
+		expect(res.body.brief.workout.exercises.map((e: { name: string }) => e.name)).toEqual(["Back Squat"]);
+		expect(res.body.brief.workout.exercises[0].added_at).toBeNull();
+
+		const revision = coach.revisions.at(-1);
+		expect(revision?.mode).toBe("rewrite");
+		expect(buildCoachPrompt(coach.inputs.at(-1)!, revision)).toContain("THIS IS A REWRITE");
+	});
+
+	it("leaves the box's mode to the model, and tells it an ambiguous line is an addition", async () => {
+		await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		coach.revisedBriefs.push(claimsRewrite);
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "switch to legs" });
+
+		expect(res.status).toBe(200);
+		// No mode on the request, so the model's own reading stands: this one rewrote.
+		expect(res.body.brief.headline).toBe("Leg day — the model rebuilt it");
+		const revision = coach.revisions.at(-1);
+		expect(revision?.mode).toBeNull();
+
+		const prompt = buildCoachPrompt(coach.inputs.at(-1)!, revision);
+		expect(prompt).toContain("FIRST DECIDE WHICH KIND OF CHANGE THIS IS");
+		expect(prompt).toContain("it is an APPEND");
+		expect(prompt).not.toContain("THIS IS AN APPEND");
+	});
+
+	it("refuses a mode it does not know", async () => {
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "add core", mode: "merge" });
+		expect(res.status).toBe(400);
+	});
+});
+
 // ── Never a retroactive rest verdict, and the ledger the rotation is held to ──────────
 
 describe("asking after the session has already happened", () => {

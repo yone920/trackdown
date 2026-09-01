@@ -227,12 +227,19 @@ export function resolveRestAfterTraining<T extends { workout: { type: string; ex
  * The same guarantee for an append: "add core" that adds nothing is not an answer either,
  * and unlike a rewrite it cannot be spotted by looking at the merged result — the plan is
  * still full of the exercises that were already there.
+ *
+ * `mode` is the mode the merge will actually use, which is not always the one the model
+ * wrote: *Add to today's plan* is an append because the user pressed a button that says so
+ * (ports/coach.ts §BriefRevision.mode), and an answer checked as a rewrite and then merged
+ * as an append is checked against the wrong rule. It defaults to the model's own reading,
+ * which is what the free-text box gets.
  */
 export function assertUsableRevision<T extends { revision_mode: RevisionMode; workout: { type: string; exercises: unknown[] } }>(
-	answer: T
+	answer: T,
+	mode: RevisionMode = answer.revision_mode
 ): T {
-	if (answer.revision_mode === "append" && answer.workout.exercises.length === 0) {
+	if (mode === "append" && answer.workout.exercises.length === 0) {
 		throw new UnusableBriefError("the model said it was adding to the plan and added nothing");
 	}
-	return answer.revision_mode === "append" ? answer : assertUsableBrief(answer);
+	return mode === "append" ? answer : assertUsableBrief(answer);
 }

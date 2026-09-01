@@ -19,7 +19,13 @@ import { loadTargets } from "../profile.js";
 import { catalogFactsFor, introductionCandidates } from "./catalog.js";
 import { completionOf, planIsComplete, type ExerciseCompletion } from "./completion.js";
 import { computeFeatures } from "./features.js";
-import { assertUsableBrief, assertUsableRevision, resolveRestAfterTraining, UnusableBriefError } from "./schema.js";
+import {
+	assertUsableBrief,
+	assertUsableRevision,
+	resolveRestAfterTraining,
+	UnusableBriefError,
+	type RevisionMode,
+} from "./schema.js";
 import { buildRules, type CoachGoal, type NudgeAction, type TrainingBackground } from "./rules.js";
 
 // The brief: gathering its inputs, caching it for the day, and storing it
@@ -525,6 +531,12 @@ export interface NextBriefOptions extends LoadInputsOptions {
 	 * there is nothing to revise into the cache.
 	 */
 	revision?: string | null;
+	/**
+	 * Which of the two explicit buttons this came from, when it came from one — *Add to
+	 * today's plan* or *Replace today's plan* (user decision 2026-08-31 §3). Null is the
+	 * free-text box, where the model decides. Forced here as well as said in the prompt.
+	 */
+	revisionMode?: RevisionMode | null;
 }
 
 export interface NextBriefResult {
@@ -618,6 +630,95 @@ export function nutritionNow(inputs: CoachBriefInputs, nutrition: Brief["nutriti
 	};
 }
 
+// ---------------------------------------------------------------------------
+// Reading the day's plan without making one
+// ---------------------------------------------------------------------------
+//
+// Two functions, and the thing they have in common is the thing that matters: **neither
+// takes a `CoachPort`**. Opening the Coach screen and drawing Today's button are reads of
+// what the coach already said, and a read that cannot reach the model cannot generate by
+// accident — no flag to get wrong, no branch to fall through (user decision 2026-08-31 §2).
+//
+// The one that used to be able to was `GET /api/coach/next`: with no brief for the day it
+// generated one, so simply *opening the page* wrote the day's standing answer. That is now
+// `generate=false` on the route, which lands here.
+
+export interface StandingBriefResult {
+	/** The day's brief, or null when nobody has asked for one yet. Never generated. */
+	brief: CoachBriefRecord | null;
+	inputs: CoachBriefInputs;
+	/** True when the log has moved since the brief was written. False when there is none. */
+	stale: boolean;
+}
+
+/**
+ * Today's brief if there is one, with its ticks and its live Eat numbers on it — and
+ * nothing at all if there is not. The Coach screen's page load.
+ */
+export async function standingBrief(
+	db: Queryable,
+	userId: string,
+	options: LoadInputsOptions
+): Promise<StandingBriefResult> {
+	const inputs = await loadCoachInputs(db, userId, options);
+	const previous = await latestBrief(db, userId, inputs.date);
+	if (!previous) return { brief: null, inputs, stale: false };
+	const withIds = await withExerciseIds(db, previous);
+	return {
+		brief: withLiveState(withIds, inputs),
+		inputs,
+		stale: previous.inputs_hash !== briefInputsHash(inputs),
+	};
+}
+
+/** What Today's button needs to know, and not one field more. */
+export interface CoachStatus {
+	date: IsoDate;
+	/** Whether the coach has been asked today. The button's two states hang off this. */
+	has_plan: boolean;
+	/** The plan's own headline, for a caller that wants it. Null with no plan. */
+	headline: string | null;
+	/** Lines of the Do list logged today, and how many there are. Both 0 with no plan. */
+	done_count: number;
+	total_count: number;
+	/** True when every line of a non-empty plan is done — the button's "Plan complete ✓". */
+	complete: boolean;
+}
+
+/**
+ * An exists-check, not an answer (user decision 2026-08-31 §1). It reads the day's standing
+ * brief and counts it off against the log, and that is the whole of it: no model, no
+ * `CoachPort` in the signature to call one with, and no day close either — closing a day
+ * writes a reading, and a button on the Today screen is not a reason to write anything.
+ *
+ * It is deliberately cheaper than `standingBrief`: one brief row, one name lookup and the
+ * day view, rather than the features, the goals and the whole rule set. Today draws this on
+ * every open; the Coach screen is the one that needs the rest.
+ */
+export async function briefStatus(
+	db: Queryable,
+	userId: string,
+	{ date, tzOffsetMin, now = new Date() }: { date: IsoDate; tzOffsetMin: number; now?: Date }
+): Promise<CoachStatus> {
+	const brief = await latestBrief(db, userId, date);
+	if (!brief) {
+		return { date, has_plan: false, headline: null, done_count: 0, total_count: 0, complete: false };
+	}
+	const withIds = await withExerciseIds(db, brief);
+	const view = await computeDay(db, { userId, date, tzOffsetMin, now });
+	// The same matcher the Coach screen's ticks come from, over the same list — so the
+	// button and the page can never disagree about how far through the plan you are.
+	const exercises = completionOf(withIds.workout.exercises, todayFrom(view).logged);
+	return {
+		date,
+		has_plan: true,
+		headline: brief.headline || null,
+		done_count: exercises.filter((exercise) => exercise.completion.done).length,
+		total_count: exercises.length,
+		complete: planIsComplete(exercises),
+	};
+}
+
 async function chooseBrief(
 	db: Queryable,
 	coach: CoachPort,
@@ -644,7 +745,10 @@ async function chooseBrief(
 	// With nothing to revise the instruction is still worth having — it becomes the ask.
 	const current = instruction ? await latestBrief(db, userId, inputs.date) : null;
 
-	const revision = instruction && current ? { instruction, current: toBrief(current) } : undefined;
+	const revision: BriefRevision | undefined =
+		instruction && current
+			? { instruction, current: toBrief(current), mode: options.revisionMode ?? null }
+			: undefined;
 
 	try {
 		const answer = capBrief(await askUsable(coach, inputs, revision, current), inputs, {
@@ -688,8 +792,14 @@ async function askUsable(
 		if (!revision) {
 			return assertUsableBrief(resolveRestAfterTraining(await coach.brief(inputs), { trainedToday }));
 		}
-		const answer = assertUsableRevision(resolveRestAfterTraining(await coach.revise(inputs, revision), { trainedToday }));
-		return answer.revision_mode === "append" && current
+		const raw = resolveRestAfterTraining(await coach.revise(inputs, revision), { trainedToday });
+		// The user's own tap outranks the model's reading of the sentence. *Add to today's
+		// plan* promises the plan above it stays, and a promise the model can overrule by
+		// answering "rewrite" is not one — so the mode the merge uses is the button's when
+		// there was a button, and the model's only when the instruction came from the box.
+		const mode: RevisionMode = revision.mode ?? raw.revision_mode;
+		const answer = assertUsableRevision(raw, mode);
+		return mode === "append" && current
 			? appendToBrief(current, answer, inputs.local_time)
 			: assertUsableBrief(stripMode(answer));
 	};

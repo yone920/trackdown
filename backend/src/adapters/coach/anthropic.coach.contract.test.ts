@@ -156,6 +156,8 @@ describe.skipIf(!apiKey)("anthropic coach brief (contract)", () => {
 		const revised = await coach().revise(request, {
 			instruction: "give me 7-8 workouts",
 			current,
+			// The free-text box: nobody pressed a button, so the model reads the sentence.
+			mode: null,
 		});
 
 		// A count is a change to what the session IS, not an addition to it.
@@ -180,7 +182,7 @@ describe.skipIf(!apiKey)("anthropic coach brief (contract)", () => {
 	it("rebuilds the session around a different body part when asked", async () => {
 		const request = inputs();
 		const current = await coach().brief(request);
-		const revised = await coach().revise(request, { instruction: "switch to legs", current });
+		const revised = await coach().revise(request, { instruction: "switch to legs", current, mode: null });
 
 		expect(revised.revision_mode).toBe("rewrite");
 		expect(revised.workout.exercises.length).toBeGreaterThan(0);
@@ -195,7 +197,7 @@ describe.skipIf(!apiKey)("anthropic coach brief (contract)", () => {
 	it("adds to the plan rather than rebuilding it when the instruction is an add-on", async () => {
 		const request = inputs();
 		const current = await coach().brief(request);
-		const revised = await coach().revise(request, { instruction: "add core", current });
+		const revised = await coach().revise(request, { instruction: "add core", current, mode: null });
 
 		expect(revised.revision_mode).toBe("append");
 		// Only the NEW items come back on an append — the plan above is kept for it.

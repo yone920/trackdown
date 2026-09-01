@@ -261,7 +261,7 @@ describe("lifts and cardio are two sections", () => {
 });
 
 describe("the cardio next step — the week, not the last session", () => {
-	const next = (activities: Parameters<typeof facts>[0]["activities"], targetMin?: number) =>
+	const next = (activities: NonNullable<Parameters<typeof facts>[0]>["activities"], targetMin?: number) =>
 		cardioNamed(board({ activities }, {}, { cardioTargetMin: targetMin ?? null }), "Incline Treadmill Walk")?.next;
 
 	it("steps the last session by 10 %, which is the whole point of not repeating it", () => {

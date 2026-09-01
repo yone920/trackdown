@@ -257,16 +257,7 @@ ${JSON.stringify(revision.current)}
 WHAT THEY WANT CHANGED
 "${revision.instruction}"
 
-FIRST DECIDE WHICH KIND OF CHANGE THIS IS — set "revision_mode" to say which.
-
-Ask one question and answer it literally: **does the instruction take anything away?** If
-every exercise already in the plan is still wanted exactly as it stands, and the user is
-only asking for MORE, it is an "append". If any of them has to change, move or go, it is a
-"rewrite". Words like add, also, plus, as well, another, one more, throw in, on the end,
-finish with, and "I've still got N minutes" are appends unless the same sentence also takes
-something away. Do not choose "rewrite" merely because it is the safer or fuller answer:
-rewriting an add-on replaces the plan the user is halfway through, which is the failure
-this field exists to prevent.
+${modeBlock(revision.mode)}
 
 "append" — they are ADDING to the plan they already have and the rest of it still stands.
   "give me another half hour", "add core", "throw in some abs", "one more for shoulders",
@@ -290,10 +281,6 @@ this field exists to prevent.
     keep the ones already there and add to them; a different body part means rebuild the list.
   * Update "headline" and "why" so they describe the revised session, not the old one.
 
-If you genuinely cannot tell — the instruction is ambiguous about whether the current plan
-survives — it is a rewrite, because a rewrite is always a complete answer. "Genuinely cannot
-tell" does not cover a plain "add X".
-
 BOTH WAYS
 - Everything above still binds. The prescribed loads are still the only loads, the
   constraints are still absolute, and a muscle group trained inside 48 hours is still not
@@ -302,6 +289,55 @@ BOTH WAYS
   asked, do the nearest thing you can and say why in "why". Never answer with an empty list.
 - An instruction is never a reason to call the day rest, and never a reason to un-plan work
   the user has already done.`;
+}
+
+/**
+ * Who decided the mode. The two buttons under the plan decide it themselves (user decision
+ * 2026-08-31 §3) and the model is TOLD which; the free-text box leaves the decision where
+ * only the model can make it, because only the model has read the sentence.
+ *
+ * The box's tie-break is now **append**, and it used to be rewrite — on the reasoning that a
+ * rewrite is always a complete answer. That was true and it was the wrong thing to optimise:
+ * a complete answer that replaces a plan somebody is halfway through is the field report
+ * this fix comes from. Now that *Replace today's plan* exists as its own button behind its
+ * own confirmation, an ambiguous sentence typed into the box has a cheap way to be wrong
+ * (two movements too many, under the plan) and an expensive one (the plan gone), and it
+ * should take the cheap one.
+ */
+function modeBlock(mode: BriefRevision["mode"]): string {
+	if (mode === "append") {
+		return `THE USER PRESSED "Add to today's plan". THIS IS AN APPEND and the decision is already
+made: set "revision_mode" to "append" and answer as an append below. The plan above is not
+yours to change, reorder or reissue, whatever the instruction seems to ask for — if it
+cannot be honoured by adding, add the nearest thing that can be and say so in "why".`;
+	}
+	if (mode === "rewrite") {
+		return `THE USER PRESSED "Replace today's plan" and confirmed it. THIS IS A REWRITE: set
+"revision_mode" to "rewrite" and answer as a rewrite below. They know the plan above is
+going; give them a whole session rather than a hedge that keeps half of it.`;
+	}
+	return `FIRST DECIDE WHICH KIND OF CHANGE THIS IS — set "revision_mode" to say which. This came
+from the box under the plan rather than from either button, so it is yours to decide.
+
+Ask one question and answer it literally: **does the instruction take anything away?** If
+every exercise already in the plan is still wanted exactly as it stands, and the user is
+only asking for MORE, it is an "append". If any of them has to change, move or go, it is a
+"rewrite". Words like add, also, plus, as well, another, one more, throw in, on the end,
+finish with, and "I've still got N minutes" are appends unless the same sentence also takes
+something away. Do not choose "rewrite" merely because it is the safer or fuller answer:
+rewriting an add-on replaces the plan the user is halfway through, which is the failure
+this field exists to prevent.
+
+A number, a length or an intensity that describes the WHOLE SESSION is a rewrite, not an
+addition: "make it 8 exercises", "give me 7-8 workouts", "keep it to 30 minutes", "harder",
+"easier". They are saying what today should BE. "Add three more" and "give me another half
+hour" are the appends that sound like these — the difference is whether the number counts
+the session or counts what is being added to it.
+
+And if you genuinely cannot tell, after all of that — the sentence is ambiguous about whether
+the plan survives — it is an APPEND. Replacing a plan nobody asked to have replaced is the
+expensive mistake; two movements too many at the bottom of one is not. A user who wants the
+session rebuilt has a button that says so, and it asks them twice.`;
 }
 
 /** The whole prompt: who the user is, what is true, what is fixed, and what was asked. */
