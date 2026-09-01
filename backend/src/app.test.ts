@@ -3942,6 +3942,9 @@ describe("the exercise sheet", () => {
 		const lift = board.body.lifts.find((row: { exercise: string }) => row.exercise === "Bench Press");
 		expect(lift).toMatchObject({ exercise_id: bench.id, media_count: 2 });
 
+		// The finisher's stretches are catalogued now (2026-09-01), so give one of them the
+		// two frames the import would have downloaded and leave the other uncatalogued.
+		await db.pool.query(`UPDATE exercise_catalog SET media_count = 2 WHERE name = 'Chest Stretch'`);
 		coach.nextBrief = {
 			...SAMPLE_BRIEF,
 			workout: {
@@ -3949,6 +3952,10 @@ describe("the exercise sheet", () => {
 				exercises: [
 					{ name: "Bench Press", load_lb: 135, sets: 3, reps: 5, minutes: null, note: null, is_new: false },
 					...SAMPLE_BRIEF.workout.exercises,
+				],
+				finisher: [
+					...SAMPLE_BRIEF.workout.finisher,
+					{ name: "Shake It Out", minutes: 1, note: null },
 				],
 			},
 		};
@@ -3965,11 +3972,24 @@ describe("the exercise sheet", () => {
 		expect(planned[1]).toMatchObject({ name: "Lat Pulldown", media_count: 0 });
 		expect(planned[1].exercise_id).toMatch(/^[0-9a-f-]{36}$/);
 
-		// The finisher is resolved on the same lookup. "Doorway Chest Stretch" is not in the
-		// catalogue, so it opens the sheet in name-only mode — the point is that it opens.
-		expect(plan.body.brief.workout.finisher).toEqual([
-			{ name: "Doorway Chest Stretch", minutes: 2, note: "Both sides.", exercise_id: null, media_count: 0 },
-		]);
+		// The finisher is resolved on the same lookup. "Doorway Chest Stretch" is an alias of
+		// the seeded Chest Stretch, so it gets an id and its pictures; "Shake It Out" is not
+		// a movement anybody has catalogued and opens the sheet in name-only mode. Both
+		// open, which is the whole of the fix.
+		const finisher = plan.body.brief.workout.finisher as {
+			name: string;
+			exercise_id: string | null;
+			media_count: number;
+		}[];
+		expect(finisher[0]).toMatchObject({ name: "Doorway Chest Stretch", media_count: 2 });
+		expect(finisher[0]?.exercise_id).toMatch(/^[0-9a-f-]{36}$/);
+		expect(finisher[1]).toEqual({
+			name: "Shake It Out",
+			minutes: 1,
+			note: null,
+			exercise_id: null,
+			media_count: 0,
+		});
 		coach.nextBrief = SAMPLE_BRIEF;
 	});
 

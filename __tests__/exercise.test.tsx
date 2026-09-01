@@ -27,7 +27,10 @@ jest.mock('@/lib/api', () => ({
   tzOffsetMin: () => 0,
   authHeaders: () => ({ Authorization: 'Bearer test' }),
   evidenceUrl: (id: string) => `http://test/api/evidence/${id}`,
-  exerciseMediaUrl: (id: string, n: number) => `http://test/api/exercises/${id}/media/${n}`,
+  exerciseMediaUrl: (id: string, n: number, w?: number) =>
+    `http://test/api/exercises/${id}/media/${n}${w ? `?w=${w}` : ''}`,
+  SHEET_PHOTO_WIDTH: 640,
+  THUMB_PHOTO_WIDTH: 320,
   API_URL: 'http://test',
   ApiError: class extends Error {},
   setUnauthorizedHandler: () => {},
@@ -35,7 +38,7 @@ jest.mock('@/lib/api', () => ({
 
 // `mock`-prefixed, because jest refuses a mock factory that closes over anything else.
 const mockPush = jest.fn();
-const mockParams: { id?: string; name?: string; date?: string } = {};
+const mockParams: { id?: string; name?: string; date?: string; media?: string } = {};
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: mockPush, back: jest.fn(), replace: jest.fn(), canGoBack: () => true }),
   useLocalSearchParams: () => mockParams,
@@ -242,5 +245,92 @@ describe('opening it from a screen', () => {
       pathname: '/exercise/[id]',
       params: { id: BENCH.id, name: 'Bench Press' },
     });
+  });
+});
+
+
+// ── instant open ─────────────────────────────────────────────────────────────────────
+// Field report 2026-09-01, on one bar of cellular: the sheet's data and its two photos
+// were three sequential round trips and the photos were the dataset's originals.
+
+describe('the first frame', () => {
+  it('draws exactly as many skeletons as the tap said there were photos', () => {
+    mockParams.id = BENCH.id;
+    mockParams.name = 'Bench Press';
+    mockParams.media = '2';
+    mockApi.mockReturnValue(new Promise(() => {}));
+
+    renderWith(<ExerciseSheet />);
+    expect(screen.getByTestId('exercise-photo-skeleton-0')).toBeTruthy();
+    expect(screen.getByTestId('exercise-photo-skeleton-1')).toBeTruthy();
+  });
+
+  it('promises no photos at all when the tap said there are none', () => {
+    mockParams.id = BENCH.id;
+    mockParams.name = 'Doorway Chest Stretch';
+    mockParams.media = '0';
+    mockApi.mockReturnValue(new Promise(() => {}));
+
+    renderWith(<ExerciseSheet />);
+    // Straight to the empty state while the row is still in flight: two grey boxes that
+    // turn out to be nothing is the small lie this parameter exists to stop telling.
+    expect(screen.queryByTestId('exercise-photo-skeleton-0')).toBeNull();
+    expect(screen.getByTestId('exercise-photos-empty')).toBeTruthy();
+    // The title and the video are already right — the name travelled with the tap.
+    expect(screen.getByText('Doorway Chest Stretch')).toBeTruthy();
+    expect(screen.getByTestId('exercise-video')).toBeTruthy();
+  });
+
+  it('falls back to two skeletons when nobody said — an older server, or a link', () => {
+    mockParams.id = BENCH.id;
+    mockParams.name = 'Bench Press';
+    mockApi.mockReturnValue(new Promise(() => {}));
+
+    renderWith(<ExerciseSheet />);
+    expect(screen.getByTestId('exercise-photo-skeleton-0')).toBeTruthy();
+    expect(screen.getByTestId('exercise-photo-skeleton-1')).toBeTruthy();
+  });
+
+  it('draws a prefetched sheet with no skeleton and no request at all', async () => {
+    mockParams.id = BENCH.id;
+    mockParams.name = 'Bench Press';
+    mockParams.media = '2';
+    // What `usePrefetchExercises` and lib/exercise-cache.ts leave behind: the row already
+    // in the query cache, `staleTime: Infinity`, so the screen never enters a loading
+    // state and there is no spinner to see.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: Infinity } },
+    });
+    client.setQueryData(['exercise', BENCH.id], BENCH);
+
+    render(
+      <QueryClientProvider client={client}>
+        <ExerciseSheet />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByTestId('exercise-photo-skeleton-0')).toBeNull();
+    expect(screen.getByTestId('exercise-photo-0')).toBeTruthy();
+    expect(screen.getByText('chest')).toBeTruthy();
+    expect(mockApi).not.toHaveBeenCalled();
+  });
+
+  it('asks for the photos at 640 and the full-screen zoom at full size', async () => {
+    mockParams.id = BENCH.id;
+    mockParams.name = 'Bench Press';
+    mockApi.mockResolvedValue(BENCH);
+
+    renderWith(<ExerciseSheet />);
+    await waitFor(() => expect(screen.getByTestId('exercise-photo-0')).toBeTruthy());
+
+    const tile = screen.getByTestId('exercise-photo-0').findByProps({ contentFit: 'cover' });
+    expect(tile.props.source.uri).toBe(`http://test/api/exercises/${BENCH.id}/media/0?w=640`);
+
+    fireEvent.press(screen.getByTestId('exercise-photo-0'));
+    const zoom = await screen.findByTestId('exercise-photo-zoom');
+    // The zoom is the one place the pixels are the point, so it asks for the original.
+    expect(zoom.findByProps({ contentFit: 'contain' }).props.source.uri).toBe(
+      `http://test/api/exercises/${BENCH.id}/media/0`,
+    );
   });
 });

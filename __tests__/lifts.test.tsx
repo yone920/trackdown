@@ -17,7 +17,10 @@ jest.mock('@/lib/api', () => ({
   tzOffsetMin: () => 0,
   authHeaders: () => ({}),
   evidenceUrl: (id: string) => `http://test/api/evidence/${id}`,
-  exerciseMediaUrl: (id: string, n: number) => `http://test/api/exercises/${id}/media/${n}`,
+  exerciseMediaUrl: (id: string, n: number, w?: number) =>
+    `http://test/api/exercises/${id}/media/${n}${w ? `?w=${w}` : ''}`,
+  SHEET_PHOTO_WIDTH: 640,
+  THUMB_PHOTO_WIDTH: 320,
   API_URL: 'http://test',
   ApiError: class extends Error {},
   setUnauthorizedHandler: () => {},
@@ -31,6 +34,7 @@ jest.mock('expo-router', () => ({
 
 const lift = (over: Partial<BoardLift> & { exercise: string }): BoardLift => ({
   exercise_id: `ex-${over.exercise}`,
+  media_count: 2,
   category: 'strength',
   muscle_groups: ['chest'],
   load_direction: 'resistance',
@@ -172,7 +176,8 @@ describe('All lifts', () => {
     fireEvent.press(screen.getByText('Lat Pulldown'));
     expect(mockPush).toHaveBeenCalledWith({
       pathname: '/exercise/[id]',
-      params: { id: 'ex-Lat Pulldown', name: 'Lat Pulldown' },
+      // The photo count travels with the tap so the sheet draws the right skeleton.
+      params: { id: 'ex-Lat Pulldown', name: 'Lat Pulldown', media: '2' },
     });
   });
 
@@ -182,5 +187,47 @@ describe('All lifts', () => {
     await waitFor(() => expect(screen.getByTestId('lifts-all-empty')).toBeTruthy());
     expect(screen.getByText('Nothing lifted in the last four weeks.')).toBeTruthy();
     expect(screen.getByText('Nothing in four weeks')).toBeTruthy();
+  });
+});
+
+
+// ── every name is a door, and it says what is behind it ──────────────────────────────
+// Field report 2026-09-01.
+
+describe('the names on the board', () => {
+  it('opens the sheet with the id and the photo count the row already had', async () => {
+    serve();
+    renderLifts();
+    await waitFor(() => expect(screen.getByTestId('lift-group-chest')).toBeTruthy());
+
+    fireEvent.press(screen.getByText('Bench Press'));
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/exercise/[id]',
+      params: { id: 'ex-Bench Press', name: 'Bench Press', media: '2' },
+    });
+  });
+
+  it('still opens a name the catalogue never resolved, in name-only mode', async () => {
+    serve([lift({ exercise: 'Sled Push', exercise_id: null, media_count: 0 })]);
+    renderLifts();
+    await waitFor(() => expect(screen.getByText('Sled Push')).toBeTruthy());
+
+    fireEvent.press(screen.getByText('Sled Push'));
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/exercise/[id]',
+      params: { id: 'unknown', name: 'Sled Push', media: '0' },
+    });
+  });
+
+  it('draws the photo glyph only where there is a photo', async () => {
+    serve([
+      lift({ exercise: 'Bench Press', media_count: 2 }),
+      lift({ exercise: 'Sled Push', muscle_groups: ['glutes'], media_count: 0 }),
+    ]);
+    renderLifts();
+    await waitFor(() => expect(screen.getByText('Bench Press')).toBeTruthy());
+
+    expect(screen.getByTestId('all-lift-name-Bench Press-photo')).toBeTruthy();
+    expect(screen.queryByTestId('all-lift-name-Sled Push-photo')).toBeNull();
   });
 });

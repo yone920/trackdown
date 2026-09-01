@@ -125,3 +125,70 @@ describe("the catalogue index", () => {
 		}
 	});
 });
+
+// ── the finisher's stretches ─────────────────────────────────────────────────────────
+// Field report 2026-09-01: the coach's finisher — "Chest Stretch", "Tricep Stretch", "Hip
+// Flexor Stretch" — opened in name-only mode every time, because the catalogue had one row
+// called "Stretching" and nothing else. It has nineteen now, named the way the coach writes
+// them, each aliased to a photo-backed free-exercise-db entry so the media import picks it
+// up (scripts/import-exercise-media.ts).
+
+describe("the stretches a finisher is made of", () => {
+	const index = buildExerciseIndex(CATALOG);
+
+	it("resolves the names the coach actually writes", () => {
+		const expected: Record<string, string> = {
+			"Chest Stretch": "Chest Stretch",
+			"Doorway Chest Stretch": "Chest Stretch",
+			"Tricep Stretch": "Triceps Stretch",
+			"Triceps Stretch": "Triceps Stretch",
+			"Hip Flexor Stretch": "Hip Flexor Stretch",
+			"Kneeling Hip Flexor Stretch": "Hip Flexor Stretch",
+			"Couch Stretch": "Hip Flexor Stretch",
+			"Quad Stretch": "Quad Stretch",
+			"Hamstring Stretch": "Hamstring Stretch",
+			"Seated Hamstring Stretch": "Hamstring Stretch",
+			"Shoulder Stretch": "Shoulder Stretch",
+			"Calf Stretch": "Calf Stretch",
+			"Lat Stretch": "Lat Stretch",
+			"Glute Stretch": "Glute Stretch",
+			"Figure Four Stretch": "Glute Stretch",
+			"Child's Pose": "Child's Pose",
+			"Lower Back Stretch": "Child's Pose",
+			"Cat-Cow": "Cat-Cow",
+			"Cat Cow Stretch": "Cat-Cow",
+			"Neck Stretch": "Neck Stretch",
+			"Groin Stretch": "Groin Stretch",
+			"Upper Back Stretch": "Upper Back Stretch",
+			"Biceps Stretch": "Biceps Stretch",
+			"Forearm Stretch": "Forearm Stretch",
+			"Side Stretch": "Side Stretch",
+			"IT Band Stretch": "IT Band Stretch",
+			"World's Greatest Stretch": "World's Greatest Stretch",
+		};
+		for (const [phrase, name] of Object.entries(expected)) {
+			expect({ phrase, found: index.find(phrase)?.name ?? null }).toEqual({ phrase, found: name });
+		}
+	});
+
+	it("did not quietly take a name the rest of the catalogue was using", () => {
+		// "Stretching" is still the generic category row a logged "cool down stretch" lands
+		// on, and the strength rows are untouched.
+		expect(index.find("stretching")?.name).toBe("Stretching");
+		expect(index.find("stretch")?.name).toBe("Stretching");
+		expect(index.find("hip mobility")?.name).toBe("Hip Mobility Drill");
+		expect(index.find("bench press")?.name).toBe("Bench Press");
+		expect(index.find("assisted chin up")?.name).toBe("Assisted Chin-Up");
+	});
+
+	it("keeps the guard: a stretch is not offered as an answer to a movement", () => {
+		// The stretches widen the vocabulary, and a wider vocabulary is exactly how a
+		// too-generous alias list starts matching things it should refuse.
+		for (const phrase of ["chest press", "hip thrust", "calf raise", "lat pulldown stretch"]) {
+			expect({ phrase, found: index.find(phrase)?.category ?? null }).not.toEqual({
+				phrase,
+				found: "mobility",
+			});
+		}
+	});
+});

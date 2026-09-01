@@ -17,7 +17,10 @@ jest.mock('@/lib/api', () => ({
   tzOffsetMin: () => 0,
   authHeaders: () => ({}),
   evidenceUrl: (id: string) => `http://test/api/evidence/${id}`,
-  exerciseMediaUrl: (id: string, n: number) => `http://test/api/exercises/${id}/media/${n}`,
+  exerciseMediaUrl: (id: string, n: number, w?: number) =>
+    `http://test/api/exercises/${id}/media/${n}${w ? `?w=${w}` : ''}`,
+  SHEET_PHOTO_WIDTH: 640,
+  THUMB_PHOTO_WIDTH: 320,
   API_URL: 'http://test',
   ApiError: class extends Error {},
   setUnauthorizedHandler: () => {},
@@ -65,6 +68,7 @@ jest.mock('react-native-body-highlighter', () => {
 const BENCH = {
   exercise: 'Bench Press',
   exercise_id: 'ex-bench',
+  media_count: 2,
   category: 'strength' as const,
   muscle_groups: ['chest', 'triceps'],
   load_direction: 'resistance' as const,
@@ -122,6 +126,9 @@ const CHIN = {
 const WALK: BoardCardioRow = {
   exercise: 'Incline Treadmill Walk',
   exercise_id: 'ex-walk',
+  // A treadmill is one of the movements free-exercise-db has no picture of: tappable,
+  // and honest about having nothing to show.
+  media_count: 0,
   category: 'cardio',
   last_date: '2026-08-30',
   days_since: 1,
@@ -436,7 +443,7 @@ describe('Progress — the lifts board', () => {
     fireEvent.press(screen.getByText('Bench Press'));
     expect(mockPush).toHaveBeenCalledWith({
       pathname: '/exercise/[id]',
-      params: { id: 'ex-bench', name: 'Bench Press' },
+      params: { id: 'ex-bench', name: 'Bench Press', media: '2' },
     });
   });
 
@@ -670,5 +677,32 @@ describe('Progress — the way out to You', () => {
     await waitFor(() => expect(screen.getByTestId('progress-you')).toBeTruthy());
     fireEvent.press(screen.getByTestId('progress-you'));
     expect(mockPush).toHaveBeenCalledWith('/you');
+  });
+});
+
+
+// ── the affordance, on the board ─────────────────────────────────────────────────────
+// Field report 2026-09-01: nothing said which of these names had a picture behind it.
+
+describe('the names on the board', () => {
+  it('draws the photo glyph on a lift that has one and not on a cardio row that does not', async () => {
+    serve();
+    renderProgress();
+    await waitFor(() => expect(screen.getByText('Bench Press')).toBeTruthy());
+
+    expect(screen.getByTestId('lift-name-Bench Press-photo')).toBeTruthy();
+    expect(screen.queryByTestId('cardio-name-Incline Treadmill Walk-photo')).toBeNull();
+  });
+
+  it('opens a cardio row sheet too, with nothing promised', async () => {
+    serve();
+    renderProgress();
+    await waitFor(() => expect(screen.getByText('Incline Treadmill Walk')).toBeTruthy());
+
+    fireEvent.press(screen.getByText('Incline Treadmill Walk'));
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/exercise/[id]',
+      params: { id: 'ex-walk', name: 'Incline Treadmill Walk', media: '0' },
+    });
   });
 });

@@ -146,6 +146,25 @@ function DayBody({
   const Mark = view.verdict === 'served' ? IconCheckCircle : IconAlertCircle;
   const health = view.items.activities.filter((activity) => activity.source === 'health');
   const logged = view.items.activities.filter((activity) => activity.source !== 'health');
+  // Training draws every activity exactly once. Cardio gets its own heading — its muscle
+  // tags exist to credit the body map, not to file a walk under "glutes" (field report
+  // 2026-09-01: one treadmill walk was drawn under two headings) — and a lift that touches
+  // two muscles belongs to the first heading that claims it.
+  const cardio = logged.filter((activity) => activity.category === 'cardio');
+  const cardioMinutes = cardio.reduce((sum, activity) => sum + (activity.duration_min ?? 0), 0);
+  const claimed = new Set<(typeof logged)[number]>(cardio);
+  const byMuscle = view.muscle_summary
+    .map((group) => {
+      const members = logged.filter(
+        (activity) =>
+          !claimed.has(activity) &&
+          activity.muscle_groups.some((muscle) => muscle.toLowerCase() === group.muscle.toLowerCase()),
+      );
+      members.forEach((member) => claimed.add(member));
+      return { muscle: group.muscle, sets: group.sets, members };
+    })
+    .filter((group) => group.members.length > 0);
+  const unfiled = logged.filter((activity) => !claimed.has(activity));
   // Lifts print no calories, so their block's figure is a MET estimate (concept-v2
   // §Calories). Said once on the Earned tile and once on the Training line.
   const earnedEstimated = view.blocks.some((block) => block.kcal_estimated);
@@ -222,37 +241,48 @@ function DayBody({
           </Card>
         ) : (
           <Card style={{ paddingVertical: 4 }}>
-            {view.muscle_summary.map((group) => {
-              const members = logged.filter((activity) =>
-                activity.muscle_groups.some((muscle) => muscle.toLowerCase() === group.muscle.toLowerCase()),
-              );
-              if (members.length === 0) return null;
-              return (
-                <View key={group.muscle}>
-                  <GroupHeading label={group.muscle} right={`${group.sets} sets`} />
-                  {members.map((activity, index) => (
-                    <ActivityRow
-                      key={activity.id ?? `${group.muscle}-${index}`}
-                      activity={activity}
-                      last={index === members.length - 1}
-                      onPress={activity.id ? () => onCorrect('activity', activity.id as string) : undefined}
-                      onDelete={
-                        activity.id
-                          ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
-                          : undefined
-                      }
-                    />
-                  ))}
-                </View>
-              );
-            })}
-            {/* Anything with no muscle group of its own — a run, a walk, a class. */}
-            {logged.filter((activity) => activity.muscle_groups.length === 0).length > 0 ? (
+            {cardio.length > 0 ? (
+              <View>
+                <GroupHeading label="Cardio" right={cardioMinutes > 0 ? `${cardioMinutes} min` : null} />
+                {cardio.map((activity, index) => (
+                  <ActivityRow
+                    key={activity.id ?? `cardio-${index}`}
+                    activity={activity}
+                    last={index === cardio.length - 1}
+                    onPress={activity.id ? () => onCorrect('activity', activity.id as string) : undefined}
+                    onDelete={
+                      activity.id
+                        ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
+                        : undefined
+                    }
+                  />
+                ))}
+              </View>
+            ) : null}
+            {byMuscle.map((group) => (
+              <View key={group.muscle}>
+                <GroupHeading label={group.muscle} right={`${group.sets} sets`} />
+                {group.members.map((activity, index) => (
+                  <ActivityRow
+                    key={activity.id ?? `${group.muscle}-${index}`}
+                    activity={activity}
+                    last={index === group.members.length - 1}
+                    onPress={activity.id ? () => onCorrect('activity', activity.id as string) : undefined}
+                    onDelete={
+                      activity.id
+                        ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
+                        : undefined
+                    }
+                  />
+                ))}
+              </View>
+            ))}
+            {/* Anything left over — no muscle group of its own, or one the summary
+                does not know: a class, a hike, an unrecognised movement. */}
+            {unfiled.length > 0 ? (
               <View>
                 <GroupHeading label="Also" />
-                {logged
-                  .filter((activity) => activity.muscle_groups.length === 0)
-                  .map((activity, index, all) => (
+                {unfiled.map((activity, index, all) => (
                     <ActivityRow
                       key={activity.id ?? `other-${index}`}
                       activity={activity}
@@ -285,8 +315,20 @@ function DayBody({
         ) : null}
       </Section>
 
-      {/* Eating: macros against the targets, then the meals */}
-      <Section title="Eating" summary={`${kcal(view.eaten)} kcal`}>
+      {/* Eating: macros against the targets, then the meals. A day with nothing eaten
+          prints one line instead — three zero rows carry no information, and the live
+          day's line can afford a wink (field report 2026-09-01). The macros, the hints
+          and the pattern all come back with the first logged bite. */}
+      <Section
+        title="Eating"
+        summary={view.items.meals.length > 0 ? `${kcal(view.eaten)} kcal` : null}>
+        {view.items.meals.length === 0 ? (
+          <Card>
+            <Sub testID="eating-empty" style={{ lineHeight: 18 }}>
+              {view.is_today ? nothingEatenYet(new Date().getHours()) : 'Nothing eaten was logged.'}
+            </Sub>
+          </Card>
+        ) : (
         <Card>
           <MacroBar label="Protein" line={view.macros.protein_g} color={C.good} />
           <MacroBar label="Carbs" line={view.macros.carbs_g} color={C.accent} />
@@ -300,8 +342,9 @@ function DayBody({
             <Sub style={{ marginTop: 14, lineHeight: 18 }}>{view.eating_pattern}</Sub>
           ) : null}
         </Card>
+        )}
 
-        {mealsBySlot.length > 0 ? (
+        {view.items.meals.length > 0 && mealsBySlot.length > 0 ? (
           <Card style={{ marginTop: 10, paddingVertical: 4 }}>
             {mealsBySlot.map((group) => (
               <View key={group.slot}>
@@ -326,11 +369,7 @@ function DayBody({
               </View>
             ))}
           </Card>
-        ) : (
-          <Card style={{ marginTop: 10 }}>
-            <Sub>Nothing eaten was logged.</Sub>
-          </Card>
-        )}
+        ) : null}
       </Section>
 
       {/* Body */}
@@ -402,11 +441,16 @@ function ActivityRow({
       testID={activity.id ? `row-activity-${activity.id}` : undefined}
       time={clock(activity.logged_at)}
       title={activity.exercise ?? activity.description}
-      onTitlePress={
-        activity.exercise
-          ? () => openExercise(router, { id: activity.exercise_id, name: activity.exercise })
-          : undefined
+      onTitlePress={() =>
+        openExercise(router, {
+          // The description when there is no resolved movement: a name-only sheet with a
+          // form video is a better answer than a title that does nothing.
+          id: activity.exercise_id,
+          name: activity.exercise ?? activity.description,
+          mediaCount: activity.media_count,
+        })
       }
+      titleMedia={activity.media_count}
       // The machine belongs on this line and not in the title: the movement is what the
       // week is compared on, and the kit is what the row is recognised by. Structured
       // facts only — never the raw sentence the title already says (lib/row-facts.ts).
@@ -485,6 +529,22 @@ function MacroBar({ label, line, color }: { label: string; line: MacroLine; colo
  * not once per macro: three copies of the same sentence is the empty-bar problem again in
  * words. Null when every macro has a target, which is the normal case.
  */
+/**
+ * The empty plate, said once with a wink instead of three zero rows ("PROTEIN 0 g" before
+ * breakfast helps nobody — field report 2026-09-01). Picked by the clock so the line
+ * matches the meal it is waiting for; the macros and hints return with the first bite.
+ */
+export function nothingEatenYet(hour: number): string {
+  if (hour < 5) return 'Nothing eaten yet — even the fridge is still asleep.';
+  if (hour < 11)
+    return 'Nothing eaten yet. Breakfast is still a rumor — log the first bite and the breakdown wakes up.';
+  if (hour < 15)
+    return 'Still an empty plate. Say it or snap it whenever you eat, and the numbers start here.';
+  if (hour < 20)
+    return 'A whole day and zero bites logged. Iron discipline or a forgotten lunch — tell me which.';
+  return 'Nothing logged all day. If you ate, say so before the day closes — I only count what I hear about.';
+}
+
 export function macroHint(macros: { label: string; line: MacroLine }[]): string | null {
   const missing = macros
     .filter(({ line }) => line.target == null || line.target <= 0)

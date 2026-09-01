@@ -257,15 +257,18 @@ export default function Today() {
                       testID={activity.id ? `row-activity-${activity.id}` : undefined}
                       time={clock(activity.logged_at)}
                       title={activity.exercise ?? activity.description}
-                      onTitlePress={
-                        activity.exercise
-                          ? () =>
-                              openExercise(router, {
-                                id: activity.exercise_id,
-                                name: activity.exercise,
-                              })
-                          : undefined
+                      onTitlePress={() =>
+                        openExercise(router, {
+                          // A row with no resolved movement is still a row with a name on
+                          // it, and its description opens the sheet in name-only mode. A
+                          // title that does nothing when pressed reads as a broken app
+                          // (field report 2026-09-01).
+                          id: activity.exercise_id,
+                          name: activity.exercise ?? activity.description,
+                          mediaCount: activity.media_count,
+                        })
                       }
+                      titleMedia={activity.media_count}
                       sub={activitySubLine(activity)}
                       right={activity.kcal > 0 ? kcal(activity.kcal) : null}
                       onPress={activity.id ? () => correct('activity', activity.id as string) : undefined}
@@ -296,12 +299,14 @@ export default function Today() {
                     testID={activity.id ? `row-activity-${activity.id}` : undefined}
                     time={clock(activity.logged_at)}
                     title={activity.exercise ?? activity.description}
-                    onTitlePress={
-                      activity.exercise
-                        ? () =>
-                            openExercise(router, { id: activity.exercise_id, name: activity.exercise })
-                        : undefined
+                    onTitlePress={() =>
+                      openExercise(router, {
+                        id: activity.exercise_id,
+                        name: activity.exercise ?? activity.description,
+                        mediaCount: activity.media_count,
+                      })
                     }
+                    titleMedia={activity.media_count}
                     sub={
                       activity.source === 'health'
                         ? ['From Health', activitySubLine(activity)].filter(Boolean).join(' · ')

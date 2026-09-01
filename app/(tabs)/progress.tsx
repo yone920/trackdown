@@ -4,10 +4,10 @@ import { ActivityIndicator, Pressable, RefreshControl, ScrollView, View } from '
 
 import { BodyMap, coverageSummary } from '@/components/body-map';
 import { Columns, Sparkline, TrendLine } from '@/components/charts';
+import { ExerciseName } from '@/components/exercise-name';
 import { IconAvatar, IconChevronDown, IconChevronRight, IconChevronUp } from '@/components/icons';
 import { Card, Chip, Chips, dismissDeletes, Row, Section } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
-import { openExercise } from '@/lib/exercise';
 import { dateLabel } from '@/lib/format';
 import {
   cardioColumns,
@@ -111,10 +111,17 @@ export default function Progress() {
   const snapshot = useMemo(() => snapshotStrip(board.data ?? null), [board.data]);
 
   // The sheets behind the names on this screen, warmed while it is being read: the six
-  // lifts drawn below and the cardio rows beside them (lib/queries.ts).
+  // lifts drawn below and the cardio rows beside them, each with its row and its first
+  // photograph at the width the sheet asks for (lib/queries.ts §usePrefetchExercises).
   usePrefetchExercises([
-    ...topLifts(board.data?.lifts ?? []).map((lift) => lift.exercise_id),
-    ...(board.data?.cardio.activities ?? []).map((row) => row.exercise_id),
+    ...topLifts(board.data?.lifts ?? []).map((lift) => ({
+      id: lift.exercise_id,
+      mediaCount: lift.media_count,
+    })),
+    ...(board.data?.cardio.activities ?? []).map((row) => ({
+      id: row.exercise_id,
+      mediaCount: row.media_count,
+    })),
   ]);
 
   return (
@@ -497,7 +504,6 @@ function LiftsBoard({ board, loading }: { board: TrainingBoard | null; loading: 
 }
 
 function LiftRow({ lift, last }: { lift: BoardLift; last: boolean }) {
-  const router = useRouter();
   const values = lift.series.map((point) => point.load_lb).filter((load): load is number => load != null);
   const color =
     lift.sentiment === 'good' ? C.good : lift.sentiment === 'watch' ? C.accent : C.mute;
@@ -512,15 +518,12 @@ function LiftRow({ lift, last }: { lift: BoardLift; last: boolean }) {
       }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
         <View style={{ flex: 1, paddingRight: 12 }}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`${lift.exercise} — how it is done`}
-            onPress={() => openExercise(router, { id: lift.exercise_id, name: lift.exercise })}
-            style={{ alignSelf: 'flex-start' }}>
-            <Body style={{ textDecorationLine: 'underline', textDecorationColor: C.track }}>
-              {lift.exercise}
-            </Body>
-          </Pressable>
+          <ExerciseName
+            testID={`lift-name-${lift.exercise}`}
+            name={lift.exercise}
+            id={lift.exercise_id}
+            mediaCount={lift.media_count}
+          />
           <Sub style={[{ marginTop: 3 }, TABULAR]}>
             {[
               lift.load_text,
@@ -725,7 +728,6 @@ function Cardio({ board, judge }: { board: TrainingBoard | null; judge: boolean 
 
 /** A lift's row, in cardio's units. Minutes, distance and pace — there is no load here. */
 function CardioRow({ row, last }: { row: BoardCardioRow; last: boolean }) {
-  const router = useRouter();
   const values = row.series
     .map((point) => point.duration_min)
     .filter((minutes): minutes is number => minutes != null);
@@ -737,15 +739,12 @@ function CardioRow({ row, last }: { row: BoardCardioRow; last: boolean }) {
       style={{ paddingVertical: 12, borderBottomWidth: last ? 0 : 1, borderBottomColor: C.line }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
         <View style={{ flex: 1, paddingRight: 12 }}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`${row.exercise} — how it is done`}
-            onPress={() => openExercise(router, { id: row.exercise_id, name: row.exercise })}
-            style={{ alignSelf: 'flex-start' }}>
-            <Body style={{ textDecorationLine: 'underline', textDecorationColor: C.track }}>
-              {row.exercise}
-            </Body>
-          </Pressable>
+          <ExerciseName
+            testID={`cardio-name-${row.exercise}`}
+            name={row.exercise}
+            id={row.exercise_id}
+            mediaCount={row.media_count}
+          />
           <Sub testID={`cardio-sub-${row.exercise}`} style={[{ marginTop: 3 }, TABULAR]}>
             {[row.summary_text, row.days_since === 0 ? 'today' : `${row.days_since}d ago`]
               .filter(Boolean)

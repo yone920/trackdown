@@ -101,11 +101,11 @@ describe("importing", () => {
 		const { run, asked, media } = harness();
 		const report = await run();
 
-		// Two of our 126 are in this four-entry fixture; the other two match nothing.
-		expect(report.matched).toBe(2);
+		// Three of ours are in this five-entry fixture; the other two match nothing.
+		expect(report.matched).toBe(3);
 		expect(report.total).toBeGreaterThan(100);
-		expect(report.matchRate).toBeCloseTo(2 / report.total, 6);
-		expect(report.downloaded).toBe(4);
+		expect(report.matchRate).toBeCloseTo(3 / report.total, 6);
+		expect(report.downloaded).toBe(6);
 		expect(report.failed).toBe(0);
 		expect(report.unmatched).toContain("Pull-Up");
 
@@ -125,15 +125,30 @@ describe("importing", () => {
 		expect(asked.sort()).toEqual([
 			"Barbell_Bench_Press_-_Medium_Grip/0.jpg",
 			"Barbell_Bench_Press_-_Medium_Grip/1.jpg",
+			"Chest_And_Front_Of_Shoulder_Stretch/0.jpg",
+			"Chest_And_Front_Of_Shoulder_Stretch/1.jpg",
 			"Concentration_Curls/0.jpg",
 			"Concentration_Curls/1.jpg",
 		]);
 		expect(media.frames.get(`${bench.id}/0`)).toEqual(fakeFrame("Barbell_Bench_Press_-_Medium_Grip/0.jpg"));
-		expect(media.frames.size).toBe(4);
+		expect(media.frames.size).toBe(6);
 
 		// Every downloaded byte is counted. The workers run concurrently, so a counter
 		// updated across an `await` silently loses most of this.
 		expect(report.bytesDownloaded).toBe((await media.usage()).bytes);
+	});
+
+	it("gives the finisher's stretches their pictures, through the alias that names the dataset entry", async () => {
+		// Field report 2026-09-01: "Chest Stretch" opened in name-only mode, because the
+		// catalogue's only stretch was a row called "Stretching". The nineteen seeded
+		// stretches each carry the free-exercise-db name as an alias, which is what this
+		// row's `source_slug` proves.
+		const { run } = harness();
+		await run();
+		const stretch = await row("Chest Stretch");
+		expect(stretch.source_slug).toBe("Chest_And_Front_Of_Shoulder_Stretch");
+		expect(stretch.media_count).toBe(2);
+		expect(stretch.instructions?.[0]).toContain("doorway");
 	});
 
 	it("does not match a dataset name that collides with an alias for a different movement", async () => {
@@ -170,9 +185,9 @@ describe("importing", () => {
 
 		const forced = await run({ force: true });
 		expect(forced.skipped).toBe(false);
-		expect(forced.matched).toBe(2);
+		expect(forced.matched).toBe(3);
 		expect(forced.downloaded).toBe(0);
-		expect(forced.alreadyPresent).toBe(4);
+		expect(forced.alreadyPresent).toBe(6);
 		expect(asked).toEqual([]);
 	});
 
@@ -181,7 +196,7 @@ describe("importing", () => {
 		const report = await run();
 
 		expect(report.failed).toBe(1);
-		expect(report.downloaded).toBe(3);
+		expect(report.downloaded).toBe(5);
 		// media_count is what the route serves, so it must never promise a missing frame.
 		expect((await row("Concentration Curl")).media_count).toBe(1);
 		expect((await row("Bench Press")).media_count).toBe(2);

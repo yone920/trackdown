@@ -23,11 +23,22 @@ jest.mock('@/lib/api', () => ({
   tzOffsetMin: () => 0,
   authHeaders: () => ({ Authorization: 'Bearer test' }),
   evidenceUrl: (id: string) => `http://test/api/evidence/${id}`,
-  exerciseMediaUrl: (id: string, n: number) => `http://test/api/exercises/${id}/media/${n}`,
+  exerciseMediaUrl: (id: string, n: number, w?: number) =>
+    `http://test/api/exercises/${id}/media/${n}${w ? `?w=${w}` : ''}`,
+  SHEET_PHOTO_WIDTH: 640,
+  THUMB_PHOTO_WIDTH: 320,
   API_URL: 'http://test',
   ApiError: class extends Error {},
   setUnauthorizedHandler: () => {},
 }));
+
+// `mock`-prefixed so jest lets the factory close over it: the prefetch is fire-and-forget
+// and the only way to see it happen is to watch the call.
+const mockPrefetch = jest.fn(async (_url: string, _options?: unknown) => true);
+jest.mock('expo-image', () => {
+  const { View } = require('react-native');
+  return { Image: Object.assign(View, { prefetch: (url: string, options?: unknown) => mockPrefetch(url, options) }) };
+});
 
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
@@ -54,13 +65,29 @@ function next(overrides: Partial<CoachNext> = {}): CoachNext & { brief: CoachBri
         exercises: [
           {
             name: 'Lat Pulldown',
-            exercise_id: null,
+            exercise_id: LAT_PULLDOWN_ID,
+            media_count: 2,
             load_lb: 110,
             sets: 3,
             reps: 10,
             minutes: null,
             note: null,
           },
+          {
+            // A movement the catalogue knows and has no picture of: tappable, no glyph.
+            name: 'Farmer Carry',
+            exercise_id: FARMER_CARRY_ID,
+            media_count: 0,
+            load_lb: 50,
+            sets: 3,
+            reps: null,
+            minutes: null,
+            note: null,
+          },
+        ],
+        // The stretch nobody catalogued. It was a dead row until 2026-09-01.
+        finisher: [
+          { name: 'Doorway Chest Stretch', minutes: 2, note: 'Both sides.', exercise_id: null, media_count: 0 },
         ],
       },
       nutrition: { kcal: 2254, protein_g: 160, carbs_max_g: 250, ideas: [], why: 'Steady.' },
@@ -76,6 +103,9 @@ function next(overrides: Partial<CoachNext> = {}): CoachNext & { brief: CoachBri
   } as CoachNext & { brief: CoachBrief };
 }
 
+const LAT_PULLDOWN_ID = '11111111-2222-4333-8444-555555555555';
+const FARMER_CARRY_ID = '22222222-3333-4444-8555-666666666666';
+
 function renderCoach() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
@@ -83,6 +113,16 @@ function renderCoach() {
       <Coach />
     </QueryClientProvider>,
   );
+}
+
+/**
+ * Calls to `api()` that were about the coach. The catalogue prefetch (lib/queries.ts
+ * §usePrefetchExercises) also goes through `api`, and it is deliberately not counted here:
+ * these tests are about how many times the coach is *asked*, and warming an exercise sheet
+ * is not asking the coach anything.
+ */
+function coachCalls(): [string, Record<string, unknown> | undefined][] {
+  return mockApi.mock.calls.filter(([path]: [string]) => path.startsWith('/api/coach/'));
 }
 
 /** Calls to `api()` that were a POST to the regenerate endpoint. */
@@ -95,6 +135,7 @@ function asks(): Record<string, unknown>[] {
 beforeEach(() => {
   mockApi.mockReset();
   mockPush.mockReset();
+  mockPrefetch.mockClear();
 });
 
 it('asks once on open and draws the brief', async () => {
@@ -104,11 +145,11 @@ it('asks once on open and draws the brief', async () => {
   expect(await screen.findByText('Pull day: back and shoulders')).toBeTruthy();
   expect(screen.getByText('Lat Pulldown')).toBeTruthy();
   // One GET, and nothing else: the coach is a button.
-  expect(mockApi).toHaveBeenCalledTimes(1);
-  expect(mockApi.mock.calls[0]?.[0]).toBe('/api/coach/next');
+  expect(coachCalls()).toHaveLength(1);
+  expect(coachCalls()[0]?.[0]).toBe('/api/coach/next');
   // And that GET may not generate. Opening a page is not asking a question (user decision
   // 2026-08-31 §2) — this flag is the whole of the promise.
-  expect(mockApi.mock.calls[0]?.[1]?.query).toMatchObject({ generate: false });
+  expect(coachCalls()[0]?.[1]?.query).toMatchObject({ generate: false });
 });
 
 it('sends what you type as a revision once there is a brief, and only asks once', async () => {
@@ -134,7 +175,7 @@ it('sends what you type as a revision once there is a brief, and only asks once'
     { tz_offset_min: 0, context: null, revision: 'make it 8 exercises', mode: null },
   ]);
   // One POST for the tap — no GET fired alongside it.
-  expect(mockApi).toHaveBeenCalledTimes(2);
+  expect(coachCalls()).toHaveLength(2);
 });
 
 it('sends the first typed line as context, because there is no brief to revise yet', async () => {
@@ -570,4 +611,89 @@ it('will not let an empty box quietly regenerate the plan', async () => {
 
   fireEvent.changeText(screen.getByTestId('coach-context'), 'harder');
   expect(screen.getByTestId('coach-regenerate')).not.toBeDisabled();
+});
+
+
+// ── no dead taps, and an underline that says what it will get ────────────────────────
+// Field report 2026-09-01, with screenshots: the finisher's items did not open at all,
+// and nothing on the plan said which names had a picture behind them.
+
+it('opens the sheet from a plan row, by the id the server resolved', async () => {
+  mockApi.mockResolvedValue(next());
+  renderCoach();
+  await screen.findByText('Pull day: back and shoulders');
+
+  fireEvent.press(screen.getByText('Lat Pulldown'));
+  expect(mockPush).toHaveBeenCalledWith({
+    pathname: '/exercise/[id]',
+    // The count travels with the tap, so the sheet draws two photo boxes on frame one.
+    params: { id: LAT_PULLDOWN_ID, name: 'Lat Pulldown', media: '2' },
+  });
+});
+
+it('opens the finisher too — a stretch with no catalogue row is a name-only sheet, not a dead row', async () => {
+  mockApi.mockResolvedValue(next());
+  renderCoach();
+  await screen.findByText('Pull day: back and shoulders');
+
+  fireEvent.press(screen.getByText('Doorway Chest Stretch'));
+  expect(mockPush).toHaveBeenCalledWith({
+    pathname: '/exercise/[id]',
+    // No id, and a count of zero: the sheet skips straight to "no photos for this one"
+    // and still offers the form video, which is a search.
+    params: { id: 'unknown', name: 'Doorway Chest Stretch', media: '0' },
+  });
+});
+
+it('draws the photo glyph only beside the names that have one', async () => {
+  mockApi.mockResolvedValue(next());
+  renderCoach();
+  await screen.findByText('Pull day: back and shoulders');
+
+  expect(screen.getByTestId('coach-do-0-photo')).toBeTruthy();
+  // Farmer Carry and the stretch are tappable and say nothing they cannot deliver.
+  expect(screen.queryByTestId('coach-do-1-photo')).toBeNull();
+  expect(screen.queryByTestId('coach-finisher-0-photo')).toBeNull();
+});
+
+it('warms every plan row and asks for the first photo at the width the sheet uses', async () => {
+  mockApi.mockImplementation((path: string) =>
+    path === '/api/coach/next'
+      ? Promise.resolve(next())
+      : Promise.resolve({
+          id: LAT_PULLDOWN_ID,
+          name: 'Lat Pulldown',
+          aliases: [],
+          category: 'strength',
+          primary_muscles: ['lats'],
+          secondary_muscles: [],
+          equipment: ['cable'],
+          instructions: [],
+          level: null,
+          media: [{ index: 0, url: '' }, { index: 1, url: '' }],
+          source: null,
+        }),
+  );
+  renderCoach();
+  await screen.findByText('Pull day: back and shoulders');
+
+  // Both catalogued rows get their sheet warmed — the report was that the plan felt slow,
+  // and a prefetch that only covered Progress would have explained exactly that.
+  await waitFor(() =>
+    expect(mockApi).toHaveBeenCalledWith(`/api/exercises/${LAT_PULLDOWN_ID}`),
+  );
+  await waitFor(() => expect(mockApi).toHaveBeenCalledWith(`/api/exercises/${FARMER_CARRY_ID}`));
+
+  // The width is in the URL, so a prefetch at any other size would warm a cache entry the
+  // sheet never reads.
+  await waitFor(() =>
+    expect(mockPrefetch).toHaveBeenCalledWith(
+      `http://test/api/exercises/${LAT_PULLDOWN_ID}/media/0?w=640`,
+      expect.anything(),
+    ),
+  );
+  // Farmer Carry said it has no photographs, so no image was asked for at all.
+  for (const [url] of mockPrefetch.mock.calls as unknown as [string][]) {
+    expect(url).not.toContain(FARMER_CARRY_ID);
+  }
 });

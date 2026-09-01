@@ -260,7 +260,8 @@ describe('Today', () => {
     logged_at: '2026-08-30T08:10:00.000Z',
     description: '3 × 8 bench at 135 lb',
     exercise: 'Bench Press',
-    exercise_id: null,
+    exercise_id: 'ex-bench',
+    media_count: 2,
     equipment: null,
     category: 'strength',
     muscle_groups: ['chest'],
@@ -488,5 +489,92 @@ describe('Today — a row never repeats itself', () => {
     show(lift({ description: '4 × 15 lat pulldown at 60 lb, last set was ugly' }));
     await waitFor(() => expect(screen.getByText('Lat Pulldown')).toBeTruthy());
     expect(screen.getByText(/last set was ugly/)).toBeTruthy();
+  });
+});
+
+
+// ── no dead taps on Today ────────────────────────────────────────────────────────────
+// Field report 2026-09-01: rows whose movement the catalogue never resolved did nothing
+// when their name was pressed. A name-only sheet — a title and a form video that is a
+// YouTube search — is a better answer than nothing at all.
+
+describe("Today's exercise names", () => {
+  const NAMELESS: DayActivity = {
+    id: 'a9',
+    logged_at: '2026-08-30T09:00:00.000Z',
+    description: 'that inclined machine I lay on my tummy for',
+    exercise: null,
+    exercise_id: null,
+    media_count: 0,
+    equipment: 'chest-supported row machine',
+    category: 'strength',
+    muscle_groups: ['back'],
+    sets: 3,
+    reps: 12,
+    load_lb: 45,
+    duration_min: null,
+    distance_mi: null,
+    kcal: 90,
+    source: 'fused',
+    confidence: 'low',
+    block_id: null,
+    delta_vs_last: null,
+    evidence: [],
+  };
+
+  function serveActivities(activities: DayActivity[]) {
+    mockApi.mockImplementation((path: string) => {
+      if (path.startsWith('/api/day/')) {
+        return Promise.resolve(
+          makeDay({ blocks: [], earned: 90, eaten: 0, items: { meals: [], activities, weights: [] } }),
+        );
+      }
+      if (path === '/api/week') return Promise.resolve(makeWeek());
+      if (path === '/api/goals') return Promise.resolve({ active: [], history: [], no_goal: true });
+      if (path === '/api/profile') return Promise.resolve({ id: 'u', targets: {} });
+      return Promise.resolve(null);
+    });
+  }
+
+  beforeEach(() => {
+    mockApi.mockReset();
+    mockPush.mockReset();
+  });
+
+  it('opens a row the catalogue never resolved, by its own description', async () => {
+    serveActivities([NAMELESS]);
+    renderToday();
+    await waitFor(() =>
+      expect(screen.getByText('that inclined machine I lay on my tummy for')).toBeTruthy(),
+    );
+
+    fireEvent.press(screen.getByText('that inclined machine I lay on my tummy for'));
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/exercise/[id]',
+      params: {
+        id: 'unknown',
+        name: 'that inclined machine I lay on my tummy for',
+        media: '0',
+      },
+    });
+  });
+
+  it('draws the glyph on the row that has pictures and not on the one that does not', async () => {
+    serveActivities([
+      {
+        ...NAMELESS,
+        id: 'a8',
+        exercise: 'Bench Press',
+        exercise_id: 'ex-bench',
+        media_count: 2,
+        description: '3 × 8 bench at 135 lb',
+      },
+      NAMELESS,
+    ]);
+    renderToday();
+    await waitFor(() => expect(screen.getByText('Bench Press')).toBeTruthy());
+
+    expect(screen.getByTestId('row-activity-a8-photo')).toBeTruthy();
+    expect(screen.queryByTestId('row-activity-a9-photo')).toBeNull();
   });
 });

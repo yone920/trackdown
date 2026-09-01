@@ -84,12 +84,34 @@ export function evidenceUrl(id: string): string {
   return `${API_URL}/api/evidence/${id}`;
 }
 
+/** How wide a frame is asked for. The server serves these three and 400s anything else. */
+export type ExerciseMediaWidth = 320 | 640 | 1280;
+
+/**
+ * The width the sheet's stacked photographs ask for. They are drawn full-width at 4:3 on a
+ * phone, so 640 is retina on every device this ships to and roughly a fifth of the bytes of
+ * the dataset's original (field report 2026-09-01: the sheet was slow on one bar).
+ */
+export const SHEET_PHOTO_WIDTH: ExerciseMediaWidth = 640;
+
+/** Anything drawn as a small tile. A 160 px box does not need more than 320 px of picture. */
+export const THUMB_PHOTO_WIDTH: ExerciseMediaWidth = 320;
+
 /**
  * One frame of an exercise illustration. Authenticated like evidence is — the frames are
  * ours to host, not the internet's — so an <Image> showing one carries `authHeaders()`.
+ *
+ * `width` is part of the URL and therefore part of the cache key, on the disk cache and in
+ * `Image.prefetch` both: a prefetch at 640 only warms the tap that also asks for 640.
+ * Omitting it asks for the original, which is what the full-screen zoom wants.
  */
-export function exerciseMediaUrl(exerciseId: string, index: number): string {
-  return `${API_URL}/api/exercises/${exerciseId}/media/${index}`;
+export function exerciseMediaUrl(
+  exerciseId: string,
+  index: number,
+  width?: ExerciseMediaWidth,
+): string {
+  const query = width ? `?w=${width}` : '';
+  return `${API_URL}/api/exercises/${exerciseId}/media/${index}${query}`;
 }
 
 export type UploadPart =
