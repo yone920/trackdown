@@ -183,6 +183,8 @@ describe("importing", () => {
 		await run();
 		asked.length = 0;
 
+		// The first run recorded what each row's frames came from, so the second knows they
+		// are still pictures of the right thing.
 		const forced = await run({ force: true });
 		expect(forced.skipped).toBe(false);
 		expect(forced.matched).toBe(3);
@@ -241,8 +243,12 @@ describe("re-pointing a row at a different dataset entry", () => {
 		await media.put(bench.id, 0, Buffer.from("empty-bar-frame"));
 		await media.put(bench.id, 1, Buffer.from("empty-bar-frame-1"));
 		await media.put(bench.id, 0, Buffer.from("empty-bar-at-640"), 640);
+		await media.setSource(bench.id, "Bench_Press_-_Powerlifting");
+		// The column says the NEW thing about the OLD bytes — the exact state a deploy that
+		// re-pointed the row before this check existed leaves behind. The volume is what is
+		// believed, so the column being wrong changes nothing.
 		await db.pool.query(
-			`UPDATE exercise_catalog SET media_count = 2, source_slug = 'Bench_Press_-_Powerlifting' WHERE id = $1`,
+			`UPDATE exercise_catalog SET media_count = 2, source_slug = 'Barbell_Bench_Press_-_Medium_Grip' WHERE id = $1`,
 			[bench.id]
 		);
 
@@ -271,5 +277,22 @@ describe("re-pointing a row at a different dataset entry", () => {
 		expect(asked).toEqual([]);
 		// Nothing was replaced, so nothing derived from it is stale.
 		expect(media.frames.has(`${bench.id}/0@640`)).toBe(true);
+	});
+
+	it("re-downloads once on a volume that never recorded where its frames came from", async () => {
+		// Every volume in existence before 2026-09-01. One `--force` corrects it, and the
+		// run after that has nothing to do.
+		const { run, media, asked } = harness();
+		const bench = await row("Bench Press");
+		await media.put(bench.id, 0, Buffer.from("who-knows-what-this-is"));
+		await media.put(bench.id, 1, Buffer.from("or-this"));
+
+		await run({ force: true });
+		expect(asked).toContain("Barbell_Bench_Press_-_Medium_Grip/0.jpg");
+		expect(await media.sourceOf(bench.id)).toBe("Barbell_Bench_Press_-_Medium_Grip");
+
+		asked.length = 0;
+		await run({ force: true });
+		expect(asked).toEqual([]);
 	});
 });

@@ -121,3 +121,25 @@ describe("dropping the variants of a replaced frame", () => {
 		expect(await media.clearVariants("11111111-1111-4111-8111-111111111111", 0)).toBe(0);
 	});
 });
+
+describe("what the frames on a volume came from", () => {
+	const id = "44444444-5555-4666-8777-888888888888";
+
+	it("records a slug beside the frames and reads it back, and counts as no picture", async () => {
+		const media = createLocalExerciseMediaStore({ root: path.join(root, "exercise-media") });
+		// Never recorded is `null`, which is what makes the importer fetch again.
+		expect(await media.sourceOf(id)).toBeNull();
+
+		await media.put(id, 0, Buffer.from("a frame"));
+		const before = await media.usage();
+		await media.setSource(id, "Barbell_Bench_Press_-_Medium_Grip");
+		expect(await media.sourceOf(id)).toBe("Barbell_Bench_Press_-_Medium_Grip");
+
+		// The note is bookkeeping, not an illustration: it never lands in the picture count.
+		expect(await media.usage()).toEqual(before);
+		// Nor is it a variant, so a replaced frame does not take it with it.
+		await media.put(id, 0, Buffer.from("640"), 640);
+		expect(await media.clearVariants(id, 0)).toBe(1);
+		expect(await media.sourceOf(id)).toBe("Barbell_Bench_Press_-_Medium_Grip");
+	});
+});
