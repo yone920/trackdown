@@ -39,6 +39,7 @@ export function BodyMap({
 }) {
   const regions = bodyRegions(coverage);
   const [selected, setSelected] = useState<BodyRegion | null>(null);
+  const [selectedSide, setSelectedSide] = useState<'front' | 'back'>('front');
   const overdue = overdueRegions(regions);
 
   // One data array feeds both figures: a slug the back does not draw is simply not drawn,
@@ -60,8 +61,9 @@ export function BodyMap({
     })),
   );
 
-  const onPart = (part: { slug?: string }) => {
+  const onPart = (side: 'front' | 'back') => (part: { slug?: string }) => {
     const region = part.slug ? regionBySlug(regions, part.slug) : null;
+    setSelectedSide(side);
     setSelected((current) => (region && current?.key === region.key ? null : region));
   };
 
@@ -70,12 +72,39 @@ export function BodyMap({
       <View style={{ flexDirection: 'column', alignItems: 'center', gap: 20 }}>
         {(['front', 'back'] as const).map((side) => (
           <View key={side} testID={`body-map-${side}`} style={{ alignItems: 'center' }}>
+            {/* The detail pops up OVER the figure that was tapped — the card used to sit
+                below both figures, a full screen away from a tap on the top one. */}
+            {selected && selectedSide === side ? (
+              <Pressable
+                testID="body-map-detail"
+                accessibilityLabel={selected.detail}
+                onPress={() => setSelected(null)}
+                style={{
+                  position: 'absolute',
+                  top: 16,
+                  left: 0,
+                  right: 0,
+                  zIndex: 10,
+                  padding: 12,
+                  borderRadius: RADIUS.tile,
+                  borderWidth: 1,
+                  borderColor: selected.overdue ? C.accent : C.track,
+                  backgroundColor: C.bg,
+                  shadowColor: '#000',
+                  shadowOpacity: 0.5,
+                  shadowRadius: 12,
+                  shadowOffset: { width: 0, height: 6 },
+                  elevation: 8,
+                }}>
+                <BodyText style={[{ lineHeight: 20 }, TABULAR]}>{selected.detail}</BodyText>
+              </Pressable>
+            ) : null}
             <BodyFigure
               side={side}
               gender="male"
               scale={FIGURE_SCALE}
               data={data}
-              onBodyPartPress={onPart}
+              onBodyPartPress={onPart(side)}
               defaultFill={C.track}
               defaultStroke={C.line}
               defaultStrokeWidth={0.5}
@@ -87,24 +116,7 @@ export function BodyMap({
         ))}
       </View>
 
-      {/* The sheet. Small, in place, and dismissed by tapping the same region again or the
-          sheet itself — a modal for one line of text is heavier than the line. */}
-      {selected ? (
-        <Pressable
-          testID="body-map-detail"
-          accessibilityLabel={selected.detail}
-          onPress={() => setSelected(null)}
-          style={{
-            marginTop: 14,
-            padding: 12,
-            borderRadius: RADIUS.tile,
-            borderWidth: 1,
-            borderColor: selected.overdue ? C.accent : C.track,
-            backgroundColor: C.bg,
-          }}>
-          <BodyText style={[{ lineHeight: 20 }, TABULAR]}>{selected.detail}</BodyText>
-        </Pressable>
-      ) : (
+      {selected ? null : (
         <Sub testID="body-map-hint" style={{ marginTop: 14, color: C.dim }}>
           Tap a muscle for its week.
         </Sub>
