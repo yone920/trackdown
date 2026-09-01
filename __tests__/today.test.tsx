@@ -72,13 +72,21 @@ beforeEach(() => {
 });
 
 describe('Today', () => {
-  it('shows the day number, the status and the no-goal banner', async () => {
+  it('shows the day number with no verdict on an empty day, and the no-goal banner', async () => {
     serve();
     renderToday();
     await waitFor(() => expect(screen.getByText(/Day 12/)).toBeTruthy());
-    expect(screen.getByText('on track')).toBeTruthy();
+    // 0 eaten is trivially "under allowance": an untouched day earns no green badge.
+    expect(screen.queryByText('on track')).toBeNull();
     expect(screen.getByText('No goal set')).toBeTruthy();
     expect(screen.getByText('Training for consistency')).toBeTruthy();
+  });
+
+  it('shows the status once something is logged', async () => {
+    serve({ day: makeDay({ items: { meals: [MEAL], activities: [], weights: [] } }) });
+    renderToday();
+    await waitFor(() => expect(screen.getByText(/Day 12/)).toBeTruthy());
+    expect(screen.getByText('on track')).toBeTruthy();
   });
 
   it('draws the fat-loss cards when the primary goal is fat loss', async () => {
@@ -118,13 +126,13 @@ describe('Today', () => {
     serve();
     renderToday();
     await waitFor(() => expect(screen.getByTestId('coach-button')).toBeTruthy());
-    expect(screen.getByText('What should I do today?')).toBeTruthy();
+    expect(screen.getByText("Get today's plan")).toBeTruthy();
     expect(screen.queryByTestId('coach-button-sub')).toBeNull();
 
     mockApi.mockReset();
     serve({ day: makeDay({ workout_done: true }) });
     const again = renderToday();
-    await waitFor(() => expect(again.getByText('What should I do today?')).toBeTruthy());
+    await waitFor(() => expect(again.getByText("Get today's plan")).toBeTruthy());
     expect(again.queryByText('What should I do tomorrow?')).toBeNull();
   });
 
@@ -162,7 +170,7 @@ describe('Today', () => {
 
     await waitFor(() => expect(screen.getByTestId('coach-button-sub')).toHaveTextContent('Plan complete ✓'));
     expect(screen.getByText("Today's plan")).toBeTruthy();
-    expect(screen.queryByText('What should I do today?')).toBeNull();
+    expect(screen.queryByText("Get today's plan")).toBeNull();
   });
 
   it('draws no count under a rest day, which has nothing to tick', async () => {
@@ -185,7 +193,7 @@ describe('Today', () => {
 
     await waitFor(() => expect(screen.getByTestId('coach-button')).toBeTruthy());
     // The half of the pair that promises nothing that might not be there.
-    expect(screen.getByText('What should I do today?')).toBeTruthy();
+    expect(screen.getByText("Get today's plan")).toBeTruthy();
   });
 
   it('opens the coach page and generates nothing, either way', async () => {
@@ -416,7 +424,7 @@ describe('Today', () => {
     expect(screen.queryByText('Not logged yet')).toBeNull();
   });
 
-  it('shows the Right now reading and its action chips', async () => {
+  it('shows the Right now reading as a pure card — the + is the one door to log', async () => {
     serve({
       day: makeDay({
         reading: {
@@ -432,8 +440,8 @@ describe('Today', () => {
     });
     renderToday();
     await waitFor(() => expect(screen.getByText(/700 under/)).toBeTruthy());
-    expect(screen.getByText('Log dinner')).toBeTruthy();
-    expect(screen.getByText('Weigh in')).toBeTruthy();
+    expect(screen.queryByText('Log dinner')).toBeNull();
+    expect(screen.queryByText('Weigh in')).toBeNull();
   });
 });
 

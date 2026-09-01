@@ -25,7 +25,7 @@ import {
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
 import { todayCards } from '@/lib/today-cards';
-import type { ActionKind, CoachStatus, DayView, DeltaVsLast, MealSlot } from '@/lib/types';
+import type { CoachStatus, DayView, DeltaVsLast, MealSlot } from '@/lib/types';
 
 // Today (docs/design-system.md §Today). The live day: where you are, what the goal is,
 // the cards that goal decides, the model's two sentences about right now, the arc, and
@@ -84,12 +84,6 @@ export default function Today() {
   const correct = (kind: 'activity' | 'meal' | 'weight', id: string) =>
     router.push({ pathname: '/log', params: { editDate: date, editId: id, editKind: kind } });
 
-  const onAction = (kind: ActionKind) => {
-    if (kind === 'coach') router.push('/coach');
-    else if (kind === 'weigh_in') openLog('weight');
-    else if (kind === 'workout') openLog('activities');
-    else openLog('meal');
-  };
 
   if (day.isLoading && !day.data) {
     return (
@@ -141,8 +135,16 @@ export default function Today() {
         <View style={{ flex: 1 }}>
           <Eyebrow>{dateEyebrow()}</Eyebrow>
           <Disp size={30} style={{ marginTop: 6 }}>
-            Day {view.day_number} ·{' '}
-            <Text style={{ color: status.color, fontFamily: FONT.disp }}>{status.text}</Text>
+            {/* An empty day carries no verdict: 0 eaten is trivially "under allowance", and a
+                green "on track" at 6 am judges a day that has not happened (user report). */}
+            {view.items.meals.length + view.items.activities.length + view.items.weights.length === 0 ? (
+              <>Day {view.day_number}</>
+            ) : (
+              <>
+                Day {view.day_number} ·{' '}
+                <Text style={{ color: status.color, fontFamily: FONT.disp }}>{status.text}</Text>
+              </>
+            )}
           </Disp>
         </View>
         <Pressable
@@ -208,20 +210,10 @@ export default function Today() {
       {/* Right now */}
       {reading ? (
         <View style={{ marginTop: 12 }}>
-          <ReadingCard eyebrow="Right now" text={reading.text} live={view.is_today}>
-            <Chips>
-              {reading.next_action ? (
-                <Chip
-                  label={reading.next_action.label}
-                  variant="primary"
-                  onPress={() => onAction(reading.next_action!.kind)}
-                />
-              ) : null}
-              {reading.actions.map((action) => (
-                <Chip key={action.label} label={action.label} onPress={() => onAction(action.kind)} />
-              ))}
-            </Chips>
-          </ReadingCard>
+          {/* A pure reading, refreshed after every log. No action chips: the + is the one
+              door for logging (user decision 2026-09-01) — extra buttons implied there were
+              different kinds of logging. */}
+          <ReadingCard eyebrow="Right now" text={reading.text} live={view.is_today} />
         </View>
       ) : null}
 
@@ -413,7 +405,7 @@ export default function Today() {
  * — it promises nothing that is not there, and the tap does the same thing either way.
  */
 function coachButtonLabel(status: CoachStatus | null): string {
-  return status?.has_plan ? "Today's plan" : 'What should I do today?';
+  return status?.has_plan ? "Today's plan" : "Get today's plan";
 }
 
 /**

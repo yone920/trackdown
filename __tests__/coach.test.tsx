@@ -443,7 +443,7 @@ it('draws the ask button over an empty day, and posts nothing until it is presse
 
   mockApi.mockResolvedValue(next());
   await act(async () => {
-    fireEvent.press(screen.getByTestId('coach-ask-today'));
+    fireEvent.press(screen.getByTestId('coach-regenerate'));
   });
 
   await screen.findByText('Pull day: back and shoulders');
@@ -460,7 +460,7 @@ it('sends what is typed with the first ask as context, not as a revision', async
   mockApi.mockResolvedValue(next());
   fireEvent.changeText(screen.getByTestId('coach-context'), 'only 30 minutes');
   await act(async () => {
-    fireEvent.press(screen.getByTestId('coach-ask-today'));
+    fireEvent.press(screen.getByTestId('coach-regenerate'));
   });
 
   await waitFor(() => expect(asks()).toHaveLength(1));

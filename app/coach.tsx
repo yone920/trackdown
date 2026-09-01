@@ -4,7 +4,7 @@ import { ActivityIndicator, Pressable, ScrollView, TextInput, useWindowDimension
 
 import { Control } from '@/components/control';
 import { IconCamera, IconChevronLeft, IconKeyboard, IconMic } from '@/components/icons';
-import { Card, Chip, Chips, GroupHeading, Row, Section, SkeletonLines } from '@/components/kit';
+import { BigButton, Card, Chip, Chips, GroupHeading, Row, Section, SkeletonLines } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { openExercise } from '@/lib/exercise';
 import { clock } from '@/lib/format';
@@ -145,12 +145,6 @@ export default function Coach() {
    * This is the only thing on the screen that a page load could have done for the user, and
    * the whole point of the fix is that it does not.
    */
-  const askFirst = () => {
-    setReplaceArmed(false);
-    const line = context.trim();
-    askCoach.mutate(line ? { context: line } : {});
-    setContext('');
-  };
 
   /** "Add to today's plan" — an append, decided here rather than inferred from a sentence. */
   const addToPlan = () => {
@@ -262,16 +256,6 @@ export default function Coach() {
             Nothing planned for today yet. I will read what you have logged, your goals and
             where you are in the week, and write one.
           </Body>
-          <View style={{ marginTop: 14 }}>
-            <Chips>
-              <Chip
-                testID="coach-ask-today"
-                label="What should I do today?"
-                variant="primary"
-                onPress={askFirst}
-              />
-            </Chips>
-          </View>
         </Card>
       ) : null}
 
@@ -550,16 +534,17 @@ export default function Coach() {
             be one: an empty box used to send a plain regenerate, which silently replaced
             the plan from the least explicit control on the page. Replacing has its own
             button now, and its own confirmation. */}
+        {/* One verb per page: without a plan this button IS the generator (context optional);
+            with a plan it only adjusts, and needs words to do it. The old top chip and the
+            vague "Ask" both collapsed into this. */}
         <View style={{ marginTop: 16 }}>
-          <Chips>
-            <Chip
-              testID="coach-regenerate"
-              label={busy ? 'Thinking…' : brief ? 'Adjust it' : 'Ask'}
-              variant="primary"
-              disabled={busy || (!!brief && context.trim() === '')}
-              onPress={ask}
-            />
-          </Chips>
+          <BigButton
+            testID="coach-regenerate"
+            label={busy ? 'Thinking…' : brief ? 'Adjust the plan' : "Generate today's plan"}
+            disabled={busy || (!!brief && context.trim() === '')}
+            pending={busy}
+            onPress={ask}
+          />
         </View>
       </Section>
     </ScrollView>
