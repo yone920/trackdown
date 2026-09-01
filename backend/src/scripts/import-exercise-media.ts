@@ -118,9 +118,11 @@ export async function importExerciseMedia({
 		bytesDownloaded: 0,
 	};
 
-	const { rows: catalog } = await db.query<CatalogRow>(
-		`SELECT id, name, aliases FROM exercise_catalog ORDER BY name`
+	const { rows: catalog } = await db.query<CatalogRow & { source_slug: string | null }>(
+		`SELECT id, name, aliases, source_slug FROM exercise_catalog ORDER BY name`
 	);
+	/** Which dataset entry each row's frames on disk actually came from, last time. */
+	const importedFrom = new Map(catalog.map((row) => [row.id, row.source_slug]));
 	if (catalog.length === 0) {
 		log("⚠️  The exercise catalogue is empty — run db:migrate first. Nothing to import.");
 		return empty;
@@ -162,8 +164,14 @@ export async function importExerciseMedia({
 		});
 	}
 
-	await inParallel(jobs, CONCURRENCY, async ({ exerciseId, index, imagePath }) => {
-		if (await media.has(exerciseId, index)) {
+	await inParallel(jobs, CONCURRENCY, async ({ exerciseId, entry, index, imagePath }) => {
+		// A frame already on disk is skipped — unless the row is now matched to a DIFFERENT
+		// dataset entry than the one those bytes came from. Then the file is the old
+		// movement's photograph under the new movement's name, and skipping it would leave
+		// the swap invisible for ever (2026-09-01: Bench Press was re-pointed at the entry
+		// with plates on the bar, and the empty-bar frames stayed exactly where they were).
+		const restated = importedFrom.get(exerciseId) !== entry.id;
+		if (!restated && (await media.has(exerciseId, index))) {
 			alreadyPresent += 1;
 			frames.set(exerciseId, (frames.get(exerciseId) ?? 0) + 1);
 			return;
@@ -174,6 +182,9 @@ export async function importExerciseMedia({
 			// suspends, then writes back what it read — so with CONCURRENCY workers running
 			// it loses every update that landed in between.
 			const written = await media.put(exerciseId, index, bytes);
+			// The resized copies were made from the picture this one replaces, and the route
+			// serves them in preference to resizing again — so they go with it.
+			if (restated) await media.clearVariants(exerciseId, index).catch(() => 0);
 			bytesDownloaded += written;
 			downloaded += 1;
 			frames.set(exerciseId, (frames.get(exerciseId) ?? 0) + 1);

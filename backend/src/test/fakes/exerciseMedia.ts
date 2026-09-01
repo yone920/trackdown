@@ -36,6 +36,18 @@ export function createFakeExerciseMediaStore(): FakeExerciseMediaStore {
 			return Readable.from(found);
 		},
 
+		async clearVariants(exerciseId: string, index: number): Promise<number> {
+			const prefix = `${exerciseId}/${index}@`;
+			let dropped = 0;
+			for (const held of [...frames.keys()]) {
+				if (held.startsWith(prefix)) {
+					frames.delete(held);
+					dropped += 1;
+				}
+			}
+			return dropped;
+		},
+
 		async usage(): Promise<{ files: number; bytes: number }> {
 			let bytes = 0;
 			for (const data of frames.values()) bytes += data.byteLength;

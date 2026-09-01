@@ -140,6 +140,14 @@ entry whose photographs are clearer" is not a rule a computer can apply. A prefe
 dataset cannot honour is ignored rather than turned into a miss — a picture of the wrong
 grip beats no picture at all.
 
+Re-pointing a row is only half a fix if the old bytes stay on the volume, and they did: the
+importer skips a frame that is already on disk, so the empty-bar photographs survived the
+swap under the new slug. It now compares the row's stored `source_slug` against the entry it
+just matched and **re-downloads a frame whose source has moved** — and, because the frame's
+bytes are being replaced, drops every resized copy made from them
+(`ExerciseMediaStore.clearVariants`). A `?w=640` cached from the old picture would otherwise
+be served beside the new original for ever.
+
 #### C — the affordance, and no legend
 
 Names with illustrations carry a small stroke `IconPhoto`, `dim`, beside the underline.
@@ -210,6 +218,13 @@ in the description — *"45/side + 45 lb bar = 135 lb"* — so the number can be
 made, and when the kit is ambiguous it follows the user's own equipment words and drops to
 `medium` confidence rather than asking a question.
 
+And a **drop set is a split, not an addition**. *"4 sets of 10 at 85, the last two at 70"*
+was being saved as a four-set item **plus** a two-set item — six sets for four that were
+done — because an item carries one load and the reader had nowhere to put the second. A load
+change mid-exercise now splits into items whose sets **sum** to what was said (2 × 10 at 85,
+2 × 10 at 70), each saying which part it was, and never a total beside a partial.
+`anthropic.fusion.contract.test.ts` pins it against the real model.
+
 #### I — Day: one row per activity, and no macros for a day with no meals
 
 Two field reports fixed in the same tree and shipped here (`app/day/[date].tsx`):
@@ -234,15 +249,18 @@ Two field reports fixed in the same tree and shipped here (`app/day/[date].tsx`)
   a frame whose bytes are not an image served as the original rather than as a 500.
 - `src/services/images.test.ts` (+5): the width parser on every input shape, the resize and
   its no-enlargement rule, and the throw the route's fallback is built on.
-- `src/adapters/storage/local.test.ts` (+2): a variant filed beside its original and not on
-  top of it, idempotently; a width outside the list refused before it can name a file.
+- `src/adapters/storage/local.test.ts` (+3): a variant filed beside its original and not on
+  top of it, idempotently; a width outside the list refused before it can name a file; and
+  `clearVariants` dropping every width of one frame while the original and the next frame's
+  variants stay put.
 - `src/services/exerciseMatch.test.ts` (+3): twenty-seven phrasings of the nineteen
   stretches resolving, nothing the catalogue already owned taken from it, and the guard
   still refusing a stretch as an answer to a movement.
-- `src/scripts/import-exercise-media.test.ts` (+3, fixture +2): a `stretching` entry matched
+- `src/scripts/import-exercise-media.test.ts` (+5, fixture +2): a `stretching` entry matched
   onto Chest Stretch through the alias that names it; the preferred source beating the
-  derived-key hit the rules would take; and the preference falling back to the rules when
-  the dataset does not have the entry it names.
+  derived-key hit the rules would take; the preference falling back to the rules when the
+  dataset does not have the entry it names; a re-pointed row's frames replaced on disk with
+  their 640 thrown away; and a row whose entry has not moved left completely alone.
 - `__tests__/exercise.test.tsx` (8 → 13): the skeleton count from the tap, none at all when
   the tap said none, the two-box fallback when nobody said, a prefetched sheet with no
   skeleton and no request, and 640 on the tiles against full size in the zoom.

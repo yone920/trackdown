@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { EXERCISE_MEDIA_WIDTHS, type ExerciseMediaStore } from "../../ports/exerciseMedia.js";
@@ -77,6 +77,30 @@ export function createLocalExerciseMediaStore({ root }: LocalExerciseMediaStoreO
 			// after the response headers have already gone out.
 			await stat(file);
 			return createReadStream(file);
+		},
+
+		async clearVariants(exerciseId: string, index: number): Promise<number> {
+			// The original is `<n>.jpg`; every variant of it is `<n>@<width>.jpg`. Only the
+			// variants go — the original is the truth and this is called right after it was
+			// rewritten.
+			const directory = path.dirname(resolveFrame(exerciseId, index));
+			let entries: string[];
+			try {
+				entries = await readdir(directory);
+			} catch {
+				return 0;
+			}
+			let dropped = 0;
+			for (const entry of entries) {
+				if (!entry.startsWith(`${index}@`) || !entry.endsWith(".jpg")) continue;
+				try {
+					await rm(path.join(directory, entry));
+					dropped += 1;
+				} catch {
+					// A variant that is already gone is the state we wanted.
+				}
+			}
+			return dropped;
 		},
 
 		async usage(): Promise<{ files: number; bytes: number }> {

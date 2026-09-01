@@ -231,3 +231,45 @@ describe("preferred sources", () => {
 		expect(report.matches.get("bench")?.name).toBe("Bench Press - Powerlifting");
 	});
 });
+
+describe("re-pointing a row at a different dataset entry", () => {
+	it("replaces the frames on disk and throws away the sizes derived from them", async () => {
+		// A volume imported before the preference existed: the row's frames came from the
+		// Powerlifting entry, and a phone has already asked for one of them at 640.
+		const { run, media } = harness();
+		const bench = await row("Bench Press");
+		await media.put(bench.id, 0, Buffer.from("empty-bar-frame"));
+		await media.put(bench.id, 1, Buffer.from("empty-bar-frame-1"));
+		await media.put(bench.id, 0, Buffer.from("empty-bar-at-640"), 640);
+		await db.pool.query(
+			`UPDATE exercise_catalog SET media_count = 2, source_slug = 'Bench_Press_-_Powerlifting' WHERE id = $1`,
+			[bench.id]
+		);
+
+		const report = await run({ force: true });
+		expect(report.downloaded).toBeGreaterThanOrEqual(2);
+
+		// The new entry's bytes, not the old ones — a frame already on disk is skipped only
+		// while it is still a picture of the same thing.
+		expect(media.frames.get(`${bench.id}/0`)).toEqual(
+			fakeFrame("Barbell_Bench_Press_-_Medium_Grip/0.jpg")
+		);
+		expect((await row("Bench Press")).source_slug).toBe("Barbell_Bench_Press_-_Medium_Grip");
+		// And the 640 made from the old picture is gone, or the route would serve the empty
+		// bar for ever beside the new original.
+		expect(media.frames.has(`${bench.id}/0@640`)).toBe(false);
+	});
+
+	it("leaves a row whose entry has not moved exactly as it was", async () => {
+		const { run, media, asked } = harness();
+		await run();
+		asked.length = 0;
+		const bench = await row("Bench Press");
+		await media.put(bench.id, 0, Buffer.from("a-640-somebody-asked-for"), 640);
+
+		await run({ force: true });
+		expect(asked).toEqual([]);
+		// Nothing was replaced, so nothing derived from it is stale.
+		expect(media.frames.has(`${bench.id}/0@640`)).toBe(true);
+	});
+});
