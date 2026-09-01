@@ -24,7 +24,23 @@ import type { DayReadings } from "../services/readings/readings.js";
 // rather than anywhere near the coach.
 
 const tzOffset = z.coerce.number().int().min(-840).max(840).default(0);
-const EatingQuery = z.object({ tz: tzOffset, date: z.string().optional() });
+const EatingQuery = z.object({
+	tz: tzOffset,
+	date: z.string().optional(),
+	/**
+	 * The safe door. A plain GET writes the direction paragraph when the cache is cold, and
+	 * a reading is one-per-day state like any other — so anything auditing this account
+	 * without changing it (a support session, an agent verifying a deploy) asks with
+	 * `generate=false` and gets whatever is stored, or null.
+	 *
+	 * The same pair the coach has, for the same reason: without it there is no way to look
+	 * at this page without writing to it.
+	 */
+	generate: z
+		.enum(["true", "false"])
+		.optional()
+		.transform((value) => value !== "false"),
+});
 
 function badRequest(res: Response, message: string): void {
 	res.status(400).json({ error: message });
@@ -73,14 +89,16 @@ export function eatingRouter(pool: pg.Pool, readings: DayReadings): Router {
 
 		const week = summarise(await eatingDays(pool, userId, date, tz), targets);
 
-		const direction = await readings.eatingDirection(pool, userId, date, {
-			week,
-			goal: goal?.title ?? null,
-			weight_lb: targets.weight_lb,
-			diet_style: (profile?.diet_style as string | null) ?? null,
-			preferences: asList(profile?.preferences),
-			constraints: asList(profile?.constraints),
-		});
+		const direction = parsed.data.generate
+			? await readings.eatingDirection(pool, userId, date, {
+					week,
+					goal: goal?.title ?? null,
+					weight_lb: targets.weight_lb,
+					diet_style: (profile?.diet_style as string | null) ?? null,
+					preferences: asList(profile?.preferences),
+					constraints: asList(profile?.constraints),
+				})
+			: await readings.cached(pool, userId, date, "eating_direction");
 
 		res.json({
 			date,

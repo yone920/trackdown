@@ -5423,3 +5423,31 @@ describe("the Eat page", () => {
 		expect(res.body.direction).toBeNull();
 	});
 });
+
+describe("the Eat page's safe door", () => {
+	const tz = tzForLocalHour(15);
+
+	it("reads without writing when asked not to generate", async () => {
+		// A reading is one-per-day state, so a plain GET is a write when the cache is cold.
+		// `generate=false` is how this page is audited without changing it — the same pair
+		// the coach has, and for the same reason.
+		const token = await signUp("read-only-eater@example.com");
+		const headers = { Authorization: `Bearer ${token}` };
+		await request(app)
+			.post("/api/entries/meals")
+			.set(headers)
+			.send({ description: "eggs", kcal: 400, protein_g: 30, carbs_g: 20, fat_g: 20, fiber_g: 4 });
+
+		coachLlm.nextOutput = { text: "This must never be reached." };
+		const before = coachLlm.requests.length;
+		const res = await request(app).get(`/api/eating?tz=${tz}&generate=false`).set(headers);
+
+		expect(res.status).toBe(200);
+		// The computed layers are all there — they are arithmetic, not generation.
+		expect(res.body.week.days_logged).toBe(1);
+		expect(res.body.today.eaten).toBe(400);
+		// And nothing was written.
+		expect(coachLlm.requests).toHaveLength(before);
+		expect(res.body.direction).toBeNull();
+	});
+});
