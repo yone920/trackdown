@@ -56,7 +56,7 @@ export default function Day() {
   // was taught otherwise, a typed URL — so it goes home rather than drawing a second,
   // quieter copy of today that groups the same rows a different way.
   useEffect(() => {
-    if (isToday) router.replace('/');
+    if (isToday) router.replace('/today');
   }, [isToday, router]);
 
   const day = useDay(date, { enabled: !isToday });

@@ -43,6 +43,17 @@ export function IconToday(p: IconProps) {
   );
 }
 
+/** Home — a roof over a doorway: where you are, in general. */
+export function IconHome(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Path d="M3.5 10.5 12 3.5l8.5 7" {...base(p)} />
+      <Path d="M5.5 9.5V20h13V9.5" {...base(p)} />
+      <Path d="M9.5 20v-5.5h5V20" {...base(p)} />
+    </Frame>
+  );
+}
+
 /** Days — a calendar. */
 export function IconDays(p: IconProps) {
   return (

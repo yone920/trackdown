@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
-import Today from '@/app/(tabs)/index';
+import Today from '@/app/(tabs)/today';
 import { clock } from '@/lib/format';
 import type { CoachStatus, DayActivity, DayMeal } from '@/lib/types';
 import { makeDay, makeGoal, makeMetric, makeWeek } from './fixtures';
@@ -150,90 +150,6 @@ describe('Today', () => {
   // told a user standing in the gym that today was over — and the brief behind the button
   // is a plan for the rest of today, with the morning's work already ticked off it (user
   // decision 2026-08-31 §A4).
-  it('asks about today when there is no plan, workout logged or not', async () => {
-    serve();
-    renderToday();
-    await waitFor(() => expect(screen.getByTestId('coach-button')).toBeTruthy());
-    expect(screen.getByText("Get today's plan")).toBeTruthy();
-    expect(screen.queryByTestId('coach-button-sub')).toBeNull();
-
-    mockApi.mockReset();
-    serve({ day: makeDay({ workout_done: true }) });
-    const again = renderToday();
-    await waitFor(() => expect(again.getByText("Get today's plan")).toBeTruthy());
-    expect(again.queryByText('What should I do tomorrow?')).toBeNull();
-  });
-
-  // ── The button reflects the day (user decision 2026-08-31 §1) ──────────────────────
-  // Asking somebody who already has a plan what they should do today is the app forgetting
-  // its own answer. The status behind this is an exists-check on the server: drawing the
-  // button costs nothing and generates nothing.
-
-  it('reads the plan from the status endpoint and never asks for a brief', async () => {
-    serve({ coach: noPlan({ has_plan: true, headline: 'Pull day', total_count: 4 }) });
-    renderToday();
-
-    await waitFor(() => expect(screen.getByText("Today's plan")).toBeTruthy());
-    expect(screen.getByTestId('coach-button-sub')).toHaveTextContent('4 moves');
-    // The two endpoints that generate a brief are not touched by drawing a button.
-    const paths = mockApi.mock.calls.map(([path]) => path);
-    expect(paths).toContain('/api/coach/status');
-    expect(paths).not.toContain('/api/coach/next');
-    expect(paths).not.toContain('/api/coach/next/regenerate');
-  });
-
-  it('counts the plan off underneath the label', async () => {
-    serve({ coach: noPlan({ has_plan: true, headline: 'Pull day', done_count: 2, total_count: 4 }) });
-    renderToday();
-
-    await waitFor(() => expect(screen.getByText("Today's plan")).toBeTruthy());
-    expect(screen.getByTestId('coach-button-sub')).toHaveTextContent('2 of 4 done');
-  });
-
-  it('says the plan is complete rather than asking the question again', async () => {
-    serve({
-      coach: noPlan({ has_plan: true, headline: 'Pull day', done_count: 4, total_count: 4, complete: true }),
-    });
-    renderToday();
-
-    await waitFor(() => expect(screen.getByTestId('coach-button-sub')).toHaveTextContent('Plan complete ✓'));
-    expect(screen.getByText("Today's plan")).toBeTruthy();
-    expect(screen.queryByText("Get today's plan")).toBeNull();
-  });
-
-  it('draws no count under a rest day, which has nothing to tick', async () => {
-    serve({ coach: noPlan({ has_plan: true, headline: 'Rest today', total_count: 0 }) });
-    renderToday();
-
-    await waitFor(() => expect(screen.getByText("Today's plan")).toBeTruthy());
-    expect(screen.queryByTestId('coach-button-sub')).toBeNull();
-  });
-
-  it('falls back to the question when the status cannot be read', async () => {
-    mockApi.mockImplementation((path: string) => {
-      if (path === '/api/coach/status') return Promise.reject(new Error('offline'));
-      if (path.startsWith('/api/day/')) return Promise.resolve(makeDay());
-      if (path === '/api/week') return Promise.resolve(makeWeek());
-      if (path === '/api/goals') return Promise.resolve({ active: [], history: [], no_goal: true });
-      return Promise.resolve({ id: 'u', targets: {} });
-    });
-    renderToday();
-
-    await waitFor(() => expect(screen.getByTestId('coach-button')).toBeTruthy());
-    // The half of the pair that promises nothing that might not be there.
-    expect(screen.getByText("Get today's plan")).toBeTruthy();
-  });
-
-  it('opens the coach page and generates nothing, either way', async () => {
-    serve({ coach: noPlan({ has_plan: true, headline: 'Pull day', done_count: 1, total_count: 3 }) });
-    renderToday();
-
-    await waitFor(() => expect(screen.getByText("Today's plan")).toBeTruthy());
-    fireEvent.press(screen.getByTestId('coach-button'));
-    expect(mockPush).toHaveBeenCalledWith('/coach');
-    expect(mockApi.mock.calls.map(([path]) => path)).not.toContain('/api/coach/next/regenerate');
-  });
-
   it('marks an estimated day\'s training "est." on the Training line', async () => {
     // Lifts print no calories, so the figure is a MET estimate. It is said once now: the
     // per-block heading it was also said on is gone, because Today no longer groups by
@@ -740,8 +656,129 @@ describe('Today — training, grouped the way the closed Day groups it', () => {
     serveTraining([PRESS, WALK], [{ muscle: 'chest', sets: 6 }]);
     renderToday();
 
-    await waitFor(() => expect(screen.getByText('Training')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Done')).toBeTruthy());
     const span = `${clock(PRESS.logged_at)}–${clock(WALK.logged_at)}`;
     expect(screen.getByText(new RegExp(span))).toBeTruthy();
+  });
+});
+
+describe('Today — the plan and the day on one page', () => {
+  // User decision 2026-09-01. The plan used to live on a page of its own behind a button
+  // at the bottom of this one, which put what you are about to do and what you have
+  // actually done two screens apart.
+
+  const BRIEF = {
+    date: '2026-08-30',
+    brief: {
+      headline: 'Pull day',
+      why: 'Back is five days overdue.',
+      workout: {
+        type: 'strength',
+        targets: ['back'],
+        exercises: [
+          { name: 'Lat Pulldown', exercise_id: null, load_lb: 60, sets: 3, reps: 12, note: null, completion: null },
+        ],
+        finisher: [],
+        complete: false,
+      },
+      nutrition: null,
+      nudge: null,
+      asked_at: '2026-08-30T07:10:00.000Z',
+      cached: true,
+    },
+    stale: false,
+  };
+
+  function serveWithPlan(day: unknown, plan: unknown) {
+    mockApi.mockImplementation((path: string) => {
+      if (path.startsWith('/api/day/')) return Promise.resolve(day);
+      if (path === '/api/week') return Promise.resolve(makeWeek());
+      if (path === '/api/goals') return Promise.resolve({ active: [], history: [], no_goal: true });
+      if (path === '/api/profile') return Promise.resolve({ id: 'u', targets: {} });
+      if (path === '/api/coach/next') return Promise.resolve(plan);
+      return Promise.resolve(null);
+    });
+  }
+
+  it('draws Do, Done and Eat together, from one plan and one day', async () => {
+    serveWithPlan(
+      makeDay({
+        earned: 264,
+        items: { meals: [], weights: [], activities: [lift()] },
+      }),
+      BRIEF,
+    );
+    renderToday();
+
+    // Do — the plan, before what happened.
+    await waitFor(() => expect(screen.getByText('Pull day')).toBeTruthy());
+    expect(screen.getByTestId('coach-do-0')).toBeTruthy();
+    expect(screen.getByText('Lat Pulldown')).toBeTruthy();
+    // Done — what actually happened, grouped.
+    expect(screen.getByText('Done')).toBeTruthy();
+    expect(screen.getByText('Bench Press')).toBeTruthy();
+    expect(screen.getByText('chest')).toBeTruthy();
+    // Eat — still here, and still about the day.
+    expect(screen.getByText('Eat')).toBeTruthy();
+  });
+
+  it('never generates a plan by being opened', async () => {
+    // The contract that moved with the plan. Today is a tab; a tab is opened by accident.
+    serveWithPlan(makeDay(), BRIEF);
+    renderToday();
+
+    await waitFor(() => expect(screen.getByText('Pull day')).toBeTruthy());
+    const asked = mockApi.mock.calls.map(([path]) => path);
+    expect(asked).not.toContain('/api/coach/next/regenerate');
+    // The read is an exists-check: `generate=false` travels in the query, not the path.
+    const read = mockApi.mock.calls.find(([path]) => path === '/api/coach/next');
+    expect((read?.[1] as { query?: { generate?: boolean } } | undefined)?.query?.generate).toBe(false);
+  });
+
+  it('is a quiet food-and-body page on a day nobody started a workout on', async () => {
+    // The rest-day expectation, said out loud by the user: meals and weigh-ins work
+    // identically whether or not a workout was ever started.
+    serveWithPlan(
+      makeDay({
+        items: {
+          meals: [
+            {
+              id: 'm1',
+              logged_at: '2026-08-30T07:30:00.000Z',
+              description: 'eggs and toast',
+              slot: 'breakfast' as const,
+              stated_slot: null,
+              kcal: 480,
+              protein_g: 32,
+              carbs_g: 40,
+              fat_g: 20,
+              fiber_g: 4,
+              evidence: [],
+            },
+          ],
+          weights: [],
+          activities: [],
+        },
+        eaten: 480,
+      }),
+      null,
+    );
+    renderToday();
+
+    // No plan was asked for, so the section is one card and a button — not a blank.
+    await waitFor(() => expect(screen.getByTestId('coach-no-plan')).toBeTruthy());
+    expect(screen.getByText("Start today's workout")).toBeTruthy();
+    // And the rest of the day is entirely usable.
+    expect(screen.getByText('eggs and toast')).toBeTruthy();
+    expect(screen.getByText('No exercise logged today.')).toBeTruthy();
+    expect(screen.getByText('Body')).toBeTruthy();
+  });
+
+  it('has no button to a plan page, because there is no plan page', async () => {
+    serveWithPlan(makeDay(), BRIEF);
+    renderToday();
+    await waitFor(() => expect(screen.getByText('Pull day')).toBeTruthy());
+    expect(screen.queryByTestId('coach-button')).toBeNull();
+    expect(mockPush).not.toHaveBeenCalledWith('/coach');
   });
 });

@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
+import Coach from '@/app/coach';
 import Day from '@/app/day/[date]';
 import Days from '@/app/(tabs)/days';
 import { makeDayRow, makeWeek } from './fixtures';
@@ -25,7 +26,12 @@ jest.mock('@/lib/api', () => ({
 const mockPush = jest.fn();
 const mockReplace = jest.fn();
 let mockRouteDate = '2026-08-29';
+const mockRedirect = jest.fn();
 jest.mock('expo-router', () => ({
+  Redirect: (props: { href: string }) => {
+    mockRedirect(props.href);
+    return null;
+  },
   useRouter: () => ({
     push: (...args: unknown[]) => mockPush(...args),
     replace: (...args: unknown[]) => mockReplace(...args),
@@ -50,6 +56,7 @@ beforeEach(() => {
   mockApi.mockReset();
   mockPush.mockReset();
   mockReplace.mockReset();
+  mockRedirect.mockReset();
   mockRouteDate = '2026-08-29';
 });
 
@@ -70,7 +77,7 @@ describe('the Days list', () => {
 
     await waitFor(() => expect(screen.getByTestId(`day-${today}`)).toBeTruthy());
     fireEvent.press(screen.getByTestId(`day-${today}`));
-    expect(mockReplace).toHaveBeenCalledWith('/');
+    expect(mockPush).toHaveBeenCalledWith('/today');
     expect(mockPush).not.toHaveBeenCalledWith(`/day/${today}`);
   });
 
@@ -90,7 +97,7 @@ describe('a deep link to /day/<today>', () => {
     mockApi.mockResolvedValue(null);
     wrap(<Day />);
 
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/'));
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/today'));
     // Nothing is drawn and nothing is fetched: the tab is about to answer for this day.
     expect(screen.queryByTestId('day-scroll')).toBeNull();
     expect(mockApi.mock.calls.filter(([path]) => String(path).startsWith('/api/day/'))).toHaveLength(0);
@@ -102,6 +109,15 @@ describe('a deep link to /day/<today>', () => {
     wrap(<Day />);
 
     await waitFor(() => expect(screen.getByTestId('day-scroll')).toBeTruthy());
-    expect(mockReplace).not.toHaveBeenCalledWith('/');
+    expect(mockReplace).not.toHaveBeenCalledWith('/today');
+  });
+});
+
+describe('the old coach page', () => {
+  it('redirects into Today, where the plan lives now — no dead route', () => {
+    // The plan is the "Do" section of Today (user decision 2026-09-01). Anything that
+    // still points at /coach — an older build, a link in a brief — lands where it meant to.
+    render(<Coach />);
+    expect(mockRedirect).toHaveBeenCalledWith('/today');
   });
 });

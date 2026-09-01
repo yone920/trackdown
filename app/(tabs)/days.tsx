@@ -55,7 +55,7 @@ export default function Days() {
    * day that has closed. Two live pages for the same day was the confusion this removes.
    */
   const openDay = (date: string) =>
-    date === localDateKey() ? router.replace('/') : router.push(`/day/${date}`);
+    date === localDateKey() ? router.push('/today') : router.push(`/day/${date}`);
 
   return (
     <FlatList
