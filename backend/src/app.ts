@@ -12,6 +12,7 @@ import type { ExerciseMediaStore } from "./ports/exerciseMedia.js";
 import type { EvidenceStore } from "./ports/storage.js";
 import { coachRouter } from "./routes/coach.js";
 import { dayRouter } from "./routes/day.js";
+import { eatingRouter } from "./routes/eating.js";
 import { entriesRouter } from "./routes/entries.js";
 import { evidenceRouter } from "./routes/evidence.js";
 import { exercisesRouter } from "./routes/exercises.js";
@@ -114,6 +115,7 @@ export function createApp({
 	app.use(evidenceRouter(pool, evidence));
 	app.use(exercisesRouter(pool, exerciseMedia));
 	app.use(dayRouter(pool, readings));
+	app.use(eatingRouter(pool, readings));
 	app.use(goalsRouter(pool));
 	app.use(trainingRouter(pool));
 	app.use(youRouter(pool, profileReadings));

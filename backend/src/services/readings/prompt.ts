@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { FIBER_BAND, PROTEIN_PER_LB, type EatingWeek, type MacroAverage } from "../eating/features.js";
 import { formatClock, localMinutesOf } from "../localTime.js";
 import type { DayView } from "../day.js";
 import type { IsoDate } from "../localTime.js";
@@ -89,6 +90,33 @@ which was true and none of which read as a person.
 
 ${VOICE}`;
 
+
+const EATING_DIRECTION = `You are writing "The direction" on TrackDown's Eat page: a short paragraph telling the user
+which way to steer their NUTRIENTS over the coming days, from a week of their own numbers.
+
+- Two or three sentences. Nutrients only — protein, carbohydrate, fat, fibre, calories — and
+  the direction to move each one.
+- **NEVER PRESCRIBE A DISH, A MEAL OR A FOOD.** Not "have salmon and quinoa", not "try Greek
+  yoghurt", not a breakfast idea, not an example plate. The user was explicit about this:
+  "it doesn't have to be a dish… general direction of nutrients." Naming foods is the one
+  thing this paragraph is not for. Say "another 30 g of protein a day, spread across the
+  meals you already eat" — never what to cook.
+- Lead with whatever is furthest from where it should be. If everything is in range, say so
+  plainly in one sentence and stop; a paragraph that manufactures a concern to justify its
+  own existence is worse than a short one.
+- The numbers are averages over the days that had food logged, and the sheet says how many
+  days those were. An average over two days is a thin week and the paragraph should hedge
+  accordingly rather than treating it as a trend.
+- A guideline is not something they said. The sheet marks which targets were stated, which
+  were derived from body weight and which are standing guidelines; never hand a default back
+  to the user as their own aim.
+- Respect what they have told you about how they eat — the diet style and preferences on the
+  sheet are constraints, not suggestions to reconsider. If their carb aim is on file, steer
+  within it rather than arguing with it.
+- Say nothing about training. Another page has that.
+
+${VOICE}`;
+
 /**
  * What these prompts currently say, in eight characters.
  *
@@ -98,13 +126,16 @@ ${VOICE}`;
  * which is how a day that had been told never to say "left to log" went on saying it.
  * Hashing the prompts themselves means no future edit can forget to bump a version number.
  *
- * All three prompts share ONE fingerprint, which is deliberately blunt: editing the dossier's
+ * All four prompts share ONE fingerprint, which is deliberately blunt: editing the dossier's
  * wording rewrites every cached *day* reading once as well, on the next read of each. One
  * model call per active day is the price of never having to remember which hash covers which
  * prompt, and the alternative — a fingerprint each — is three things to get wrong instead of
  * one.
  */
-export const PROMPT_FINGERPRINT = createHash("sha256").update(`${RIGHT_NOW} ${IN_SHORT} ${DOSSIER}`).digest("hex").slice(0, 8);
+export const PROMPT_FINGERPRINT = createHash("sha256")
+	.update(`${RIGHT_NOW} ${IN_SHORT} ${DOSSIER} ${EATING_DIRECTION}`)
+	.digest("hex")
+	.slice(0, 8);
 
 function line(label: string, value: string | number | null | undefined): string | null {
 	return value === null || value === undefined || value === "" ? null : `${label}: ${value}`;
@@ -434,4 +465,56 @@ export function buildDossierPrompt(inputs: DossierInputs): string {
 Today is ${inputs.date} in the user's timezone.
 
 ${buildDossierSheet(inputs)}`;
+}
+
+/**
+ * The Eat page's written layer, handed the computed week rather than the meals. The model
+ * never sees a row: it is given averages, targets and where each target came from, which is
+ * the whole of `EatingWeek` plus what the user has said about how they eat.
+ */
+export function buildEatingDirectionPrompt(sheet: EatingDirectionSheet): string {
+	const macro = (label: string, macro: MacroAverage): string | null => {
+		if (macro.avg_per_day === null) return null;
+		const aim =
+			macro.target === null
+				? "no target set"
+				: `${macro.direction === "at_most" ? "aim at most" : "aim at least"} ${macro.target} g (${macro.source})`;
+		return `${label}: ${macro.avg_per_day} g/day average · ${aim}`;
+	};
+	const facts = [
+		`Days with food logged in the last 7: ${sheet.week.days_logged}`,
+		sheet.week.avg_kcal === null ? null : `Calories: ${sheet.week.avg_kcal}/day average`,
+		macro("Protein", sheet.week.protein),
+		macro("Carbohydrate", sheet.week.carbs),
+		macro("Fat", sheet.week.fat),
+		macro("Fibre", sheet.week.fiber),
+		sheet.week.outliers.length > 0 ? `Stood out most recently: ${sheet.week.outliers.join("; ")}` : null,
+		line("Goal", sheet.goal),
+		line("Body weight", sheet.weight_lb === null ? null : `${sheet.weight_lb} lb`),
+		line("Diet style", sheet.diet_style),
+		sheet.preferences.length > 0 ? `They have said: ${sheet.preferences.join("; ")}` : null,
+		sheet.constraints.length > 0 ? `Constraints: ${sheet.constraints.join("; ")}` : null,
+	]
+		.filter((entry): entry is string => Boolean(entry))
+		.join("\n");
+
+	return `${EATING_DIRECTION}
+
+THE WEEK, AS COMPUTED
+${facts}
+
+GUARDRAILS — the science this steers by, not numbers to quote back:
+- Protein around ${PROTEIN_PER_LB.low}–${PROTEIN_PER_LB.high} g per pound of body weight protects muscle in a deficit.
+- Fibre ${FIBER_BAND.low}–${FIBER_BAND.high} g a day is the guideline band.
+- Carbohydrate is sized to training: more on days with hard sessions, less on quiet ones.`;
+}
+
+/** Everything the direction paragraph is written from. */
+export interface EatingDirectionSheet {
+	week: EatingWeek;
+	goal: string | null;
+	weight_lb: number | null;
+	diet_style: string | null;
+	preferences: string[];
+	constraints: string[];
 }

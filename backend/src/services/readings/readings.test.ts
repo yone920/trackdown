@@ -5,14 +5,17 @@ import {
 	buildDaySheet,
 	buildDossierPrompt,
 	buildDossierSheet,
+	buildEatingDirectionPrompt,
 	buildInShortPrompt,
 	buildRightNowPrompt,
+	type EatingDirectionSheet,
 } from "./prompt.js";
 import { dossierInputsHash } from "./dossier.js";
-import { dayInputsHash } from "./readings.js";
-import { DossierSchema, InShortSchema, RightNowSchema } from "./schema.js";
+import { dayInputsHash, eatingInputsHash } from "./readings.js";
+import { DossierSchema, EatingDirectionSchema, InShortSchema, RightNowSchema } from "./schema.js";
 import { dayViewFixture as view } from "../../test/fixtures/dayView.js";
 import { dossierInputsFixture } from "../../test/fixtures/dossier.js";
+import { summarise, type EatingDay, type EatingTargets } from "../eating/features.js";
 
 // The readings, without a provider and without a database: the two schemas, the sheet the
 // model is given, and the cache key. The generation itself is covered end to end in
@@ -171,7 +174,8 @@ describe("the inputs hash", () => {
 	 * one model call per active day, and worth it, but not a thing to do by accident.
 	 */
 	it("is bound to what the prompt currently says", () => {
-		expect(PROMPT_FINGERPRINT).toBe("ea19e0af");
+		// Bumped 2026-09-01 when the Eat page's direction prompt joined the fingerprint.
+		expect(PROMPT_FINGERPRINT).toBe("1690c1a0");
 		expect(dayInputsHash(view())).toMatch(/^[0-9a-f]{32}$/);
 	});
 });
@@ -266,5 +270,101 @@ describe("the dossier's cache key", () => {
 		).not.toBe(base);
 		expect(dossierInputsHash(dossierInputsFixture({ goals: [] }))).not.toBe(base);
 		expect(dossierInputsHash(dossierInputsFixture({ goal_history: 4 }))).not.toBe(base);
+	});
+});
+
+// ── the Eat page's written layer ─────────────────────────────────────────────────────
+// A READING, not a brief: cached per day against the week's own inputs hash, so opening the
+// page when nothing has moved costs nothing. And nutrient direction only — the user was
+// plain that a dish is not what they want (user decision 2026-09-01).
+
+function eatingSheet(over: Partial<EatingDirectionSheet> = {}): EatingDirectionSheet {
+	const days: EatingDay[] = [
+		{ date: "2026-08-31", kcal: 2100, protein_g: 120, carbs_g: 190, fat_g: 80, fiber_g: 14, meals: 3 },
+		{ date: "2026-09-01", kcal: 1950, protein_g: 130, carbs_g: 175, fat_g: 70, fiber_g: 18, meals: 3 },
+	];
+	const targets: EatingTargets = {
+		protein_g: 160,
+		carbs_max_g: 150,
+		fat_g: null,
+		fiber_g: null,
+		weight_lb: 212,
+		losing: true,
+	};
+	return {
+		week: summarise(days, targets),
+		goal: "Get to 170 lb",
+		weight_lb: 212,
+		diet_style: "lower carb",
+		preferences: ["mornings only"],
+		constraints: [],
+		...over,
+	};
+}
+
+describe("the eating direction schema", () => {
+	it("is one short paragraph and nothing else", () => {
+		expect(schemaBytes(EatingDirectionSchema)).toBeLessThan(READING_BUDGET_BYTES);
+		expect(schemaBytes(EatingDirectionSchema)).toBeLessThan(GRAMMAR_CEILING_BYTES);
+		expect(EatingDirectionSchema.safeParse({ text: "Push protein up." }).success).toBe(true);
+		// A meal plan cannot fit, and that is the ceiling doing its job.
+		expect(EatingDirectionSchema.safeParse({ text: "x".repeat(700) }).success).toBe(false);
+	});
+});
+
+describe("the eating direction prompt", () => {
+	it("forbids dishes in as many words, because that is the line it must not cross", () => {
+		const prompt = buildEatingDirectionPrompt(eatingSheet());
+		expect(prompt).toContain("NEVER PRESCRIBE A DISH");
+		expect(prompt).toContain("general direction of nutrients");
+	});
+
+	it("hands over the computed week, and says where each target came from", () => {
+		const prompt = buildEatingDirectionPrompt(eatingSheet());
+		expect(prompt).toContain("Days with food logged in the last 7: 2");
+		expect(prompt).toContain("Protein: 125 g/day average · aim at least 160 g (stated)");
+		expect(prompt).toContain("Carbohydrate: 182.5 g/day average · aim at most 150 g (stated)");
+		// Nobody states a fibre target; the guideline stands in and admits it.
+		expect(prompt).toContain("(guideline)");
+	});
+
+	it("carries what the user has said about how they eat, as constraints", () => {
+		const prompt = buildEatingDirectionPrompt(eatingSheet({ diet_style: "keto", preferences: ["no dairy"] }));
+		expect(prompt).toContain("Diet style: keto");
+		expect(prompt).toContain("no dairy");
+	});
+
+	it("says nothing about training — another page has that", () => {
+		expect(buildEatingDirectionPrompt(eatingSheet())).toContain("Say nothing about training");
+	});
+
+	it("leaves out a macro nobody has any days for", () => {
+		const empty = eatingSheet({ week: summarise([], { protein_g: null, carbs_max_g: null, fat_g: null, fiber_g: null, weight_lb: null, losing: false }) });
+		const prompt = buildEatingDirectionPrompt(empty);
+		expect(prompt).toContain("Days with food logged in the last 7: 0");
+		expect(prompt).not.toContain("g/day average");
+	});
+});
+
+describe("the eating direction's cache key", () => {
+	it("holds still while the same week is read again", () => {
+		expect(eatingInputsHash(eatingSheet())).toBe(eatingInputsHash(eatingSheet()));
+	});
+
+	it("moves when the numbers under it move", () => {
+		const other = eatingSheet();
+		other.week.protein.avg_per_day = 180;
+		expect(eatingInputsHash(other)).not.toBe(eatingInputsHash(eatingSheet()));
+	});
+
+	it("moves when a target is set, because the advice is measured against it", () => {
+		const other = eatingSheet();
+		other.week.carbs.target = 120;
+		expect(eatingInputsHash(other)).not.toBe(eatingInputsHash(eatingSheet()));
+	});
+
+	it("moves when the user says something new about how they eat", () => {
+		expect(eatingInputsHash(eatingSheet({ diet_style: "keto" }))).not.toBe(eatingInputsHash(eatingSheet()));
+		expect(eatingInputsHash(eatingSheet({ preferences: ["no dairy"] }))).not.toBe(eatingInputsHash(eatingSheet()));
 	});
 });

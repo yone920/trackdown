@@ -41,12 +41,17 @@ export function truthLine(completion: ExerciseCompletion | undefined): string | 
   if (!completion || records.length === 0) return null;
   const when = records.find((record) => record.logged_at)?.logged_at ?? null;
   const facts = records.map(recordFacts).filter(Boolean).join(' + ');
+  // A DONE row already carries a ✓, so the line leads with the receipt itself — the time
+  // and the weight, which is what the user came back to look at (user decision 2026-09-01:
+  // "it's already done… it should say what weight did I use, when did I do it"). A PARTIAL
+  // row still says how far in it is, because the target is still live.
   const head = completion.done
-    ? 'Done'
+    ? ''
     : completion.sets_prescribed != null
       ? `${completion.sets_done} of ${completion.sets_prescribed} sets`
       : 'Logged';
-  return [when ? `${head} ${clock(when)}` : head, facts].filter(Boolean).join(' · ');
+  const stamp = [head, when ? clock(when) : null].filter(Boolean).join(' ');
+  return [stamp, facts].filter(Boolean).join(' · ');
 }
 
 /** Every record id that ticked any line of the plan off. */

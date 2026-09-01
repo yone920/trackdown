@@ -772,16 +772,26 @@ describe('the merged training section', () => {
     });
   }
 
-  it('shows what was actually logged under what was asked for', async () => {
+  it('a done row is a receipt: the prescription is gone and the log is the line', async () => {
+    // "it's already done... it should say what weight did I use, when did I do it — that's
+    // the main focus" (user decision 2026-09-01).
     serveBoth(planned([record()]), [activity()]);
     renderCoach();
 
     await screen.findByText('Chest Press Machine');
-    // The prescription is still the sub-line.
-    expect(screen.getByText(/85 lb · 4 × 10/)).toBeTruthy();
-    // And under it, the truth.
-    expect(screen.getByTestId('coach-truth-0').props.children).toMatch(/^Done \d/);
     expect(screen.getByTestId('coach-truth-0').props.children).toContain('2 × 10 @ 85');
+    // What was ASKED for is no longer on the row at all.
+    expect(screen.queryByText(/85 lb · 4 × 10/)).toBeNull();
+  });
+
+  it('keeps the prescription on a line that is only part done', async () => {
+    // The target is still live mid-flight, so both lines are there.
+    serveBoth(planned([record()], { done: false, sets_done: 2, partial: true }), [activity()]);
+    renderCoach();
+
+    await screen.findByText('Chest Press Machine');
+    expect(screen.getByText(/85 lb · 4 × 10/)).toBeTruthy();
+    expect(screen.getByTestId('coach-truth-0').props.children).toContain('2 of 4 sets');
   });
 
   it('puts BOTH halves of a split record on the line, and reaches both', async () => {
@@ -794,42 +804,50 @@ describe('the merged training section', () => {
     renderCoach();
 
     await screen.findByTestId('coach-truth-0');
+    // Both halves on the ONE line. There is no second row repeating the name — the truth
+    // line carries the log (user decision 2026-09-01).
     expect(screen.getByTestId('coach-truth-0').props.children).toContain('2 × 10 @ 85 + 2 × 10 @ 70');
+    expect(screen.queryByTestId('coach-records-0')).toBeNull();
 
-    // The ROW opens the records — both of them, each with its own ✕ and its own tap.
+    // The ROW opens the logged record, not the how-to sheet.
     fireEvent.press(screen.getByTestId('coach-do-0'));
-    expect(await screen.findByTestId('coach-records-0')).toBeTruthy();
-    expect(screen.getByTestId('row-activity-a1')).toBeTruthy();
-    expect(screen.getByTestId('row-activity-a2')).toBeTruthy();
-    expect(screen.getByTestId('row-activity-a1-delete')).toBeTruthy();
-
-    // And tapping one opens it for a correction, dated today.
-    fireEvent.press(screen.getByTestId('row-activity-a2'));
     expect(mockPush).toHaveBeenCalledWith({
       pathname: '/log',
-      params: { editDate: expect.any(String), editId: 'a2', editKind: 'activity' },
+      params: { editDate: expect.any(String), editId: 'a1', editKind: 'activity' },
     });
   });
 
-  it('keeps the NAME opening the sheet, not the record', async () => {
-    serveBoth(planned([record()]), [activity()]);
+  it('sends the NAME of a done row to the record, and the glyph to the how-to sheet', async () => {
+    serveBoth(planned([record()]), [activity({ media_count: 2 })]);
     renderCoach();
     await screen.findByText('Chest Press Machine');
 
+    // The name is part of the row now, and the row is the receipt.
+    fireEvent.press(screen.getByText('Chest Press Machine'));
+    expect(JSON.stringify(mockPush.mock.calls)).toContain('editId');
+    expect(JSON.stringify(mockPush.mock.calls)).not.toContain(CHEST_ID);
+
+    // The small trailing door still gets to the photographs and the steps.
+    mockPush.mockReset();
+    fireEvent.press(screen.getByTestId('coach-do-0-photo'));
+    expect(JSON.stringify(mockPush.mock.calls)).toContain(CHEST_ID);
+  });
+
+  it('leaves an UNDONE row exactly as it was: prescription, and the name opens the sheet', async () => {
+    serveBoth(planned([], { done: false, sets_done: 0, partial: false }), []);
+    renderCoach();
+    await screen.findByText('Chest Press Machine');
+
+    expect(screen.getByText(/85 lb · 4 × 10/)).toBeTruthy();
     fireEvent.press(screen.getByText('Chest Press Machine'));
     expect(JSON.stringify(mockPush.mock.calls)).toContain(CHEST_ID);
-    // The row did not open its records from a tap on the name.
-    expect(screen.queryByTestId('coach-records-0')).toBeNull();
   });
 
   it('has nothing behind a line nobody has done', async () => {
     serveBoth(planned([], { done: false, sets_done: 0, partial: false }), []);
     renderCoach();
     await screen.findByText('Chest Press Machine');
-
     expect(screen.queryByTestId('coach-truth-0')).toBeNull();
-    fireEvent.press(screen.getByTestId('coach-do-0'));
-    expect(screen.queryByTestId('coach-records-0')).toBeNull();
   });
 
   it('puts off-plan work in the SAME card, under Also', async () => {
@@ -866,14 +884,15 @@ describe('the merged training section', () => {
   });
 
   it('drops the delta chips the merged row makes redundant', async () => {
-    // "-2 sets" against last time is a third comparison on a row that already shows the
-    // prescription and what was done against it.
-    serveBoth(planned([record()]), [activity()]);
+    // "-2 sets" against last time is a third comparison on a row that already carries the
+    // truth line — and under Also, where the logged rows still render in full.
+    serveBoth(planned([record()]), [
+      activity(),
+      activity({ id: 'a9', exercise: 'Incline Treadmill Walk', category: 'cardio' }),
+    ]);
     renderCoach();
 
-    await screen.findByTestId('coach-truth-0');
-    fireEvent.press(screen.getByTestId('coach-do-0'));
-    await screen.findByTestId('coach-records-0');
+    await screen.findByTestId('coach-also');
     expect(screen.queryByText('-2 sets')).toBeNull();
   });
 

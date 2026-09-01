@@ -19,7 +19,7 @@ import {
 } from '@/lib/queries';
 import { sessionSpan, splitBySource } from '@/lib/training-groups';
 import { C, TABULAR } from '@/lib/theme';
-import type { BriefExercise, CoachBrief, DayActivity, ExerciseCompletion } from '@/lib/types';
+import type { BriefExercise, CoachBrief, ExerciseCompletion } from '@/lib/types';
 
 // The day's plan, where the day is (user decision 2026-09-01). It used to be a page of its
 // own behind an accent button at the bottom of Today, which meant the answer to "what
@@ -72,12 +72,6 @@ export function PlanSection() {
    * two screens later.
    */
   const [replaceArmed, setReplaceArmed] = useState(false);
-  /**
-   * Which plan row is showing its records. A row opens what was logged against it rather
-   * than navigating away: the log is the answer to the line above it, and taking the
-   * reader off the page to see it is what the two-section layout was already doing wrong.
-   */
-  const [openPlanRow, setOpenPlanRow] = useState<number | null>(null);
 
 
   const coach = useCoachNext();
@@ -112,14 +106,14 @@ export function PlanSection() {
   // flight, and a half-arrived payload is not a reason to take the plan off the screen.
   const { logged } = splitBySource(day.data?.items?.activities ?? []);
   const span = sessionSpan(logged);
-  const byId = useMemo(
-    () => new Map(logged.filter((activity) => activity.id).map((activity) => [activity.id as string, activity])),
-    [logged],
-  );
   const offPlan = useMemo(() => {
     const matched = matchedRecordIds(brief?.workout?.exercises ?? []);
     return logged.filter((activity) => !activity.id || !matched.has(activity.id));
   }, [logged, brief]);
+
+  /** The record a done line opens — the first one logged against it. */
+  const firstRecordOf = (exercise: { completion?: ExerciseCompletion }): string | null =>
+    exercise.completion?.records?.[0]?.id ?? null;
 
   /** A logged row opens for a correction, the same door the full log uses. */
   const correct = (id: string) =>
@@ -297,34 +291,52 @@ export function PlanSection() {
                   <Row
                     testID={`coach-do-${index}`}
                     title={exercise.name}
-                    // The NAME still opens the sheet; the ROW opens what was logged against
-                    // this line (user decision 2026-09-01). Only once there is something to
-                    // open — an untouched line has nothing behind it.
-                    onPress={
-                      (exercise.completion?.records ?? []).length > 0
-                        ? () => setOpenPlanRow((current) => (current === index ? null : index))
+                    // Once a line has been done, the ROW — name included — opens what was
+                    // actually logged, and the how-to sheet moves to the glyph beside the
+                    // name (user decision 2026-09-01). Before it is done there is no record
+                    // to open, so the name is the sheet's door exactly as it always was.
+                    onPress={firstRecordOf(exercise) ? () => correct(firstRecordOf(exercise)!) : undefined}
+                    onTitlePress={
+                      firstRecordOf(exercise)
+                        ? undefined
+                        : () =>
+                            openExercise(router, {
+                              id: exercise.exercise_id,
+                              name: exercise.name,
+                              mediaCount: exercise.media_count,
+                            })
+                    }
+                    onMediaPress={
+                      firstRecordOf(exercise)
+                        ? () =>
+                            openExercise(router, {
+                              id: exercise.exercise_id,
+                              name: exercise.name,
+                              mediaCount: exercise.media_count,
+                            })
                         : undefined
                     }
-                    onTitlePress={() =>
-                      openExercise(router, {
-                        id: exercise.exercise_id,
-                        name: exercise.name,
-                        mediaCount: exercise.media_count,
-                      })
-                    }
                     titleMedia={exercise.media_count}
-                    sub={[
-                      exercise.load_lb != null ? `${exercise.load_lb} lb` : null,
-                      exercise.sets != null && exercise.reps != null
-                        ? `${exercise.sets} × ${exercise.reps}`
-                        : exercise.sets != null
-                          ? `${exercise.sets} sets`
-                          : null,
-                      exercise.minutes != null ? `${exercise.minutes} min` : null,
-                      exercise.note,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
+                    // The prescription — and it is GONE once the line is done. What was
+                    // asked for stops being the point the moment it has been answered; the
+                    // truth line below is the row's subject then (user decision 2026-09-01).
+                    // A partial row keeps it, because the target is still live.
+                    sub={
+                      exercise.completion?.done
+                        ? null
+                        : [
+                            exercise.load_lb != null ? `${exercise.load_lb} lb` : null,
+                            exercise.sets != null && exercise.reps != null
+                              ? `${exercise.sets} × ${exercise.reps}`
+                              : exercise.sets != null
+                                ? `${exercise.sets} sets`
+                                : null,
+                            exercise.minutes != null ? `${exercise.minutes} min` : null,
+                            exercise.note,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')
+                    }
                     right={tick(exercise.completion)}
                     rightColor={exercise.completion?.done ? C.good : C.mute}
                     divider={index < all.length - 1}>
@@ -335,7 +347,10 @@ export function PlanSection() {
                     {truthLine(exercise.completion) ? (
                       <Sub
                         testID={`coach-truth-${index}`}
-                        style={[{ marginTop: 4, color: C.good }, TABULAR]}>
+                        style={[
+                          { marginTop: 2, color: exercise.completion?.done ? C.ink : C.good },
+                          TABULAR,
+                        ]}>
                         {truthLine(exercise.completion)}
                       </Sub>
                     ) : null}
@@ -355,27 +370,6 @@ export function PlanSection() {
                       </View>
                     ) : null}
                   </Row>
-                  {/* The records themselves, opened from the row. Every one of them, because
-                      a split record is two rows against one prescribed line and the second
-                      is not a footnote — each with its evidence, its correction and its ✕,
-                      exactly as it reads in the full log. */}
-                  {openPlanRow === index ? (
-                    <View testID={`coach-records-${index}`} style={{ paddingLeft: 12 }}>
-                      {(exercise.completion?.records ?? [])
-                        .map((record) => byId.get(record.id))
-                        .filter((activity): activity is DayActivity => Boolean(activity))
-                        .map((activity, position, all) => (
-                          <ActivityRow
-                            key={activity.id ?? position}
-                            activity={activity}
-                            last={position === all.length - 1}
-                            showDelta={false}
-                            onPress={() => correct(activity.id as string)}
-                            onDelete={() => remove.mutate({ kind: 'activity', id: activity.id as string })}
-                          />
-                        ))}
-                    </View>
-                  ) : null}
                 </View>
               </View>
             ))}

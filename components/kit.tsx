@@ -300,6 +300,7 @@ export function Row({
   pressLabel,
   onTitlePress,
   titleMedia,
+  onMediaPress,
   onDelete,
   deleteLabel,
   divider = true,
@@ -332,6 +333,16 @@ export function Row({
    * exercise — draws nothing, which is the honest answer rather than a glyph that lies.
    */
   titleMedia?: number | null;
+  /**
+   * Makes the photo glyph its own door, separate from the title's.
+   *
+   * A DONE row leads with the receipt: tapping it — name included — opens what was actually
+   * logged, because that is what the user came to look at once the set is behind them
+   * (user decision 2026-09-01). The how-to sheet is still one tap away, and this is the tap:
+   * a small trailing affordance beside the name, sized to a real hit target rather than to
+   * the 13px glyph it draws.
+   */
+  onMediaPress?: () => void;
   /** A logged row can be taken back: draws {@link DeleteControl} at the end of the row. */
   onDelete?: () => void;
   /** What the ✕ says it is deleting, when the title is not the readable name. */
@@ -374,7 +385,7 @@ export function Row({
               <Body style={{ textDecorationLine: 'underline', textDecorationColor: C.track }}>
                 {title}
               </Body>
-              {(titleMedia ?? 0) > 0 ? (
+              {(titleMedia ?? 0) > 0 && !onMediaPress ? (
                 <View testID={testID ? `${testID}-photo` : undefined}>
                   <IconPhoto size={13} color={C.dim} />
                 </View>
@@ -382,7 +393,10 @@ export function Row({
             </View>
           </Pressable>
         ) : (
-          <Body>{title}</Body>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+            <Body>{title}</Body>
+            {onMediaPress ? <MediaDoor testID={testID} title={title} onPress={onMediaPress} /> : null}
+          </View>
         )}
         {sub ? <Sub style={{ marginTop: 2 }}>{sub}</Sub> : null}
         {children}
@@ -424,6 +438,35 @@ export function Row({
 }
 
 /** The eyebrow above a group of rows inside a section (a muscle group, a meal slot). */
+/**
+ * The how-to door on a row whose own tap belongs to something else. A done exercise opens
+ * its logged record when you press it; this is the small trailing button that still gets
+ * you to the photographs and the numbered steps (user decision 2026-09-01: "you can add a
+ * small side button that takes you to how the workout is done").
+ *
+ * The glyph is 13px because that is what reads beside a name; the TARGET is 32 and padded
+ * out around it, because a 13px tap target is a dead tap on a phone in a gym.
+ */
+function MediaDoor({ testID, title, onPress }: { testID?: string; title: string; onPress: () => void }) {
+  return (
+    <Pressable
+      testID={testID ? `${testID}-photo` : undefined}
+      accessibilityRole="button"
+      accessibilityLabel={`${title} — how it is done`}
+      hitSlop={8}
+      onPress={onPress}
+      style={({
+        width: 32,
+        height: 32,
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: 1,
+      })}>
+      <IconPhoto size={15} color={C.mute} />
+    </Pressable>
+  );
+}
+
 export function GroupHeading({
   label,
   right,

@@ -3,8 +3,16 @@ import type pg from "pg";
 import type { LlmPort } from "../../ports/llm.js";
 import type { DayView } from "../day.js";
 import { formatClock, localMinutesOf, type IsoDate } from "../localTime.js";
-import { PROMPT_FINGERPRINT, buildInShortPrompt, buildRightNowPrompt } from "./prompt.js";
 import {
+	PROMPT_FINGERPRINT,
+	buildEatingDirectionPrompt,
+	buildInShortPrompt,
+	buildRightNowPrompt,
+	type EatingDirectionSheet,
+} from "./prompt.js";
+import {
+	EATING_DIRECTION_SCHEMA_NAME,
+	EatingDirectionSchema,
 	IN_SHORT_SCHEMA_NAME,
 	InShortSchema,
 	RIGHT_NOW_SCHEMA_NAME,
@@ -99,6 +107,41 @@ export interface DayReadings {
 	inShort(db: Queryable, userId: string, view: DayView): Promise<Reading | null>;
 	/** Whatever is stored, without generating anything. */
 	cached(db: Queryable, userId: string, date: IsoDate, kind: ReadingKind): Promise<Reading | null>;
+	/**
+	 * The Eat page's written layer. A READING, not a brief: cached against the week's own
+	 * inputs hash, so opening the page twice costs nothing and logging a meal makes the
+	 * next open a new one. It never nags and it is never scheduled.
+	 */
+	eatingDirection(
+		db: Queryable,
+		userId: string,
+		date: IsoDate,
+		sheet: EatingDirectionSheet
+	): Promise<Reading | null>;
+}
+
+/**
+ * What the direction paragraph is *about*. The averages and their targets — not the meals
+ * that produced them, and not the clock. Two meals that come to the same macros are the
+ * same week as far as the advice goes.
+ */
+export function eatingInputsHash(sheet: EatingDirectionSheet): string {
+	const material = {
+		prompt: PROMPT_FINGERPRINT,
+		days: sheet.week.days_logged,
+		kcal: sheet.week.avg_kcal,
+		protein: sheet.week.protein,
+		carbs: sheet.week.carbs,
+		fat: sheet.week.fat,
+		fiber: sheet.week.fiber,
+		outliers: sheet.week.outliers,
+		goal: sheet.goal,
+		weight: sheet.weight_lb,
+		diet: sheet.diet_style,
+		preferences: sheet.preferences,
+		constraints: sheet.constraints,
+	};
+	return createHash("sha256").update(JSON.stringify(material)).digest("hex").slice(0, 32);
 }
 
 export function createDayReadings(llm: LlmPort): DayReadings {
@@ -168,6 +211,36 @@ export function createDayReadings(llm: LlmPort): DayReadings {
 			} catch (error) {
 				console.warn(`⚠️  Right-now reading unavailable for ${view.date}:`, describe(error));
 				// A stale reading beats a blank card; a blank card beats a 500.
+				return existing;
+			}
+		},
+
+		async eatingDirection(db, userId, date, sheet) {
+			const hash = eatingInputsHash(sheet);
+			const existing = await cached(db, userId, date, "eating_direction");
+			if (existing && existing.inputs_hash === hash) return existing;
+			// Nothing logged, nothing to steer. A paragraph about an empty week would be the
+			// model inventing a concern, which is the one thing this page must not do.
+			if (sheet.week.days_logged === 0) return null;
+
+			try {
+				const answer = await llm.parseStructured({
+					system: buildEatingDirectionPrompt(sheet),
+					schema: EatingDirectionSchema,
+					schemaName: EATING_DIRECTION_SCHEMA_NAME,
+					maxTokens: MAX_TOKENS,
+					messages: [{ role: "user", content: "Write the direction for the week above." }],
+				});
+				return await store(db, userId, date, "eating_direction", {
+					text: answer.text,
+					next_action: null,
+					actions: [],
+					inputs_hash: hash,
+					model: llm.model,
+				});
+			} catch (error) {
+				console.warn(`⚠️  Eating direction unavailable for ${date}:`, describe(error));
+				// A stale paragraph beats a blank space; a blank space beats a 500.
 				return existing;
 			}
 		},

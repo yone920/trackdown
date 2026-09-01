@@ -87,6 +87,7 @@ describe("upgrading a database that is already carrying v1 data", () => {
 			"0016_cardio_target.sql",
 			"0017_dossier.sql",
 			"0018_correction_splits.sql",
+			"0019_eating_direction.sql",
 		]);
 		const { rows } = await db.pool.query<{ name: string }>(`SELECT name FROM schema_migrations ORDER BY name`);
 		expect(rows.map((r) => r.name)).toEqual([
@@ -108,6 +109,7 @@ describe("upgrading a database that is already carrying v1 data", () => {
 			"0016_cardio_target.sql",
 			"0017_dossier.sql",
 			"0018_correction_splits.sql",
+			"0019_eating_direction.sql",
 		]);
 	});
 
@@ -254,6 +256,7 @@ describe("a database that has never been migrated", () => {
 			"0016_cardio_target.sql",
 			"0017_dossier.sql",
 			"0018_correction_splits.sql",
+			"0019_eating_direction.sql",
 		]);
 
 		const client = new pg.Client({ connectionString: freshUrl() });

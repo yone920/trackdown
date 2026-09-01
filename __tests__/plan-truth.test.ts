@@ -47,8 +47,11 @@ describe('recordFacts', () => {
 });
 
 describe('truthLine', () => {
-  it('says when it was done and what it came to', () => {
-    expect(truthLine(completion())).toBe(`Done ${clock('2026-09-01T12:02:00.000Z')} · 2 × 10 @ 85`);
+  it('leads a done line with the receipt: when, and what weight', () => {
+    // The ✓ already says it is done, so the line spends its words on what the user came
+    // back to look at (user decision 2026-09-01).
+    expect(truthLine(completion())).toBe(`${clock('2026-09-01T12:02:00.000Z')} · 2 × 10 @ 85`);
+    expect(truthLine(completion())).not.toContain('Done');
   });
 
   it('prints BOTH halves of a split record against the one line that prescribed it', () => {
@@ -64,9 +67,10 @@ describe('truthLine', () => {
   });
 
   it('counts a part-done line off against what was asked for', () => {
-    expect(
-      truthLine(completion({ done: false, partial: true, sets_done: 2, sets_prescribed: 4 })),
-    ).toContain('2 of 4 sets');
+    // A partial row still says how far in it is: the target is still live.
+    const line = truthLine(completion({ done: false, partial: true, sets_done: 2, sets_prescribed: 4 }));
+    expect(line).toContain('2 of 4 sets');
+    expect(line).toContain('2 × 10 @ 85');
   });
 
   it('says nothing at all about a line nobody has touched', () => {
