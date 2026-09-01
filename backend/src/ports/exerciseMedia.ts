@@ -29,6 +29,12 @@ export interface ExerciseMediaStore {
 	has(exerciseId: string, index: number, width?: number): Promise<boolean>;
 	/** The bytes, for the route to stream. Throws when the frame is not there. */
 	get(exerciseId: string, index: number, width?: number): Promise<Readable>;
+	/**
+	 * Throws away every resized variant of one frame, leaving the original. Called when a
+	 * frame's bytes are *replaced* — the variants are derived from the old picture and would
+	 * otherwise be served for ever beside the new one. Returns how many were dropped.
+	 */
+	clearVariants(exerciseId: string, index: number): Promise<number>;
 	/** Files and total bytes held, for the importer's report. */
 	usage(): Promise<{ files: number; bytes: number }>;
 }

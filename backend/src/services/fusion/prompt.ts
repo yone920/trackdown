@@ -126,7 +126,11 @@ const GROUPING = `GROUPING — inside one result, strongly bias toward ONE recor
   meal result only if the user clearly names separate eating occasions at different times.
 - Each distinct exercise is its own item under "activities": "bench, then rows, then a
   10 minute bike" is three items in ONE activities result, not three results. Same exercise
-  across several sets in one breath is ONE item with the set count.
+  across several sets in one breath is ONE item with the set count — UNLESS the load
+  changed between sets. An item carries one load, so "4 sets of 10 at 85, the last two at
+  70" is TWO items whose sets SUM to what was said: 2 × 10 at 85 and 2 × 10 at 70. Never a
+  total item plus a partial item — that invents sets nobody did. Each part's description
+  says which it was ("first two sets", "last two sets — dropped to 70").
 - When in doubt about food, COMBINE. When in doubt about exercises, SEPARATE.`;
 
 const FIELDS = `FIELDS

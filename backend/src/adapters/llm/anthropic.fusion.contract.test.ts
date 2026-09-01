@@ -198,6 +198,27 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 		expect(results[0].items.length).toBeGreaterThanOrEqual(3);
 	}, 90_000);
 
+	// The drop-set fix, against the real model (field report 2026-09-01: "4 sets of 10 at
+	// 85, the last two at 70" was saved as a 4-set item PLUS a 2-set item — six sets when
+	// four were done). A load change splits the item; the split has to SUM to what was said.
+	it("splits a load change into parts that sum, never a total plus a partial", async () => {
+		const { results } = await analyzer().analyze({
+			text: "chest press machine, I did 4 sets of 10 reps at 85 lbs, the last two sets I reduced the load to 70",
+			context,
+		});
+
+		const activities = results.find((part) => part.kind === "activities");
+		expect(activities).toBeTruthy();
+		if (activities?.kind !== "activities") return;
+		const presses = activities.items.filter((item) => /chest press/i.test(item.exercise ?? ""));
+		expect(presses).toHaveLength(2);
+		const totalSets = presses.reduce((sum, item) => sum + (item.sets ?? 0), 0);
+		expect(totalSets).toBe(4);
+		const loads = presses.map((item) => item.load_lb).sort((a, b) => (a ?? 0) - (b ?? 0));
+		expect(loads[0]).toBeCloseTo(70, 0);
+		expect(loads[1]).toBeCloseTo(85, 0);
+	}, 90_000);
+
 	// The training-background fix, against the real model. The extended plan-fields schema
 	// (964 → 1570 bytes) has to compile, and the model has to tell a load the user lifts
 	// NOW apart from a load they want to reach — which is a goal, not a reference.

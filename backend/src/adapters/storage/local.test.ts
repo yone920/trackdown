@@ -97,3 +97,27 @@ describe("local exercise media store", () => {
 		}
 	});
 });
+
+describe("dropping the variants of a replaced frame", () => {
+	const id = "33333333-4444-4555-8666-777777777777";
+
+	it("removes every width and leaves the original and its neighbours alone", async () => {
+		const media = createLocalExerciseMediaStore({ root: path.join(root, "exercise-media") });
+		await media.put(id, 0, Buffer.from("original"));
+		await media.put(id, 0, Buffer.from("320"), 320);
+		await media.put(id, 0, Buffer.from("640"), 640);
+		await media.put(id, 1, Buffer.from("second original"));
+		await media.put(id, 1, Buffer.from("second at 640"), 640);
+
+		expect(await media.clearVariants(id, 0)).toBe(2);
+		expect(await media.has(id, 0)).toBe(true);
+		expect(await media.has(id, 0, 320)).toBe(false);
+		expect(await media.has(id, 0, 640)).toBe(false);
+		// Frame 1 is a different picture and keeps everything it had.
+		expect(await media.has(id, 1, 640)).toBe(true);
+
+		// Called twice, or on a frame that never had a variant, is not an error.
+		expect(await media.clearVariants(id, 0)).toBe(0);
+		expect(await media.clearVariants("11111111-1111-4111-8111-111111111111", 0)).toBe(0);
+	});
+});
