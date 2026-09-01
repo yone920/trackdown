@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
-import TrainingLog from '@/app/today/training';
+import TrainingLog from '@/app/train/log';
 import { clock } from '@/lib/format';
 import type { DayActivity, DayMeal } from '@/lib/types';
 import { makeDay } from './fixtures';

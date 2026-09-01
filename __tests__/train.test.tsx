@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
-import Today from '@/app/(tabs)/today';
+import Train from '@/app/(tabs)/train';
 import { clock } from '@/lib/format';
 import type { CoachStatus, DayActivity, DayMeal } from '@/lib/types';
 import { makeDay, makeGoal, makeMetric, makeWeek } from './fixtures';
@@ -33,7 +33,7 @@ function renderToday() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
     <QueryClientProvider client={client}>
-      <Today />
+      <Train />
     </QueryClientProvider>,
   );
 }
@@ -99,54 +99,10 @@ function lift(overrides: Partial<DayActivity> = {}): DayActivity {
   };
 }
 
-describe('Today', () => {
-  it('shows the day number with no verdict on an empty day, and the no-goal banner', async () => {
-    serve();
-    renderToday();
-    await waitFor(() => expect(screen.getByText(/Day 12/)).toBeTruthy());
-    // 0 eaten is trivially "under allowance": an untouched day earns no green badge.
-    expect(screen.queryByText('on track')).toBeNull();
-    expect(screen.getByText('No goal set')).toBeTruthy();
-    expect(screen.getByText('Training for consistency')).toBeTruthy();
-  });
+describe('Train', () => {
 
-  it('shows the status once something is logged', async () => {
-    serve({ day: makeDay({ items: { meals: [MEAL], activities: [], weights: [] } }) });
-    renderToday();
-    await waitFor(() => expect(screen.getByText(/Day 12/)).toBeTruthy());
-    expect(screen.getByText('on track')).toBeTruthy();
-  });
 
-  it('draws the fat-loss cards when the primary goal is fat loss', async () => {
-    serve({ goals: { active: [makeGoal('lose_fat')], history: [], no_goal: false } });
-    renderToday();
-    await waitFor(() => expect(screen.getByTestId('metric-calories-left')).toBeTruthy());
-    expect(screen.getByTestId('metric-weekly-deficit')).toBeTruthy();
-    // The 7-day weight lives on Home now: it does not move over the course of a day, so
-    // it is not news on the working page (user decision 2026-09-01).
-    expect(screen.queryByTestId('metric-weight-trend')).toBeNull();
-    expect(screen.queryByTestId('metric-coverage')).toBeNull();
-    expect(screen.getByText('Get to 170 lb')).toBeTruthy();
-  });
 
-  it('draws the muscle cards when the primary goal is muscle', async () => {
-    serve({
-      goals: {
-        active: [
-          makeGoal('gain_muscle', [
-            makeMetric({ measure: 'weekly_sets', label: 'Weekly sets', unit: 'sets', target: 12, current: 6 }),
-          ]),
-        ],
-        history: [],
-        no_goal: false,
-      },
-    });
-    renderToday();
-    await waitFor(() => expect(screen.getByTestId('metric-protein')).toBeTruthy());
-    expect(screen.getByTestId('metric-weekly_sets')).toBeTruthy();
-    expect(screen.getByTestId('metric-coverage')).toBeTruthy();
-    expect(screen.queryByTestId('metric-calories-left')).toBeNull();
-  });
 
   // It used to flip to "What should I do tomorrow?" the moment anything was logged, which
   // told a user standing in the gym that today was over — and the brief behind the button
@@ -270,27 +226,8 @@ describe('Today', () => {
     return calls;
   }
 
-  it('shows the Right now reading as a pure card — the + is the one door to log', async () => {
-    serve({
-      day: makeDay({
-        reading: {
-          kind: 'right_now',
-          text: 'You are 700 under. Dinner is the only thing missing.',
-          next_action: { label: 'Log dinner', kind: 'log_meal', hint: null },
-          actions: [{ label: 'Weigh in', kind: 'weigh_in' }],
-          inputs_hash: 'x',
-          model: 'test',
-          created_at: '2026-08-30T18:00:00.000Z',
-        },
-      }),
-    });
-    renderToday();
-    await waitFor(() => expect(screen.getByText(/700 under/)).toBeTruthy());
-    expect(screen.queryByText('Log dinner')).toBeNull();
-    expect(screen.queryByText('Weigh in')).toBeNull();
-  });
 });
-describe('Today — the plan and the day on one page', () => {
+describe('Train — the plan and what was done, on one page', () => {
   // User decision 2026-09-01. The plan used to live on a page of its own behind a button
   // at the bottom of this one, which put what you are about to do and what you have
   // actually done two screens apart.
@@ -328,7 +265,7 @@ describe('Today — the plan and the day on one page', () => {
     });
   }
 
-  it('draws Do, Done and Eat together, from one plan and one day', async () => {
+  it('draws the plan and what was done together, and nothing about food', async () => {
     serveWithPlan(
       makeDay({
         earned: 264,
@@ -346,7 +283,11 @@ describe('Today — the plan and the day on one page', () => {
     // day's totals sit on the plan's own header (user decision 2026-09-01).
     expect(screen.queryByTestId('today-done')).toBeNull();
     expect(screen.getByText(/264 kcal earned/)).toBeTruthy();
-    expect(screen.getByTestId('today-eat')).toBeTruthy();
+    // Nothing food-ward, and no whole-day framing: both moved off this tab.
+    expect(screen.queryByTestId('today-eat')).toBeNull();
+    expect(screen.queryByTestId('goal-banner')).toBeNull();
+    expect(screen.queryByTestId('metric-calories-left')).toBeNull();
+    expect(screen.queryByText(/on track/)).toBeNull();
     // And the three things that came off the page are off it.
     expect(screen.queryByText('The day so far')).toBeNull();
     expect(screen.queryByText('Body')).toBeNull();
@@ -366,7 +307,7 @@ describe('Today — the plan and the day on one page', () => {
     expect((read?.[1] as { query?: { generate?: boolean } } | undefined)?.query?.generate).toBe(false);
   });
 
-  it('is a quiet food-and-body page on a day nobody started a workout on', async () => {
+  it('is one quiet card on a day nobody started a workout on', async () => {
     // The rest-day expectation, said out loud by the user: meals and weigh-ins work
     // identically whether or not a workout was ever started.
     serveWithPlan(
@@ -399,9 +340,11 @@ describe('Today — the plan and the day on one page', () => {
     // No plan was asked for, so the section is one card and a button — not a blank.
     await waitFor(() => expect(screen.getByTestId('coach-no-plan')).toBeTruthy());
     expect(screen.getByText("Start today's workout")).toBeTruthy();
-    // And the rest of the day is entirely usable: the meal counted, on one line.
-    expect(screen.getByTestId('today-eat-line')).toHaveTextContent(/480 eaten/);
+    // The Done door is still there — it is training, and this tab owns training.
     expect(screen.getByTestId('today-done-line')).toHaveTextContent(/Nothing logged yet/);
+    // The meal that was logged is Eat's business, not this tab's.
+    expect(screen.queryByTestId('today-eat')).toBeNull();
+    expect(screen.queryByText('eggs and toast')).toBeNull();
   });
 
   it('has no button to a plan page, because there is no plan page', async () => {
@@ -413,7 +356,7 @@ describe('Today — the plan and the day on one page', () => {
   });
 });
 
-describe('Today — the doors, and what is no longer on the page', () => {
+describe('Train — the door, and what is no longer on the page', () => {
   // User decision 2026-09-01, from screenshots of the merged page. Three things came off
   // because they were pushing the day off its own screen, and one because it was a second
   // input surface.
@@ -456,24 +399,15 @@ describe('Today — the doors, and what is no longer on the page', () => {
     await waitFor(() => expect(screen.getByTestId('today-done-line')).toHaveTextContent(/569 kcal earned/));
     expect(screen.getByTestId('today-done-line')).toHaveTextContent(/2 moves/);
     fireEvent.press(screen.getByTestId('today-done'));
-    expect(mockPush).toHaveBeenCalledWith('/today/training');
+    expect(mockPush).toHaveBeenCalledWith('/train/log');
 
-    // ONE calorie figure on the Eat line, and it is the day's own arithmetic. The card
-    // that used to be here printed it three times and then quoted a different one out of
-    // an older brief.
-    expect(screen.getByTestId('today-eat-line')).toHaveTextContent('480 eaten · 2,385 left');
-    fireEvent.press(screen.getByTestId('today-eat'));
-    // Eating has its own tab now (user decision 2026-09-01); the door stays, the target
-    // changed, and app/today/eating.tsx was absorbed into it.
-    expect(mockPush).toHaveBeenCalledWith('/eat');
+    // Nothing on this tab links food-ward any more except the global + (user decision
+    // 2026-09-01: each tab owns one verb).
+    expect(screen.queryByTestId('today-eat')).toBeNull();
+    expect(mockPush).not.toHaveBeenCalledWith('/eat');
   });
 
-  it('counts an over-allowance day as over, not as a negative amount left', async () => {
-    serveDay(makeDay({ eaten: 2574, allowance: 2254, items: { meals: [MEAL], activities: [], weights: [] } }));
-    renderToday();
-    await waitFor(() => expect(screen.getByTestId('today-eat-line')).toHaveTextContent(/over/));
-    expect(screen.getByTestId('today-eat-line')).not.toHaveTextContent('-');
-  });
+
 
   it('draws neither the arc, nor Body, nor a second form anywhere on it', async () => {
     serveDay(makeDay({ arc: [{ at: '2026-08-30T08:10:00.000Z', kind: 'activity', label: 'Bench' }] as never }));
@@ -483,6 +417,9 @@ describe('Today — the doors, and what is no longer on the page', () => {
     expect(screen.queryByText('The day so far')).toBeNull();
     expect(screen.queryByText('Body')).toBeNull();
     expect(screen.queryByText('7-day avg')).toBeNull();
+    // The whole-day framing lives on Home now, not here.
+    expect(screen.queryByTestId('home-verdict')).toBeNull();
+    expect(screen.queryByText('Right now')).toBeNull();
     // The one-door law: no input surface but the + (concept-v2 §Principles 7).
     expect(screen.queryByTestId('coach-context')).toBeNull();
     expect(screen.queryByTestId('coach-photo')).toBeNull();
@@ -490,7 +427,7 @@ describe('Today — the doors, and what is no longer on the page', () => {
   });
 });
 
-describe('Today — the Done door survives only where there is no plan', () => {
+describe('Train — the Done door survives only where there is no plan', () => {
   // The plan absorbs the log when there is one (user decision 2026-09-01). On a day nobody
   // has asked for a plan there is no skeleton to hang it off, so the compact door stays.
 
@@ -514,6 +451,6 @@ describe('Today — the Done door survives only where there is no plan', () => {
 
     await waitFor(() => expect(screen.getByTestId('today-done-line')).toHaveTextContent(/264 kcal earned/));
     fireEvent.press(screen.getByTestId('today-done'));
-    expect(mockPush).toHaveBeenCalledWith('/today/training');
+    expect(mockPush).toHaveBeenCalledWith('/train/log');
   });
 });

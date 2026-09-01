@@ -1,27 +1,40 @@
 import { useRouter } from 'expo-router';
 import { useCallback } from 'react';
-import { Pressable, RefreshControl, ScrollView, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 
 import { GoalBanner } from '@/components/goal-banner';
 import { IconAvatar, IconChevronRight } from '@/components/icons';
 import { Card, Section } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
-import { dateEyebrow, dateLabel } from '@/lib/format';
-import { useCoachStatus, useGoals, useTrainingBoard } from '@/lib/queries';
+import { ReadingCard } from '@/components/reading-card';
+import { dateEyebrow, dateLabel, kcal } from '@/lib/format';
+import { localDateKey, useCoachStatus, useDay, useGoals, useTrainingBoard } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
-import type { CoachStatus, TrainingBoard } from '@/lib/types';
+import type { CoachStatus, DayView, TrainingBoard } from '@/lib/types';
 
-// Home — where you are, in general (user decision 2026-09-01). The app used to land on
-// Today, which is the right page when something is happening and the wrong one when
-// nothing is: a rest morning opened on an empty log and a plan that had not been asked
-// for. So the landing page answers the calm question — how is this going — and Today
-// answers the live one.
+// HOME — the morning glance, and the ONLY page that thinks in whole days (user decision
+// 2026-09-01: every other tab owns one verb — Train the session, Eat the food, Progress the
+// long view).
 //
-// Deliberately light, and deliberately a dead end for everything but navigation. There is
-// no logging here (the + is the one door, and it is on every tab), no reading of right
-// now, and — the constraint that matters most — **nothing on this page can generate a
-// plan**. The big button is a door to Today, which is where the one generator lives.
+// So the whole-day framing lives here and nowhere else: the day number and its verdict, the
+// goal, the Right-now reading that reads food and training together, one line of calories,
+// and the button into the session. Everything on it is either a fact about the day or a
+// door to the tab that owns the detail — the calories line goes to Eat, the button goes to
+// Train, the weight and the week go to Progress.
+//
+// Two rules it inherits unchanged:
+//   * **An empty day carries no verdict.** 0 eaten is trivially "under allowance", and a
+//     green "on track" at 6 am judges a day that has not happened.
+//   * **Nothing here can generate a plan.** `/api/coach/status` is an exists-check that
+//     cannot write, and `/api/day/:date` is a read. The button is a door.
+
+const STATUS_WORDS: Record<DayView['status'], { text: string; color: string }> = {
+  on_track: { text: 'on track', color: C.good },
+  over: { text: 'over', color: C.accent },
+  under: { text: 'under', color: C.accent },
+  none: { text: '—', color: C.mute },
+};
 
 export default function Home() {
   const router = useRouter();
@@ -29,20 +42,32 @@ export default function Home() {
 
   const goals = useGoals();
   const board = useTrainingBoard();
+  // Home is the only page that thinks in whole days now (user decision 2026-09-01), so it
+  // is the one that reads the day. `/api/day/:date` is a read; nothing here generates.
+  const day = useDay(localDateKey());
   // An exists-check on the server, and that is a property of the endpoint rather than of
   // this page: `/api/coach/status` cannot generate anything (user decision 2026-08-31 §1).
   const coach = useCoachStatus();
 
-  const refreshing = goals.isRefetching || board.isRefetching || coach.isRefetching;
+  const refreshing = goals.isRefetching || board.isRefetching || coach.isRefetching || day.isRefetching;
   const onRefresh = useCallback(() => {
     goals.refetch();
     board.refetch();
     coach.refetch();
-  }, [goals, board, coach]);
+    day.refetch();
+  }, [goals, board, coach, day]);
 
   const goal = goals.data?.active?.[0] ?? null;
   const body = board.data?.body ?? null;
   const status = coach.data ?? null;
+  const view = day.data ?? null;
+  const verdict = view ? STATUS_WORDS[view.status] : null;
+  // An empty day carries NO verdict: 0 eaten is trivially "under allowance", and a green
+  // "on track" at 6 am judges a day that has not happened (user report). The rule came with
+  // the header when it moved here from Train, and it comes unchanged.
+  const dayHappened =
+    !!view && view.items.meals.length + view.items.activities.length + view.items.weights.length > 0;
+  const left = view?.allowance == null ? null : Math.round(view.allowance - view.eaten);
 
   return (
     <ScrollView
@@ -58,7 +83,18 @@ export default function Home() {
         <View style={{ flex: 1 }}>
           <Eyebrow>{dateEyebrow()}</Eyebrow>
           <Disp size={30} style={{ marginTop: 6 }}>
-            Where you are
+            {!view ? (
+              <>Where you are</>
+            ) : dayHappened && verdict ? (
+              <>
+                Day {view.day_number} ·{' '}
+                <Text testID="home-verdict" style={{ color: verdict.color, fontFamily: FONT.disp }}>
+                  {verdict.text}
+                </Text>
+              </>
+            ) : (
+              <>Day {view.day_number}</>
+            )}
           </Disp>
         </View>
         <Pressable
@@ -90,12 +126,48 @@ export default function Home() {
         />
       </View>
 
+      {/* Right now — the two sentences that read the whole day, which is why they belong
+          on the page that thinks in whole days and not on either half of it. A pure
+          reading, refreshed after every log; the + is the one door to logging. */}
+      {view?.reading ? (
+        <View style={{ marginTop: 12 }}>
+          <ReadingCard eyebrow="Right now" text={view.reading.text} live={view.is_today} />
+        </View>
+      ) : null}
+
+      {/* A GLANCE at the food, not a second copy of the Eat page: one line, and a tap that
+          opens the tab that owns it. */}
+      <Pressable
+        testID="home-eat"
+        accessibilityRole="button"
+        accessibilityLabel="Eating today"
+        onPress={() => router.push('/eat')}
+        style={({
+          marginTop: 12,
+          flexDirection: 'row',
+          alignItems: 'center',
+          borderRadius: RADIUS.card,
+          backgroundColor: C.card,
+          paddingVertical: 14,
+          paddingHorizontal: SPACE.card,
+          opacity: 1,
+        })}>
+        <Sub testID="home-eat-line" style={[{ flex: 1 }, TABULAR]}>
+          {!view
+            ? 'Eating'
+            : left == null
+              ? `${kcal(view.eaten)} eaten`
+              : `${kcal(view.eaten)} eaten · ${kcal(Math.abs(left))} ${left < 0 ? 'over' : 'left'}`}
+        </Sub>
+        <IconChevronRight size={18} color={C.mute} />
+      </Pressable>
+
       {/* The one button. It is a DOOR — it opens Today, where the plan lives and where the
           only generator in the app is. Pressing it here has never written anything. */}
       <Pressable
         testID="home-today"
         accessibilityLabel={planLabel(status)}
-        onPress={() => router.push('/today')}
+        onPress={() => router.push('/train')}
         style={({
           marginTop: 16,
           borderRadius: RADIUS.pill,
@@ -180,7 +252,7 @@ export default function Home() {
  * the same page either way.
  */
 export function planLabel(status: CoachStatus | null): string {
-  return status?.has_plan ? 'Today' : "Start today's workout";
+  return status?.has_plan ? 'Today’s session' : "Start today's workout";
 }
 
 /** "2 of 6 done" once a plan is being worked through. A rest day counts nothing. */

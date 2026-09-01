@@ -153,39 +153,40 @@ day is judged against the goal active **that day**.
 The input classifier routes statements to: log · goal · constraint · preference · coach context,
 always showing what it understood before saving.
 
-## The tabs — Home · Today · Eat · Progress · You
+## The tabs — Home · Train · Eat · Progress · You
 
-Revised 2026-09-01. The app used to land on Today, which is the right page when something is
-happening and the wrong one when nothing is: a rest morning opened on an empty log and a plan
-nobody had asked for. So the landing tab answers the calm question and Today answers the live
-one.
+Revised 2026-09-01, twice. First the app stopped landing on Today, which is the right page
+when something is happening and the wrong one when nothing is. Then eating got a tab, which
+left Today holding a calories card while another tab owned calories — two answers to one
+question. So **each tab owns one verb**: Home is the whole day, Train is the session, Eat is
+the food, Progress is the long view.
 
-- **Home** — where you are, in general. The goal and its progress, the 7-day weight and its
-  trend, the week in two numbers (sessions against what you said you train, cardio in
-  *equivalent* minutes against the weekly target), and one big button into Today: *Start
-  today's workout* with no plan, *Today · 2 of 6 done* with one. Deliberately light and
-  deliberately a dead end for everything but navigation. **Nothing on Home can generate a
-  plan** — the button is a door.
-- **Today** — the working page for the open day: the header, the goal, calories left, the
-  *Right now* reading, the **training section** — the plan, ticked off, each done line
-  showing what was actually logged under what was asked for and opening those records, with
-  off-plan work under "Also" in the same card — and then **one line for Eat**, opening its
-  log. On a day with no plan the training section is a compact row with a door instead. There is no separate
-  coach page: the plan and the record of what you did are two halves of one day, and *Start
-  today's workout* on this page is the only generator in the app. Deliberately short — the
-  full logs, the day arc, the body numbers and the weight card were all taken off it
-  because they buried the day (user decision 2026-09-01).
+- **Home** — the morning glance, and the only page that thinks in whole days: the day
+  number and its verdict (suppressed on a day nothing has happened on), the goal and its
+  progress, the **Right now** reading — which reads food and training together and so
+  belongs on neither half of them — one line of calories that opens Eat, the button into
+  the session, the 7-day weight and the week in two numbers. Everything on it is a fact
+  about the day or a door to the tab that owns the detail. **Nothing on Home can generate
+  a plan.**
+- **Train** — the session, and nothing else: the plan ticked off, each done line showing
+  what was actually logged under what was asked for and opening those records, off-plan work
+  under "Also" in the same card, Adjust / Replace, and *Start today's workout* — the only
+  generator in the app — when there is no plan. No food, and no whole-day framing.
 - **Eat** — the other half of the day, in four layers: today's numbers (the same arithmetic
   Today shows), the rolling seven-day averages against their targets — **computed**, with
   each target saying whether it was stated, derived or a guideline — a short **written**
   paragraph on which way to steer the nutrients (never a dish), and the food log. The
   paragraph is a cached reading, so opening the page generates nothing.
 - **Progress** now opens with the **Days** list; there is no Days tab. **You** is unchanged.
-  Today's row in the Days list goes to the Today tab rather than to a second copy of today.
+  Today's row in the Days list goes to the **Train** tab rather than to a second copy of
+  today; `/today` and `/days` both redirect.
 
 ## The two day views
 
-- **Today** is live: a header stating where you are (day N, on track), the goal banner and
+- **The open day** is live, and it is split across Home (the day number, the verdict, the
+  goal, the reading, the calories glance), Train (the session) and Eat (the food). Before
+  2026-09-01 it was one page, described here as: a header stating where you are (day N, on
+  track), the goal banner and
   goal-driven cards, a **Right now** reading (≤ 2 LLM sentences regenerated on each log: what's
   done, what's short, the one best next action), a **day arc** (6a–11p line: logs as dots,
   workout as a bar, NOW), then Do, Done, Eat and Body. Training is grouped the way the closed

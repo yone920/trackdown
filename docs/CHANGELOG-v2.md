@@ -87,6 +87,42 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-01 — each tab owns one verb (`wp-train-tab`)
+
+Giving eating its own tab left Today holding a calories card while another tab owned
+calories — two answers to one question, on two screens. So Today stops being the day.
+
+**HOME · TRAIN · EAT · PROGRESS · YOU.**
+
+- **TRAIN** (was Today) is the session and nothing else: the plan with its receipts and
+  ticks, off-plan work under "Also", Adjust / Replace, the coach's one nudge, and *Start
+  today's workout* when there is no plan. The Done door survives for a day with no plan to
+  hang the log off — that is still training, and this tab owns training. Off it come the Eat
+  row, the calories-left card, the goal card, the "Day 2 · on track" header and the
+  Right-now reading. **Nothing on this page links food-ward any more** except the global +.
+- **HOME** is the morning glance and now the only page that thinks in whole days. It gains
+  the day number and its verdict — with the empty-day suppression rule intact, because 0
+  eaten is trivially "under allowance" and a green "on track" at 6 am judges a day nobody
+  has lived — the **Right-now reading**, which reads food and training together and
+  therefore belongs on neither half of them, and a one-line **calories glance** ("1,180
+  eaten · 1,205 left") that opens Eat. It keeps the goal card, the 7-day weight, the week,
+  and the button into the session.
+- **EAT** is untouched; it already owned calories-left as its top layer.
+
+Routes stay honest: `/today` redirects to `/train`, and the full training log moved with its
+tab to `app/train/log.tsx`. Nothing was deleted from the data or the day views — Days in
+Progress and the past-day pages are exactly as they were.
+
+Every door is a door. Nothing on Home or Train can generate a plan: `/api/coach/status` is
+an exists-check, `/api/day/:date` is a read, and `GET /api/coach/next?generate=false` cannot
+write. *Start today's workout* is still the only generator in the app.
+
+**Verified** — app **346 → 347** across 25 suites. New: Home carries the verdict and
+suppresses it on an empty day, draws the reading, prints the calories line and reads "over"
+rather than a negative, and has both doors while generating neither; Train contains no eat,
+goal or verdict element; `/today` redirects. Backend untouched (706). `tsc` and `expo lint`
+clean.
+
 ### 2026-09-01 — a page for eating, and five tabs instead of six (`wp-eat-page`)
 
 Training had a plan, a log, a coverage map and a whole tab. Eating had a compact row and a

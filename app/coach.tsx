@@ -5,5 +5,5 @@ import { Redirect } from 'expo-router';
 // This route stays so nothing that already points at `/coach` breaks — an older build, a
 // link in a brief, a deep link someone kept. It renders nothing and redirects.
 export default function Coach() {
-  return <Redirect href="/today" />;
+  return <Redirect href="/train" />;
 }

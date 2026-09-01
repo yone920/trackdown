@@ -11,7 +11,7 @@ import LogSheet from '@/app/log';
 import Home from '@/app/(tabs)/index';
 import Eat from '@/app/(tabs)/eat';
 import Progress from '@/app/(tabs)/progress';
-import Today from '@/app/(tabs)/today';
+import Train from '@/app/(tabs)/train';
 import You from '@/app/you';
 import { STATUS_BAR_MIN } from '@/lib/screen';
 import { makeDay, makeWeek } from './fixtures';
@@ -80,7 +80,7 @@ beforeEach(() => {
 /** Every screen, and the testID of the scroller it is built in. */
 const SCREENS: [name: string, Screen: () => React.ReactElement, testID: string][] = [
   ['Home', Home, 'home-scroll'],
-  ['Today', Today, 'today-scroll'],
+  ['Train', Train, 'today-scroll'],
   ['Eat', Eat, 'eat-scroll'],
   ['Progress', Progress, 'progress-scroll'],
   ['You', You, 'you-scroll'],

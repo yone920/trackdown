@@ -59,7 +59,7 @@ export default function TrainingLog() {
         paddingBottom: insets.bottom + 60,
       }}>
       <Pressable
-        onPress={() => (router.canGoBack() ? router.back() : router.replace('/today'))}
+        onPress={() => (router.canGoBack() ? router.back() : router.replace('/train'))}
         accessibilityLabel="Back to Today"
         testID="training-log-back"
         style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 8, alignSelf: 'flex-start' }}>

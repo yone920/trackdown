@@ -9,26 +9,26 @@ import {
   IconHome,
   IconPlus,
   IconProgress,
-  IconToday,
+  IconTrain,
   type IconProps,
 } from '@/components/icons';
 import { Eyebrow } from '@/components/type';
 import { C, SPACE } from '@/lib/theme';
 
-// Home · Today · Eat · Progress · You, 84 high, stroke icons at 1.8, inactive `dim`
+// Home · Train · Eat · Progress · You, 84 high, stroke icons at 1.8, inactive `dim`
 // (docs/design-system.md §Tokens). Written by hand rather than configured, because the
 // floating `+` sits above it and the two have to agree about where the bar ends.
 
 const ICONS: Record<string, (p: IconProps) => React.ReactElement> = {
   index: IconHome,
-  today: IconToday,
+  train: IconTrain,
   eat: IconEat,
   progress: IconProgress,
 };
 
 const LABELS: Record<string, string> = {
   index: 'Home',
-  today: 'Today',
+  train: 'Train',
   eat: 'Eat',
   progress: 'Progress',
 };

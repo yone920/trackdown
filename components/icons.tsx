@@ -66,6 +66,19 @@ export function IconDays(p: IconProps) {
   );
 }
 
+/** Train — a dumbbell: the session, seen end on. */
+export function IconTrain(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Line x1={2.5} y1={9} x2={2.5} y2={15} {...base(p)} />
+      <Line x1={21.5} y1={9} x2={21.5} y2={15} {...base(p)} />
+      <Rect x={5} y={7} width={3.5} height={10} rx={1.2} {...base(p)} />
+      <Rect x={15.5} y={7} width={3.5} height={10} rx={1.2} {...base(p)} />
+      <Line x1={8.5} y1={12} x2={15.5} y2={12} {...base(p)} />
+    </Frame>
+  );
+}
+
 /** Eat — a fork and a knife. */
 export function IconEat(p: IconProps) {
   return (

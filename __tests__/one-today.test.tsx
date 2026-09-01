@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import React from 'react';
 
 import Coach from '@/app/coach';
+import TodayRoute from '@/app/today';
 import DaysRoute from '@/app/days';
 import Day from '@/app/day/[date]';
 import Progress from '@/app/(tabs)/progress';
@@ -78,7 +79,7 @@ describe('the Days list', () => {
 
     await waitFor(() => expect(screen.getByTestId(`day-${today}`)).toBeTruthy());
     fireEvent.press(screen.getByTestId(`day-${today}`));
-    expect(mockPush).toHaveBeenCalledWith('/today');
+    expect(mockPush).toHaveBeenCalledWith('/train');
     expect(mockPush).not.toHaveBeenCalledWith(`/day/${today}`);
   });
 
@@ -98,7 +99,7 @@ describe('a deep link to /day/<today>', () => {
     mockApi.mockResolvedValue(null);
     wrap(<Day />);
 
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/today'));
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/train'));
     // Nothing is drawn and nothing is fetched: the tab is about to answer for this day.
     expect(screen.queryByTestId('day-scroll')).toBeNull();
     expect(mockApi.mock.calls.filter(([path]) => String(path).startsWith('/api/day/'))).toHaveLength(0);
@@ -110,7 +111,7 @@ describe('a deep link to /day/<today>', () => {
     wrap(<Day />);
 
     await waitFor(() => expect(screen.getByTestId('day-scroll')).toBeTruthy());
-    expect(mockReplace).not.toHaveBeenCalledWith('/today');
+    expect(mockReplace).not.toHaveBeenCalledWith('/train');
   });
 });
 
@@ -123,11 +124,20 @@ describe('Days, folded into Progress', () => {
   });
 });
 
+describe('the old Today route', () => {
+  // Today became TRAIN (user decision 2026-09-01): each tab owns one verb and this one owns
+  // the session. Anything still pointing at /today lands where it meant to.
+  it('redirects /today to Train — no dead route', () => {
+    render(<TodayRoute />);
+    expect(mockRedirect).toHaveBeenCalledWith('/train');
+  });
+});
+
 describe('the old coach page', () => {
   it('redirects into Today, where the plan lives now — no dead route', () => {
     // The plan is the "Do" section of Today (user decision 2026-09-01). Anything that
     // still points at /coach — an older build, a link in a brief — lands where it meant to.
     render(<Coach />);
-    expect(mockRedirect).toHaveBeenCalledWith('/today');
+    expect(mockRedirect).toHaveBeenCalledWith('/train');
   });
 });

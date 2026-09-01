@@ -45,7 +45,7 @@ export function DaysList() {
    * day that has closed.
    */
   const openDay = (date: string) =>
-    date === localDateKey() ? router.push('/today') : router.push(`/day/${date}`);
+    date === localDateKey() ? router.push('/train') : router.push(`/day/${date}`);
 
   return (
     <Section title="Days" summary={rows.length > 0 ? `${rows.length} logged` : null}>
