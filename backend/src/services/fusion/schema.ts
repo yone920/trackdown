@@ -277,6 +277,14 @@ export const ProfileFieldsSchema = z
 		 * one day and is NOT this — the prompt says so in as many words.
 		 */
 		session_minutes: z.number().int().min(10).max(240).nullable().default(null),
+		/**
+		 * Weekly cardio minutes they aim for (migration 0016). "I want 200 minutes of cardio
+		 * a week" is a standing aim; "I'll get a long run in this week" is one week's plan and
+		 * is NOT this. Null means nobody has said, and the WHO's 150 stands in *and says that
+		 * it is standing in* — which is the whole reason this is a column rather than a
+		 * constant.
+		 */
+		cardio_minutes_target: z.number().int().min(0).max(2000).nullable().default(null),
 		environment: z.string().trim().max(80).nullable(),
 		equipment: z.array(z.string().trim().min(1).max(60)).max(30).nullable(),
 		eatback: z.enum(["none", "half", "all"]).nullable(),

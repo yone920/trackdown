@@ -15,6 +15,7 @@ import 'react-native-reanimated';
 import '../global.css';
 
 import { useSession } from '@/lib/auth';
+import { hydrateExerciseCache } from '@/lib/exercise-cache';
 import { C } from '@/lib/theme';
 
 // Direction A (docs/design-system.md): dark everywhere, Barlow for text and Barlow
@@ -25,6 +26,11 @@ const queryClient = new QueryClient({
     queries: { staleTime: 1000 * 30, retry: 1 },
   },
 });
+
+// The catalogue rows from the last launch, back in the cache before the first screen
+// mounts (lib/exercise-cache.ts). Synchronous, best-effort and never throwing: on a host
+// with no file system it reads nothing and every sheet fetches, as it always did.
+hydrateExerciseCache(queryClient);
 
 const TrackdownTheme = {
   ...DarkTheme,
@@ -66,6 +72,8 @@ export default function RootLayout() {
             {/* A day and, one tap further in, the rows it was built from. */}
             <Stack.Screen name="day/[date]" />
             <Stack.Screen name="day/[date]/log" />
+            {/* The rest of the lifts board, from Progress's "All lifts". */}
+            <Stack.Screen name="lifts" />
             {/* Any exercise name, anywhere, opens this. */}
             <Stack.Screen name="exercise/[id]" />
           </Stack.Protected>

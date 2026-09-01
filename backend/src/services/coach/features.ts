@@ -1,4 +1,12 @@
 import { daysBefore, withinWindow, type DayFacts, type FactActivity, type IsoDate } from "../goals/measures.js";
+import {
+	alternativesText,
+	classifyCardio,
+	equivalentMinutes,
+	equivalentText,
+	shortLabel,
+	type CardioIntensity,
+} from "./cardioIntensity.js";
 
 // What the coach is told about the user, computed rather than remembered
 // (docs/concept-v2.md §Principles 4: "facts are computed, advice is generated" — the
@@ -99,7 +107,14 @@ export interface CoverageEntry {
 	/** Days since it was last served; null when nothing in four weeks touched it. */
 	days_since: number | null;
 	last_date: IsoDate | null;
-	/** Sets in the trailing 14 and 28 days. Sessions rather than sets for stretching. */
+	/**
+	 * Sets in the trailing 7, 14 and 28 days. Sessions rather than sets for stretching.
+	 *
+	 * The seven-day count is what the body map on Progress colours each region by — weekly
+	 * sets against the 10–20 band — and it is counted here rather than on the phone so that
+	 * `LEDGER_MUSCLES`' token mapping ("core" is abs + obliques) exists in exactly one place.
+	 */
+	sets_7d: number;
 	sets_14d: number;
 	sets_28d: number;
 	/** "sets" for a muscle, "sessions" for stretching — so a sentence can say it right. */
@@ -150,16 +165,55 @@ export interface ExerciseFeature {
 	trend_lb: number | null;
 }
 
+/** One activity's contribution to the week, in both currencies. */
+export interface CardioBreakdownRow {
+	exercise: string;
+	/** The short name the week's arithmetic prints: "brisk", "run". */
+	label: string;
+	intensity: CardioIntensity;
+	multiplier: number;
+	minutes: number;
+	equiv_minutes: number;
+	/** Which rule decided the class — "pace 15 min/mi — moderate". */
+	why: string;
+}
+
 export interface CardioFeature {
+	/** Wall-clock minutes, unweighted. Still here: it is what a stopwatch said. */
 	minutes_this_week: number;
 	minutes_last_week: number;
-	/** The plan's or the goal's weekly minutes; the WHO default when nobody said. */
+	/**
+	 * The week in the currency the target is actually in (services/coach/cardioIntensity.ts):
+	 * light ×0.5, moderate ×1, vigorous ×2. Fifteen minutes of running is thirty of these.
+	 */
+	equiv_minutes_this_week: number;
+	/** The plan's, the goal's or the profile's weekly minutes; the WHO default when nobody said. */
 	weekly_target_min: number;
-	/** Target − this week; 0 when the week is already there. */
+	/**
+	 * Which of those three it is. `default` is the guideline standing in for a statement
+	 * nobody made, and the screen says so rather than presenting it as the user's own number
+	 * (migration 0016; the `daily_calorie_target` lesson).
+	 */
+	target_source: "goal" | "stated" | "default";
+	/**
+	 * Target − this week's EQUIVALENT minutes; 0 when the week is already there.
+	 *
+	 * Equivalent, not wall-clock: the target is a moderate-minutes target, so the shortfall
+	 * has to be measured in the same units the prescription is paid in. For a user whose
+	 * cardio is all moderate this is the number it always was.
+	 */
 	short_by_min: number;
 	sessions_this_week: number;
 	last_date: IsoDate | null;
 	days_since: number | null;
+	/** This week's activities, largest first, each with what it was worth. */
+	breakdown: CardioBreakdownRow[];
+	/** The same week folded into the three classes; only the ones with minutes in them. */
+	intensity_mix: { intensity: CardioIntensity; minutes: number; equiv_minutes: number }[];
+	/** The arithmetic, shown: "20 brisk + 15 run×2". Empty string with nothing logged. */
+	equiv_text: string;
+	/** "22 moderate min or 11 hard". Null when the week is already at its target. */
+	alternatives_text: string | null;
 }
 
 export interface AdherenceWindow {
@@ -234,8 +288,14 @@ export interface CoachFeaturesInput {
 	facts: DayFacts;
 	/** Days per week the plan says. */
 	trainingDaysTarget?: number | null;
-	/** Weekly cardio minutes from the plan or a goal; the WHO default when absent. */
+	/** Weekly cardio minutes named by a GOAL. The most specific statement there is. */
 	cardioTargetMin?: number | null;
+	/**
+	 * Weekly cardio minutes on the profile (`cardio_minutes_target`, migration 0016) — the
+	 * standing aim, said out loud once. Used when no goal names one; the WHO's 150 stands in
+	 * when neither does, and `target_source` says which of the three happened.
+	 */
+	cardioTargetStatedMin?: number | null;
 	/** What the day's eating is measured against (services/tdee.ts). */
 	targets?: { kcal: number | null; protein_g: number | null; carbs_max_g: number | null } | null;
 }
@@ -379,6 +439,7 @@ export function coverageLedger(facts: DayFacts): CoverageEntry[] {
 			label,
 			days_since: daysSince,
 			last_date: lastDate,
+			sets_7d: count(WEEK_DAYS),
 			sets_14d: count(LEDGER_SHORT_DAYS),
 			sets_28d: count(COACH_WINDOW_DAYS),
 			unit,
@@ -470,7 +531,19 @@ export function exerciseFeatures(facts: DayFacts): ExerciseFeature[] {
 	return features.sort((a, b) => a.days_since - b.days_since || a.exercise.localeCompare(b.exercise));
 }
 
-export function cardioFeature(facts: DayFacts, weeklyTargetMin: number | null | undefined): CardioFeature {
+/** Minutes per mile for one row, when it measured both halves of the fraction. */
+function paceOf(activity: FactActivity): number | null {
+	const minutes = activity.duration_min;
+	const miles = activity.distance_mi;
+	if (minutes == null || minutes <= 0 || miles == null || miles <= 0) return null;
+	return minutes / miles;
+}
+
+export function cardioFeature(
+	facts: DayFacts,
+	weeklyTargetMin: number | null | undefined,
+	statedTargetMin?: number | null | undefined
+): CardioFeature {
 	const window = inWindow(facts).filter(isCardio);
 	const minutes = (from: number, days: number): number =>
 		window
@@ -481,19 +554,71 @@ export function cardioFeature(facts: DayFacts, weeklyTargetMin: number | null | 
 			.reduce((total, activity) => total + (activity.duration_min ?? 0), 0);
 
 	const thisWeek = Math.round(minutes(0, WEEK_DAYS));
-	const target = weeklyTargetMin ?? DEFAULT_WEEKLY_CARDIO_MIN;
+	// A goal that names the minutes is the most specific statement there is; the profile
+	// column is the standing one; the guideline is what is left (migration 0016).
+	const target = weeklyTargetMin ?? statedTargetMin ?? DEFAULT_WEEKLY_CARDIO_MIN;
+	const targetSource: CardioFeature["target_source"] =
+		weeklyTargetMin != null ? "goal" : statedTargetMin != null ? "stated" : "default";
 	const lastDate = window.map((activity) => activity.date).sort().at(-1) ?? null;
+
+	// One classification per row of this week, so the same activity logged twice at two
+	// paces is counted as the two things it was.
+	const week = window.filter((activity) => withinWindow(activity.date, facts.date, WEEK_DAYS));
+	const byExercise = new Map<string, CardioBreakdownRow>();
+	for (const activity of week) {
+		const duration = activity.duration_min ?? 0;
+		if (duration <= 0) continue;
+		const name = activity.exercise?.trim() || "cardio";
+		const klass = classifyCardio({ exercise: name, category: activity.category, paceMinMi: paceOf(activity) });
+		const key = `${name.toLowerCase()}|${klass.intensity}`;
+		const existing = byExercise.get(key);
+		if (existing) {
+			existing.minutes = Math.round(existing.minutes + duration);
+			existing.equiv_minutes = equivalentMinutes(existing.minutes, existing.multiplier);
+			continue;
+		}
+		byExercise.set(key, {
+			exercise: name,
+			label: shortLabel(name),
+			intensity: klass.intensity,
+			multiplier: klass.multiplier,
+			minutes: Math.round(duration),
+			equiv_minutes: equivalentMinutes(duration, klass.multiplier),
+			why: klass.why,
+		});
+	}
+	const breakdown = [...byExercise.values()].sort(
+		(a, b) => b.minutes - a.minutes || a.exercise.localeCompare(b.exercise)
+	);
+	const equivThisWeek = breakdown.reduce((total, row) => total + row.equiv_minutes, 0);
+
+	const mix = (["light", "moderate", "vigorous"] as const)
+		.map((intensity) => {
+			const rows = breakdown.filter((row) => row.intensity === intensity);
+			return {
+				intensity,
+				minutes: rows.reduce((total, row) => total + row.minutes, 0),
+				equiv_minutes: rows.reduce((total, row) => total + row.equiv_minutes, 0),
+			};
+		})
+		.filter((entry) => entry.minutes > 0);
+
+	const shortBy = Math.max(0, target - equivThisWeek);
 
 	return {
 		minutes_this_week: thisWeek,
 		minutes_last_week: Math.round(minutes(WEEK_DAYS, WEEK_DAYS)),
+		equiv_minutes_this_week: equivThisWeek,
 		weekly_target_min: target,
-		short_by_min: Math.max(0, target - thisWeek),
-		sessions_this_week: new Set(
-			window.filter((a) => withinWindow(a.date, facts.date, WEEK_DAYS)).map((a) => a.date)
-		).size,
+		target_source: targetSource,
+		short_by_min: shortBy,
+		sessions_this_week: new Set(week.map((a) => a.date)).size,
 		last_date: lastDate,
 		days_since: lastDate == null ? null : daysBefore(lastDate, facts.date),
+		breakdown,
+		intensity_mix: mix,
+		equiv_text: equivalentText(breakdown),
+		alternatives_text: alternativesText(shortBy),
 	};
 }
 
@@ -618,7 +743,7 @@ export function computeFeatures(input: CoachFeaturesInput): CoachFeatures {
 		untrained_muscles: muscles.filter((muscle) => muscle.days_since == null).map((muscle) => muscle.muscle),
 		coverage: coverageLedger(facts),
 		exercises: exerciseFeatures(facts),
-		cardio: cardioFeature(facts, input.cardioTargetMin),
+		cardio: cardioFeature(facts, input.cardioTargetMin, input.cardioTargetStatedMin),
 		adherence: {
 			day1: adherenceWindow(input, 1),
 			day3: adherenceWindow(input, 3),

@@ -424,6 +424,11 @@ stays null. Do not restate the statement itself in a field; it is recorded as te
   train, which is what the coach sizes every brief to. It is NOT "only 30 minutes today" or
   "I'm in a rush this morning": those are about one day and reach the coach as context, not
   as a plan field. Null unless they described their usual session.
+- cardio_minutes_target: weekly cardio minutes they aim for — "I want to get 200 minutes of
+  cardio a week", "two and a half hours of cardio weekly". A STANDING aim, the same shape of
+  fact as training_days, and the thing the weekly cardio number on Progress is measured
+  against. It is NOT one week's plan ("I'll get a long run in this week") and it is NOT how
+  long one session is. Null unless they named a weekly number for cardio.
 - environment: "gym", "home", "outdoor", "mixed".
 - equipment: what they have to work with.
 - place_name / place_kind: the NAME of where they train, when they give one — "my gym is

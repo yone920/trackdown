@@ -129,6 +129,8 @@ export const ProfilePatch = z
 		training_days: z.number().int().min(0).max(7).nullable(),
 		/** How long a normal session is (migration 0014); null = never stated, not "sixty". */
 		session_minutes: z.number().int().min(10).max(240).nullable(),
+		/** Weekly cardio minutes aimed for (migration 0016); null = never stated, not "150". */
+		cardio_minutes_target: z.number().int().min(0).max(2000).nullable(),
 		environment: z.string().trim().max(80).nullable(),
 		equipment: z.array(z.string().trim().min(1).max(60)).max(30),
 		// A list edited on the Profile screen replaces the list; the spoken path appends

@@ -10,6 +10,7 @@ import { describeTarget, pool } from "./db/client.js";
 import { sweepUnlinkedEvidence } from "./services/evidence.js";
 import { createFusionAnalyzer } from "./services/fusion/analyze.js";
 import { createLogParser } from "./services/parseLog.js";
+import { createProfileReadings } from "./services/readings/dossier.js";
 import { createDayReadings } from "./services/readings/readings.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -58,6 +59,9 @@ const app = createApp({
 	// The day readings run on the coach model: they are two sentences of judgement, not
 	// an extraction (config COACH_LLM_PROVIDER / LLM_MODEL_COACH).
 	readings: createDayReadings(container.coachLlm),
+	// The dossier runs on the same model as the day readings, for the same reason: it is
+	// judgement in prose rather than a classification.
+	profileReadings: createProfileReadings(container.coachLlm),
 	coach: container.coach,
 	allowedOrigins: config.allowedOrigins,
 	version: resolveVersion(),

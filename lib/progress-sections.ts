@@ -1,6 +1,5 @@
 import { addDays } from '@/lib/days-weeks';
 import { dateLabel } from '@/lib/format';
-import { MUSCLE_GROUPS } from '@/lib/today-cards';
 import type { DayRow, GoalKind, GoalWithProgress, IsoDate, MetricProgress, WeekView } from '@/lib/types';
 
 // What the Progress screen draws, decided by the measure (docs/design-system.md
@@ -511,46 +510,169 @@ export function cardioColumns(
   };
 }
 
-/** Sets per muscle group over four weeks, longest bar first. */
-export function muscleBars(
-  muscles: { muscle: string; sets_7d: number; sets_28d: number }[],
-): { label: string; fraction: number; value: string }[] {
-  const peak = Math.max(...muscles.map((muscle) => muscle.sets_28d), 1);
-  return muscles.map((muscle) => ({
-    label: titleCase(muscle.muscle),
-    fraction: muscle.sets_28d / peak,
-    value: `${muscle.sets_7d} this week · ${muscle.sets_28d} in 4`,
-  }));
-}
-
-/**
- * The groups the board has no sets for at all. Stated as an absence rather than drawn as a
- * row of zeroes: eleven empty bars is a verdict on the user, and this is a fact about the
- * log ("no pulling movement since Monday" is the sentence this exists for).
- */
-export function untrainedGroups(muscles: { muscle: string }[]): string[] {
-  const trained = new Set(muscles.map((muscle) => muscle.muscle.toLowerCase()));
-  return MUSCLE_GROUPS.filter((muscle) => !trained.has(muscle)).map(titleCase);
-}
-
-/**
- * What the rotation owes, from the coverage ledger the server now sends (user decision
- * 2026-08-31 §B7). One line, longest debt first, in the ledger's own words: "core, 21
- * days" reads as a fact about the log, which is what it is.
- *
- * Deliberately a *marker* and not a chart. Twelve bars of "days since" would be a wall of
- * red on any normal split, and the honest reading of a four-day rotation is that most
- * things are fine and two are not.
- */
-export function overdueGroups(
-  coverage: { label: string; days_since: number | null; overdue: boolean }[] | undefined,
-): string[] {
-  return (coverage ?? [])
-    .filter((entry) => entry.overdue)
-    .map((entry) => `${titleCase(entry.label)} · ${entry.days_since == null ? 'never' : `${entry.days_since} days`}`);
-}
-
 /** "3.1 a week over 8 weeks" — the line under the frequency bars. */
 export function frequencySummary(weeks: { sessions: number }[], average: number): string {
   return `${round1(average)} a week over ${weeks.length} week${weeks.length === 1 ? '' : 's'}`;
+}
+
+// ---------------------------------------------------------------------------
+// Lifts, at two scales
+// ---------------------------------------------------------------------------
+//
+// The board is one row per exercise logged in four weeks, and on an account that trains
+// properly that is twenty-something rows on a tab that also has goals, cardio and a body on
+// it. Progress shows the six that are *live* and pushes the rest to `app/lifts.tsx` (user
+// decision 2026-08-31): a screen that scrolls past the interesting part is a screen nobody
+// reaches the bottom of.
+
+/** How many rows Progress keeps. Six is two thirds of a phone screen with its section. */
+export const TOP_LIFTS = 6;
+
+/**
+ * A fortnight without a lift, which is the same fortnight `prescribeLoads` uses to decide a
+ * movement is a `restart` rather than a progression (backend services/coach/rules.ts). The
+ * board's whole window is four weeks, so "more than four weeks" would be a group that can
+ * never hold a row; the progression engine's own break point is the honest equivalent.
+ */
+export const STALE_DAYS = 14;
+
+/**
+ * Why a lift is interesting, in the order the user decided (2026-08-31):
+ *
+ *   * `this_week` — it was trained in the last seven days, so the next step is a thing they
+ *     are about to do.
+ *   * `mid_progression` — held at a load until the sessions add up. There is a specific
+ *     thing being waited for and an eta on it.
+ *   * `baseline` — one session and no baseline yet, or a load that was stated and never
+ *     logged. It is owed a repeat before anything can progress.
+ *   * `other` — everything else, newest first.
+ */
+export type LiftRank = 'this_week' | 'mid_progression' | 'baseline' | 'other';
+
+export function liftRank(lift: {
+  days_since: number;
+  next: { rule: string; eta: string | null };
+}): LiftRank {
+  if (lift.days_since <= 6) return 'this_week';
+  if (lift.next.rule === 'hold' && lift.next.eta) return 'mid_progression';
+  if (lift.next.rule === 'new' || lift.next.rule === 'reference') return 'baseline';
+  return 'other';
+}
+
+const RANK_ORDER: LiftRank[] = ['this_week', 'mid_progression', 'baseline', 'other'];
+
+/** The six Progress draws. Ranked, then most recently trained, then alphabetical. */
+export function topLifts<T extends { exercise: string; days_since: number; next: { rule: string; eta: string | null } }>(
+  lifts: readonly T[],
+  limit = TOP_LIFTS,
+): T[] {
+  return [...lifts]
+    .sort(
+      (a, b) =>
+        RANK_ORDER.indexOf(liftRank(a)) - RANK_ORDER.indexOf(liftRank(b)) ||
+        a.days_since - b.days_since ||
+        a.exercise.localeCompare(b.exercise),
+    )
+    .slice(0, limit);
+}
+
+export type LiftGroup<T> = { key: string; label: string; stale: boolean; lifts: T[] };
+
+/**
+ * Every lift, grouped by the muscle it is mostly about, with the ones nobody has touched in
+ * a fortnight folded into one group at the end.
+ *
+ * The primary muscle is the *first* of the row's `muscle_groups`, which is the catalogue's
+ * own ordering — the app does not decide what a bench press is for. A row the catalogue
+ * could not name lands in "Other", which is honest: it is still a lift and it still has a
+ * next step.
+ */
+export function liftGroups<T extends { exercise: string; muscle_groups: string[]; days_since: number }>(
+  lifts: readonly T[],
+): LiftGroup<T>[] {
+  const fresh = new Map<string, T[]>();
+  const stale: T[] = [];
+
+  for (const lift of [...lifts].sort((a, b) => a.days_since - b.days_since || a.exercise.localeCompare(b.exercise))) {
+    if (lift.days_since >= STALE_DAYS) {
+      stale.push(lift);
+      continue;
+    }
+    const muscle = lift.muscle_groups[0]?.trim().toLowerCase() || 'other';
+    fresh.set(muscle, [...(fresh.get(muscle) ?? []), lift]);
+  }
+
+  const groups: LiftGroup<T>[] = [...fresh.entries()]
+    .map(([key, rows]) => ({ key, label: titleCase(key.replace(/_/g, ' ')), stale: false, lifts: rows }))
+    // Freshest group first: the muscle trained yesterday is the one being read about.
+    .sort(
+      (a, b) =>
+        (a.lifts[0]?.days_since ?? 0) - (b.lifts[0]?.days_since ?? 0) || a.label.localeCompare(b.label),
+    );
+
+  if (stale.length > 0) {
+    groups.push({ key: 'stale', label: 'Not trained lately', stale: true, lifts: stale });
+  }
+  return groups;
+}
+
+// ---------------------------------------------------------------------------
+// The snapshot strip
+// ---------------------------------------------------------------------------
+
+/**
+ * One line under the goals: how often, how much cardio, which way the weight is going. It
+ * is the three numbers the sections below spell out, said once at the top so the tab
+ * answers "where do I stand" before anything has to be scrolled to.
+ *
+ * Every part is dropped when it is not known. A strip with a zero in it that nobody
+ * measured is worse than a shorter strip.
+ */
+export function snapshotStrip(board: {
+  frequency?: { sessions_this_week: number; training_days_target: number | null };
+  cardio?: { equiv_minutes_this_week?: number; minutes_this_week: number; weekly_target_min: number };
+  body?: { trend_per_week: number | null };
+} | null): string | null {
+  if (!board) return null;
+  const parts: string[] = [];
+
+  const frequency = board.frequency;
+  if (frequency) {
+    const target = frequency.training_days_target;
+    parts.push(
+      `${frequency.sessions_this_week}${target ? ` of ${target}` : ''} session${
+        frequency.sessions_this_week === 1 && !target ? '' : 's'
+      } this week`,
+    );
+  }
+
+  const cardio = board.cardio;
+  if (cardio && (cardio.equiv_minutes_this_week != null || cardio.minutes_this_week > 0)) {
+    const equivalent = cardio.equiv_minutes_this_week ?? cardio.minutes_this_week;
+    parts.push(`${equivalent} of ${cardio.weekly_target_min} cardio min`);
+  }
+
+  const trend = board.body?.trend_per_week ?? null;
+  if (trend != null) {
+    parts.push(`${trend > 0 ? '+' : '−'}${round1(Math.abs(trend))} lb/wk`);
+  }
+
+  return parts.length === 0 ? null : parts.join(' · ');
+}
+
+// ---------------------------------------------------------------------------
+// Cardio, in equivalent minutes
+// ---------------------------------------------------------------------------
+
+/**
+ * Where the weekly target came from, in the same words the calorie target uses
+ * (`fix-safearea-target-label`): a number nobody chose must never be reported as one they
+ * did. 150 min/week is the WHO's, and saying so is the difference between a guideline and
+ * an instruction the user does not remember agreeing to.
+ */
+export function cardioProvenance(source: 'goal' | 'stated' | 'default' | undefined): string | null {
+  if (source === 'goal') return 'From your goal';
+  if (source === 'stated') return 'From stated';
+  if (source === 'default') return 'Standard guideline — tell me yours';
+  return null;
 }

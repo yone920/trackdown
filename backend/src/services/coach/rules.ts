@@ -491,30 +491,45 @@ export function recoveryRule(muscles: readonly MuscleFeature[]): RecoveryRule {
  * because a session plan is written in fives and a row about one treadmill is not: "22 min
  * next" is the step the +10 % actually asks for, and rounding it to 20 is the progression
  * quietly not happening.
+ *
+ * **`shortByMin` is EQUIVALENT minutes** (services/coach/cardioIntensity.ts) and the answer
+ * is WALL-CLOCK minutes, which is why the multiplier divides: twenty equivalent minutes are
+ * paid off by twenty moderate minutes or by ten hard ones, and prescribing twenty minutes of
+ * running against a twenty-minute debt would be asking for twice the work the week is short.
+ * A caller with no opinion about the intensity passes nothing and gets the moderate answer,
+ * which is what this number always meant.
  */
-export function cardioNextMinutes(shortByMin: number, lastMinutes: number | null): number | null {
+export function cardioNextMinutes(shortByMin: number, lastMinutes: number | null, multiplier = 1): number | null {
 	if (shortByMin <= 0) return null;
+	const factor = Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1;
 	const ceiling = lastMinutes == null ? DEFAULT_CARDIO_MINUTES : Math.ceil(lastMinutes * CARDIO_GROWTH);
-	return Math.max(MIN_CARDIO_MINUTES, Math.min(Math.round(shortByMin), ceiling));
+	return Math.max(MIN_CARDIO_MINUTES, Math.min(Math.round(shortByMin / factor), ceiling));
 }
 
 /** "Cardio prescribed by weekly minutes vs the plan, not by yesterday." */
 export function cardioRule(features: CoachFeatures): CardioRule {
 	const { cardio } = features;
+	// The week in the currency the target is actually in, with the arithmetic beside it so
+	// nobody has to take "50 of 150" on faith when 65 minutes were logged.
+	const week = `${cardio.equiv_minutes_this_week} of ${cardio.weekly_target_min} equivalent min this week${
+		cardio.equiv_text ? ` (${cardio.equiv_text})` : ""
+	}`;
 	if (cardio.short_by_min <= 0) {
 		return {
 			minutes_today: null,
-			text: `Cardio: ${cardio.minutes_this_week} of ${cardio.weekly_target_min} min this week — the week is already there, so cardio is optional today.`,
+			text: `Cardio: ${week} — the week is already there, so cardio is optional today.`,
 		};
 	}
 	const base = features.exercises.find((exercise) => exercise.category === "cardio")?.last.duration_min ?? null;
 	// One session's safe step: +10 % on what they last did, and never the whole shortfall
-	// at once if that would be a jump (concept-v2's cardio rate).
+	// at once if that would be a jump (concept-v2's cardio rate). Priced at moderate, because
+	// the brief cannot know yet how hard the user will choose to go.
 	const step = cardioNextMinutes(cardio.short_by_min, base) as number;
 	const minutes = Math.max(MIN_CARDIO_MINUTES, round5(step));
+	const alternative = cardio.alternatives_text ? ` The whole shortfall is ${cardio.alternatives_text}.` : "";
 	return {
 		minutes_today: minutes,
-		text: `Cardio: ${cardio.minutes_this_week} of ${cardio.weekly_target_min} min this week, ${cardio.short_by_min} short. If today includes cardio, prescribe ${minutes} min — the shortfall capped at one safe step (+10 % on the last session).`,
+		text: `Cardio: ${week}, ${cardio.short_by_min} short. If today includes cardio, prescribe ${minutes} moderate min — the shortfall capped at one safe step (+10 % on the last session). Vigorous work counts double and light work counts half, so the same prescription may be offered in those terms instead.${alternative}`,
 	};
 }
 

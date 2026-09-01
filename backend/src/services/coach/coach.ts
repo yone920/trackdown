@@ -262,6 +262,8 @@ interface PlanRow {
 	reference_loads: ReferenceLoad[] | null;
 	/** Migration 0014. NULL means nobody has said, not "sixty" — see the migration's note. */
 	session_minutes: number | null;
+	/** Migration 0016. NULL means nobody has said, not "150" — same story, same reason. */
+	cardio_minutes_target: number | null;
 }
 
 /** The weekly cardio minutes a goal asks for, when one does. */
@@ -318,7 +320,8 @@ export async function loadCoachInputs(
 	const plan = (
 		await db.query<PlanRow>(
 			`SELECT diet_style, training_days, environment, equipment, constraints, preferences,
-			        eatback, goal_pace, experience, background, reference_loads, session_minutes
+			        eatback, goal_pace, experience, background, reference_loads, session_minutes,
+			        cardio_minutes_target
 			   FROM profiles WHERE id = $1`,
 			[userId]
 		)
@@ -352,6 +355,9 @@ export async function loadCoachInputs(
 		facts: view.facts,
 		trainingDaysTarget: plan?.training_days ?? null,
 		cardioTargetMin: cardioTargetFrom(goals),
+		// The standing aim, under the goal and over the guideline (migration 0016). The board
+		// resolves it the same way, so the brief and the tab quote one target.
+		cardioTargetStatedMin: plan?.cardio_minutes_target ?? null,
 		targets: {
 			kcal: view.target,
 			protein_g: view.macros.protein_g.target,

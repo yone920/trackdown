@@ -1,9 +1,18 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
-import { PROMPT_FINGERPRINT, buildDaySheet, buildInShortPrompt, buildRightNowPrompt } from "./prompt.js";
+import {
+	PROMPT_FINGERPRINT,
+	buildDaySheet,
+	buildDossierPrompt,
+	buildDossierSheet,
+	buildInShortPrompt,
+	buildRightNowPrompt,
+} from "./prompt.js";
+import { dossierInputsHash } from "./dossier.js";
 import { dayInputsHash } from "./readings.js";
-import { InShortSchema, RightNowSchema } from "./schema.js";
+import { DossierSchema, InShortSchema, RightNowSchema } from "./schema.js";
 import { dayViewFixture as view } from "../../test/fixtures/dayView.js";
+import { dossierInputsFixture } from "../../test/fixtures/dossier.js";
 
 // The readings, without a provider and without a database: the two schemas, the sheet the
 // model is given, and the cache key. The generation itself is covered end to end in
@@ -28,6 +37,7 @@ describe("the reading schemas", () => {
 		for (const [name, schema] of [
 			["right_now", RightNowSchema],
 			["in_short", InShortSchema],
+			["dossier", DossierSchema],
 		] as const) {
 			const bytes = schemaBytes(schema);
 			expect({ name, overBudget: bytes > READING_BUDGET_BYTES }).toEqual({ name, overBudget: false });
@@ -161,7 +171,100 @@ describe("the inputs hash", () => {
 	 * one model call per active day, and worth it, but not a thing to do by accident.
 	 */
 	it("is bound to what the prompt currently says", () => {
-		expect(PROMPT_FINGERPRINT).toBe("9bbc420b");
+		expect(PROMPT_FINGERPRINT).toBe("ea19e0af");
 		expect(dayInputsHash(view())).toMatch(/^[0-9a-f]{32}$/);
+	});
+});
+
+describe("the dossier prompt", () => {
+	it("asks for two paragraphs of prose and forbids every shape of list", () => {
+		const prompt = buildDossierPrompt(dossierInputsFixture());
+		expect(prompt).toContain("EXACTLY TWO PARAGRAPHS");
+		expect(prompt).toContain("No headings, no bullet points");
+		expect(prompt).toContain("no lists of any kind");
+	});
+
+	it("makes the second paragraph an invitation with the benefit attached", () => {
+		const prompt = buildDossierPrompt(dossierInputsFixture());
+		expect(prompt).toContain("INVITATION WITH");
+		expect(prompt).toContain("THE BENEFIT ATTACHED");
+		// The three phrasings that read as a reprimand, quoted as things not to write.
+		expect(prompt).toContain(`"You haven't told me how long your sessions are."`);
+		expect(prompt).toContain(`"Your profile is missing a`);
+		// And the shape that is wanted, beside them.
+		expect(prompt).toContain("I can size each plan to fit it");
+		expect(prompt).toContain("never an apology");
+	});
+
+	it("carries the VOICE rules the other two readings are held to", () => {
+		const prompt = buildDossierPrompt(dossierInputsFixture());
+		expect(prompt).toContain("Never scold.");
+		expect(prompt).toContain("NOTHING IS OWED");
+		expect(prompt).toContain("INVENT NOTHING");
+	});
+});
+
+describe("the dossier sheet the model is given", () => {
+	it("separates what the user said from what the log measured", () => {
+		const sheet = buildDossierSheet(dossierInputsFixture());
+		// Stated, with the date a human said it.
+		expect(sheet).toContain("Days a week [stated 2026-08-14]: 4");
+		expect(sheet).toContain("Diet style [stated 2026-08-14]: higher protein");
+		expect(sheet).toContain("Their gym: New Millennium (gym), 14 machines seen there");
+		expect(sheet).toContain("Constraints: bad left knee — no deep lunges");
+		// Measured, under its own heading.
+		expect(sheet).toContain("WHAT THE LOG SHOWS — the last 28 days, measured, not stated");
+		expect(sheet).toContain("Bench Press — 4 sessions, last at 145 lb, +10 lb over the window");
+		expect(sheet).toContain("Sessions this week: 3");
+		expect(sheet).toContain("7-day average: 210.4 lb");
+	});
+
+	it("says which numbers were chosen by the user and which are standing in", () => {
+		const sheet = buildDossierSheet(dossierInputsFixture());
+		// A derived target is not a stated one, and the sheet says so in the model's terms.
+		expect(sheet).toContain("worked out from their stats, not stated");
+		// And the cardio guideline is named as a guideline — the `daily_calorie_target` lesson.
+		expect(sheet).toContain("the standard guideline, NOT something they said");
+	});
+
+	it("names what nobody has said by leaving it off, rather than printing a blank", () => {
+		const sheet = buildDossierSheet(dossierInputsFixture());
+		// Session length was never stated: no row, no "null", nothing to mistake for a fact.
+		expect(sheet).not.toContain("Session length");
+		expect(sheet).not.toContain("null");
+		expect(sheet).not.toContain("undefined");
+	});
+
+	it("carries the goal in the user's own words and counts what came before it", () => {
+		const sheet = buildDossierSheet(dossierInputsFixture());
+		expect(sheet).toContain("Down to 195 lb (lose_fat) — since 2026-08-14, by 2026-12-01, 11% of the way");
+		expect(sheet).toContain("1 finished before these.");
+	});
+
+	it("says so plainly when there is no goal at all", () => {
+		const sheet = buildDossierSheet(dossierInputsFixture({ goals: [], goal_history: 0 }));
+		expect(sheet).toContain("GOALS\nNone active.");
+	});
+
+	it("carries no database ids — facts, not rows", () => {
+		const sheet = buildDossierSheet(dossierInputsFixture());
+		expect(sheet).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+	});
+});
+
+describe("the dossier's cache key", () => {
+	it("is stable for the same person read twice", () => {
+		expect(dossierInputsHash(dossierInputsFixture())).toBe(dossierInputsHash(dossierInputsFixture()));
+		expect(dossierInputsHash(dossierInputsFixture())).toMatch(/^[0-9a-f]{32}$/);
+	});
+
+	it("moves when a plan field, a goal or the training does", () => {
+		const base = dossierInputsHash(dossierInputsFixture());
+		const stated = dossierInputsFixture();
+		expect(
+			dossierInputsHash({ ...stated, plan: { ...stated.plan, session_minutes: 45 } })
+		).not.toBe(base);
+		expect(dossierInputsHash(dossierInputsFixture({ goals: [] }))).not.toBe(base);
+		expect(dossierInputsHash(dossierInputsFixture({ goal_history: 4 }))).not.toBe(base);
 	});
 });

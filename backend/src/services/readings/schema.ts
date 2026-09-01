@@ -47,6 +47,26 @@ export const InShortSchema = z.object({
 });
 export type InShort = z.infer<typeof InShortSchema>;
 
+export const DOSSIER_SCHEMA_NAME = "dossier_reading";
+
+/**
+ * "What I know about you" — the two paragraphs at the top of the You screen.
+ *
+ * Two fields rather than one string with a blank line in it: the screen draws them apart,
+ * they are judged by different rules (one is what we know, the other is an invitation), and
+ * a split on "\n\n" is a parser waiting to be wrong about a model's whitespace.
+ *
+ * Bounded short on purpose. This is a paragraph somebody reads on the way to their account
+ * settings, not a report — and the ceiling is what keeps it from becoming one.
+ */
+export const DossierSchema = z.object({
+	/** Stated facts blended with observed patterns. Two or three sentences. */
+	known: z.string().trim().min(1).max(700),
+	/** What is missing, as invitations with the benefit attached. Two or three sentences. */
+	missing: z.string().trim().min(1).max(500),
+});
+export type Dossier = z.infer<typeof DossierSchema>;
+
 export type ReadingKind = "right_now" | "in_short";
 
 export interface Reading {

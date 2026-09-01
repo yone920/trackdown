@@ -11,10 +11,14 @@ import { makeDay } from './fixtures';
 
 // The exercise sheet, and the tap that opens it.
 //
-// Two things have to hold. A catalogued exercise draws its photos, its numbered steps,
-// its muscles and its kit. An exercise the catalogue has never heard of still opens, with
-// the form video working — that is every sport and most cardio machines, and it is why
-// the video is a search rather than a link.
+// Three things have to hold. The screen is the right screen on the FIRST frame — title,
+// eyebrow, video, and two photo skeletons of exactly the size the photographs will be — so
+// nothing moves when the fetch lands. A catalogued exercise then draws its photographs, its
+// muscles and its kit, and **no written steps**: they were dropped on 2026-08-31 (user
+// decision), because four paragraphs of dataset prose is the last thing anybody reads on a
+// phone in a gym and they sat where the pictures should be. And an exercise the catalogue
+// has never heard of still opens with the form video working — that is every sport and most
+// cardio machines, and it is why the video is a search rather than a link.
 
 const mockApi = jest.fn();
 jest.mock('@/lib/api', () => ({
@@ -75,7 +79,25 @@ afterEach(() => {
 });
 
 describe('the exercise sheet', () => {
-  it('draws the two photos, the numbered steps, the muscles and the kit', async () => {
+  it('is the right screen on the first frame, with two skeletons the size of the photos', () => {
+    mockParams.id = BENCH.id;
+    mockParams.name = 'Bench Press';
+    mockApi.mockReturnValue(new Promise(() => {}));
+
+    renderWith(<ExerciseSheet />);
+
+    // Everything that came with the tap, before anything has been fetched.
+    expect(screen.getByText('Bench Press')).toBeTruthy();
+    expect(screen.getByTestId('exercise-video')).toBeTruthy();
+    expect(screen.getByTestId('exercise-photo-skeleton-0')).toBeTruthy();
+    expect(screen.getByTestId('exercise-photo-skeleton-1')).toBeTruthy();
+    // The tiles are the shape the photographs will be, so the sheet does not jump.
+    expect(screen.getByTestId('exercise-photo-skeleton-0').props.style).toMatchObject({
+      height: '100%',
+    });
+  });
+
+  it('draws the two photos, the muscles and the kit — and no steps section at all', async () => {
     mockParams.id = BENCH.id;
     mockParams.name = 'Bench Press';
     mockApi.mockResolvedValue(BENCH);
@@ -84,20 +106,17 @@ describe('the exercise sheet', () => {
 
     // The name is on screen before the fetch — it travelled with the tap.
     expect(screen.getByText('Bench Press')).toBeTruthy();
-    await waitFor(() => expect(screen.getByTestId('exercise-step-0')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('exercise-photo-0')).toBeTruthy());
 
     expect(mockApi).toHaveBeenCalledWith(`/api/exercises/${BENCH.id}`);
     expect(screen.getByText('strength · beginner')).toBeTruthy();
     expect(screen.getByText(/Also called bench, flat bench/)).toBeTruthy();
 
-    // Every step, numbered, in order.
-    for (const [index, step] of BENCH.instructions.entries()) {
-      expect(screen.getByTestId(`exercise-step-${index}`)).toBeTruthy();
-      expect(screen.getByText(step)).toBeTruthy();
-      expect(screen.getByText(String(index + 1))).toBeTruthy();
-    }
+    // Dropped on 2026-08-31: no heading, no numbers, and none of the prose.
+    expect(screen.queryByText('How to do it')).toBeNull();
+    expect(screen.queryByTestId('exercise-step-0')).toBeNull();
+    for (const step of BENCH.instructions) expect(screen.queryByText(step)).toBeNull();
 
-    expect(screen.getByTestId('exercise-photo-0')).toBeTruthy();
     expect(screen.getByTestId('exercise-photo-1')).toBeTruthy();
     expect(screen.queryByTestId('exercise-photos-empty')).toBeNull();
 
@@ -105,6 +124,22 @@ describe('the exercise sheet', () => {
     expect(screen.getByText('triceps')).toBeTruthy();
     expect(screen.getByText('Equipment · barbell, bench')).toBeTruthy();
     expect(screen.getByText(/free-exercise-db/)).toBeTruthy();
+  });
+
+  it('opens a photo full screen on a tap, and closes it again', async () => {
+    mockParams.id = BENCH.id;
+    mockParams.name = 'Bench Press';
+    mockApi.mockResolvedValue(BENCH);
+
+    renderWith(<ExerciseSheet />);
+    await waitFor(() => expect(screen.getByTestId('exercise-photo-0')).toBeTruthy());
+    expect(screen.queryByTestId('exercise-photo-zoom')).toBeNull();
+
+    fireEvent.press(screen.getByTestId('exercise-photo-0'));
+    await waitFor(() => expect(screen.getByTestId('exercise-photo-zoom')).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId('exercise-photo-zoom'));
+    await waitFor(() => expect(screen.queryByTestId('exercise-photo-zoom')).toBeNull());
   });
 
   it('builds the form video as a search for the name', async () => {
@@ -135,8 +170,9 @@ describe('the exercise sheet', () => {
     // No id, so nothing is fetched — a request that can only 404 is not worth making.
     expect(mockApi).not.toHaveBeenCalled();
     expect(screen.getByText('Pickleball')).toBeTruthy();
+    // Straight to the empty state: there is nothing to load, so nothing pretends to.
     expect(screen.getByTestId('exercise-photos-empty')).toBeTruthy();
-    expect(screen.getByText(/No written steps/)).toBeTruthy();
+    expect(screen.queryByTestId('exercise-photo-skeleton-0')).toBeNull();
 
     // The video still works: it is a search, not a lookup.
     fireEvent.press(screen.getByTestId('exercise-video'));
@@ -153,7 +189,6 @@ describe('the exercise sheet', () => {
     renderWith(<ExerciseSheet />);
     await waitFor(() => expect(screen.getByText('No photos for this one')).toBeTruthy());
     expect(screen.getByTestId('exercise-photos-empty')).toBeTruthy();
-    expect(screen.getByText(/No written steps/)).toBeTruthy();
   });
 });
 

@@ -2,27 +2,29 @@ import { useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, View } from 'react-native';
 
-import { Bar, Columns, Sparkline, TrendLine } from '@/components/charts';
-import { IconAvatar, IconChevronDown, IconChevronUp } from '@/components/icons';
-import { Card, Chip, Chips, dismissDeletes, GroupHeading, Row, Section } from '@/components/kit';
+import { BodyMap, coverageSummary } from '@/components/body-map';
+import { Columns, Sparkline, TrendLine } from '@/components/charts';
+import { IconAvatar, IconChevronDown, IconChevronRight, IconChevronUp } from '@/components/icons';
+import { Card, Chip, Chips, dismissDeletes, Row, Section } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { openExercise } from '@/lib/exercise';
 import { dateLabel } from '@/lib/format';
 import {
   cardioColumns,
+  cardioProvenance,
   frequencyColumns,
   frequencySummary,
   goalCard,
   goalSections,
-  muscleBars,
-  overdueGroups,
-  untrainedGroups,
+  snapshotStrip,
+  topLifts,
   type ProgressSection,
 } from '@/lib/progress-sections';
 import {
   localDateKey,
   useGoalProgress,
   useGoals,
+  usePrefetchExercises,
   useProfile,
   useReorderGoals,
   useTrainingBoard,
@@ -30,7 +32,7 @@ import {
   useWeek,
 } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
-import { C, FONT, SPACE, TABULAR } from '@/lib/theme';
+import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
 import type { BoardCardioRow, BoardLift, GoalRecord, GoalWithProgress, TrainingBoard } from '@/lib/types';
 
 // Progress — "what am I chasing, and where do I stand" (user decision 2026-08-31).
@@ -41,14 +43,17 @@ import type { BoardCardioRow, BoardLift, GoalRecord, GoalWithProgress, TrainingB
 //
 //   1. **The goals**, each with where it started, where it is, where it finishes, and
 //      whether the rate gets there by the day the user named.
-//   2. **The lifts board** — one row per regularly logged *strength* exercise, whether or
-//      not any goal is about it, with the next step from the SAME progression engine the
-//      coach uses (`GET /api/training/board` → services/coach/rules.ts).
-//   3. **How often** you train, and what you have been training.
-//   4. **Cardio** — its own rows, in minutes and miles, and the week against the plan's
-//      intent. Split out of the lifts board on 2026-08-31: a treadmill walk was drawn
-//      between two barbell rows, and the two progress by different arithmetic.
-//   5. **The body**, when no weight goal already owns that line.
+//   2. **The snapshot strip** — sessions this week, cardio equivalent minutes, weight
+//      trend. One line, so the tab answers "where do I stand" before anything is scrolled.
+//   3. **The lifts board** — the SIX that are live, with the next step from the SAME
+//      progression engine the coach uses (`GET /api/training/board` →
+//      services/coach/rules.ts). The rest are in `app/lifts.tsx`, grouped by muscle.
+//   4. **Cardio** — its own rows, in equivalent minutes and miles, and the week against
+//      the plan's intent. Split out of the lifts board on 2026-08-31: a treadmill walk was
+//      drawn between two barbell rows, and the two progress by different arithmetic.
+//   5. **Coverage** — sessions a week, and the coverage ledger drawn on a body. The
+//      sets-per-muscle bars and the "Overdue a turn" list are gone: see §Coverage below.
+//   6. **The body**, when no weight goal already owns that line.
 //
 // The plan the coach reads — how you train, how you eat, constraints, the account — is not
 // here any more: it is `app/you.tsx`, behind the avatar. Goal *management* stayed with the
@@ -102,6 +107,15 @@ export default function Progress() {
   const weightGoalOwnsBody = active.some((goal) =>
     goal.metrics.some((metric) => metric.measure === 'body_weight'),
   );
+
+  const snapshot = useMemo(() => snapshotStrip(board.data ?? null), [board.data]);
+
+  // The sheets behind the names on this screen, warmed while it is being read: the six
+  // lifts drawn below and the cardio rows beside them (lib/queries.ts).
+  usePrefetchExercises([
+    ...topLifts(board.data?.lifts ?? []).map((lift) => lift.exercise_id),
+    ...(board.data?.cardio.activities ?? []).map((row) => row.exercise_id),
+  ]);
 
   return (
     <ScrollView
@@ -172,9 +186,18 @@ export default function Progress() {
         </View>
       ) : null}
 
+      {/* Three numbers, one line: how often, how much cardio, which way the weight is
+          going. It is what the sections below spell out, said once before anything has to
+          be scrolled to. */}
+      {snapshot ? (
+        <Sub testID="snapshot-strip" style={[{ marginTop: 18, color: C.mute, lineHeight: 18 }, TABULAR]}>
+          {snapshot}
+        </Sub>
+      ) : null}
+
       <LiftsBoard board={board.data ?? null} loading={board.isLoading} />
-      <Frequency board={board.data ?? null} judge={judge} />
       <Cardio board={board.data ?? null} judge={judge} />
+      <Coverage board={board.data ?? null} judge={judge} />
       {weightGoalOwnsBody ? null : <BodySection board={board.data ?? null} />}
 
       {history.length > 0 ? (
@@ -414,23 +437,60 @@ function ExtraMetric({ section }: { section: ProgressSection }) {
 }
 
 /**
- * Every exercise the log knows about, goal or not — the part of this screen that made the
- * merge worth doing. The next step on each row is `prescribeLoads`, not a second opinion.
+ * The six lifts that are live, and a door to the rest (user decision 2026-08-31).
+ *
+ * It used to be every exercise logged in four weeks, which on an account that trains
+ * properly is twenty-odd rows sitting between the goals and everything else on the tab.
+ * `topLifts` ranks them the way the question is asked — trained this week, then the ones
+ * held mid-progression waiting for two clean sessions, then the ones owed a baseline — and
+ * `app/lifts.tsx` holds the inventory.
+ *
+ * The next step on each row is still `prescribeLoads` and never a second opinion.
  */
 function LiftsBoard({ board, loading }: { board: TrainingBoard | null; loading: boolean }) {
-  const lifts = board?.lifts ?? [];
+  const router = useRouter();
+  const all = useMemo(() => board?.lifts ?? [], [board]);
+  const lifts = useMemo(() => topLifts(all), [all]);
+  const rest = all.length - lifts.length;
+
   return (
-    <Section title="Lifts" summary={lifts.length > 0 ? `${lifts.length}` : null}>
-      {lifts.length === 0 ? (
+    <Section title="Lifts" summary={all.length > 0 ? `${all.length}` : null}>
+      {all.length === 0 ? (
         <Card testID="lifts-empty">
           <Sub>{loading ? 'Reading your log…' : 'Nothing lifted in the last four weeks.'}</Sub>
         </Card>
       ) : (
-        <Card style={{ paddingVertical: 4 }} testID="lifts-board">
-          {lifts.map((lift, index) => (
-            <LiftRow key={lift.exercise} lift={lift} last={index === lifts.length - 1} />
-          ))}
-        </Card>
+        <>
+          <Card style={{ paddingVertical: 4 }} testID="lifts-board">
+            {lifts.map((lift, index) => (
+              <LiftRow key={lift.exercise} lift={lift} last={index === lifts.length - 1} />
+            ))}
+          </Card>
+          {/* Drawn whenever there is a board at all, not only when it overflows: "All
+              lifts (6)" is still the way to the grouped view, and a link that appears at
+              seven rows is a link nobody knows exists. */}
+          <Pressable
+            testID="all-lifts"
+            accessibilityRole="button"
+            accessibilityLabel={`All lifts, ${all.length}`}
+            onPress={() => router.push('/lifts')}
+            style={{
+              marginTop: 10,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingVertical: 12,
+              paddingHorizontal: SPACE.card,
+              borderRadius: RADIUS.card,
+              borderWidth: 1,
+              borderColor: C.track,
+            }}>
+            <Body style={{ color: C.mute }}>
+              {rest > 0 ? `All lifts (${all.length}) · ${rest} more` : `All lifts (${all.length})`}
+            </Body>
+            <IconChevronRight size={16} color={C.mute} />
+          </Pressable>
+        </>
       )}
     </Section>
   );
@@ -490,78 +550,53 @@ function LiftRow({ lift, last }: { lift: BoardLift; last: boolean }) {
   );
 }
 
-function Frequency({ board, judge }: { board: TrainingBoard | null; judge: boolean }) {
+/**
+ * How often, and where it landed (user decision 2026-08-31).
+ *
+ * The sets-per-muscle bars and the "Overdue a turn · Calves · never · Core · 21 days" line
+ * that sat under them are **gone**, replaced by the body map. They were the same twelve
+ * numbers twice — a bar chart sorted by volume and a text list sorted by debt — in a
+ * vocabulary that only reads if you already know the answer. A figure says "the whole back
+ * of you is grey" in one look, which is the sentence both of them were trying to write.
+ *
+ * The sessions-a-week columns stay: that is a fact about the calendar, not about the body,
+ * and no picture of a torso says it.
+ */
+function Coverage({ board, judge }: { board: TrainingBoard | null; judge: boolean }) {
   const frequency = board?.frequency ?? null;
   const columns = frequency ? frequencyColumns(frequency.weeks, judge) : null;
-  const bars = frequency ? muscleBars(frequency.muscles) : [];
-  // The ledger when the server sends one; the old "nothing at all in four weeks" line as
-  // the fallback, so a phone talking to an older build still says something true.
-  const overdue = overdueGroups(frequency?.coverage);
-  const missing = overdue.length > 0 ? [] : frequency ? untrainedGroups(frequency.muscles) : [];
+  const trained = frequency && frequency.weeks.some((week) => week.sessions > 0);
 
   return (
-    <Section
-      title="How often"
-      summary={
-        frequency
-          ? `${frequency.sessions_this_week} this week${
-              frequency.training_days_target ? ` of ${frequency.training_days_target}` : ''
-            }`
-          : null
-      }>
-      {!frequency || frequency.weeks.every((week) => week.sessions === 0) ? (
+    <Section title="Coverage" summary={coverageSummary(frequency?.coverage)}>
+      {!frequency || !trained ? (
         <Card testID="frequency-empty">
           <Sub>No sessions in the last eight weeks.</Sub>
         </Card>
       ) : (
-        <Card testID="frequency">
-          <Eyebrow>Sessions a week</Eyebrow>
-          <Sub style={[{ marginTop: 4 }, TABULAR]}>
-            {frequencySummary(frequency.weeks, frequency.average_per_week)}
-          </Sub>
-          {columns ? (
-            <View style={{ marginTop: 12 }}>
-              <Columns columns={columns.columns} color={judge ? C.accent : C.mute} height={70} />
-              <View style={{ flexDirection: 'row', marginTop: 6 }}>
-                {columns.columns.map((column, index) => (
-                  <Sub key={index} style={[{ flex: 1, textAlign: 'center', fontSize: 10 }, TABULAR]}>
-                    {column.label}
-                  </Sub>
-                ))}
+        <>
+          <Card testID="frequency">
+            <Eyebrow>Sessions a week</Eyebrow>
+            <Sub style={[{ marginTop: 4 }, TABULAR]}>
+              {frequencySummary(frequency.weeks, frequency.average_per_week)}
+            </Sub>
+            {columns ? (
+              <View style={{ marginTop: 12 }}>
+                <Columns columns={columns.columns} color={judge ? C.accent : C.mute} height={70} />
+                <View style={{ flexDirection: 'row', marginTop: 6 }}>
+                  {columns.columns.map((column, index) => (
+                    <Sub key={index} style={[{ flex: 1, textAlign: 'center', fontSize: 10 }, TABULAR]}>
+                      {column.label}
+                    </Sub>
+                  ))}
+                </View>
               </View>
-            </View>
-          ) : null}
-
-          {bars.length > 0 ? (
-            <View style={{ marginTop: 8 }}>
-              <GroupHeading label="Sets per muscle group · 4 weeks" />
-              {bars.map((row) => (
-                <View key={row.label} style={{ marginTop: 10 }}>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                    <Sub>{row.label}</Sub>
-                    <Sub style={TABULAR}>{row.value}</Sub>
-                  </View>
-                  <View style={{ marginTop: 4 }}>
-                    <Bar fraction={row.fraction} color={judge ? C.accent : C.mute} height={6} />
-                  </View>
-                </View>
-              ))}
-              {overdue.length > 0 ? (
-                <View testID="muscles-overdue" style={{ marginTop: 12 }}>
-                  <Sub style={{ color: C.dim }}>Overdue a turn</Sub>
-                  <Sub style={[{ marginTop: 2, color: C.accent, lineHeight: 18 }, TABULAR]}>
-                    {overdue.join(' · ')}
-                  </Sub>
-                </View>
-              ) : null}
-              {missing.length > 0 ? (
-                <Sub testID="muscles-untrained" style={{ marginTop: 12, color: C.dim }}>
-                  Not trained in four weeks: {missing.join(', ')}.
-                </Sub>
-              ) : null}
-            </View>
-          ) : null}
-        </Card>
+            ) : null}
+          </Card>
+          <View style={{ marginTop: 10 }}>
+            <BodyMap coverage={frequency.coverage} />
+          </View>
+        </>
       )}
     </Section>
   );
@@ -583,13 +618,19 @@ function Cardio({ board, judge }: { board: TrainingBoard | null; judge: boolean 
   const columns = cardio ? cardioColumns(cardio.weeks, cardio.weekly_target_min, judge) : null;
   const noMinutes = !cardio || cardio.weeks.every((week) => week.minutes === 0);
   const nothing = noMinutes && rows.length === 0;
+  // The breakdown behind the equivalent number, opened by tapping it. Closed by default:
+  // "50 of 150" is the answer and "20 brisk + 15 run×2" is the working.
+  const [open, setOpen] = useState(false);
 
   if (nothing && !cardio?.target_stated) return null;
+
+  const equivalent = cardio ? (cardio.equiv_minutes_this_week ?? cardio.minutes_this_week) : 0;
+  const provenance = cardioProvenance(cardio?.target_source);
 
   return (
     <Section
       title="Cardio"
-      summary={cardio && !nothing ? `${cardio.minutes_this_week} of ${cardio.weekly_target_min} min` : null}>
+      summary={cardio && !nothing ? `${equivalent} of ${cardio.weekly_target_min} min` : null}>
       {nothing ? (
         <Card testID="cardio-empty">
           <Sub>
@@ -599,15 +640,62 @@ function Cardio({ board, judge }: { board: TrainingBoard | null; judge: boolean 
       ) : (
         <>
           <Card testID="cardio">
-            <Eyebrow>Minutes a week</Eyebrow>
-            <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 4 }}>
-              <Disp size={30} style={TABULAR}>
-                {cardio!.minutes_this_week}
-              </Disp>
-              <Sub style={{ marginLeft: 6, fontFamily: FONT.medium, fontSize: 12 }}>
-                of {cardio!.weekly_target_min} min this week
+            {/* Equivalent minutes, not minutes: a hard twenty is worth more than an easy
+                forty and the target was never about how long the shoes were on
+                (backend services/coach/cardioIntensity.ts). */}
+            <Eyebrow>Equivalent minutes a week</Eyebrow>
+            <Pressable
+              testID="cardio-equivalent"
+              accessibilityRole="button"
+              accessibilityLabel={`${equivalent} of ${cardio!.weekly_target_min} equivalent minutes — what this is made of`}
+              disabled={(cardio!.breakdown ?? []).length === 0}
+              onPress={() => setOpen((current) => !current)}>
+              <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 4 }}>
+                <Disp size={30} style={TABULAR}>
+                  {equivalent}
+                </Disp>
+                <Sub style={{ marginLeft: 6, fontFamily: FONT.medium, fontSize: 12 }}>
+                  of {cardio!.weekly_target_min} min this week
+                </Sub>
+              </View>
+              {cardio!.equiv_text ? (
+                <Sub testID="cardio-equiv-text" style={[{ marginTop: 4, color: C.mute }, TABULAR]}>
+                  {cardio!.equiv_text}
+                </Sub>
+              ) : null}
+            </Pressable>
+
+            {/* Where 150 came from. The calorie target learnt this the hard way
+                (fix-safearea-target-label): a number nobody chose must not be reported as
+                one they did. */}
+            {provenance ? (
+              <Sub testID="cardio-provenance" style={{ marginTop: 4, color: C.dim }}>
+                {provenance}
               </Sub>
-            </View>
+            ) : null}
+
+            {open && (cardio!.breakdown ?? []).length > 0 ? (
+              <View testID="cardio-breakdown" style={{ marginTop: 12 }}>
+                {cardio!.breakdown!.map((row) => (
+                  <View
+                    key={row.exercise}
+                    style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}>
+                    <Sub style={{ flex: 1, paddingRight: 10 }}>
+                      {`${row.exercise} · ${row.intensity}`}
+                    </Sub>
+                    <Sub style={TABULAR}>
+                      {`${row.minutes} min → ${row.equiv_minutes}`}
+                    </Sub>
+                  </View>
+                ))}
+                {cardio!.alternatives_text ? (
+                  <Sub testID="cardio-alternatives" style={{ marginTop: 10, color: C.mute, lineHeight: 17 }}>
+                    {`Still short: ${cardio!.alternatives_text}.`}
+                  </Sub>
+                ) : null}
+              </View>
+            ) : null}
+
             {columns ? (
               <View style={{ marginTop: 12 }}>
                 <Columns columns={columns.columns} color={judge ? C.accent : C.mute} height={70} />

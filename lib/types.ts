@@ -537,6 +537,30 @@ export type Profile = Record<string, unknown> & {
   targets: ProfileTargets;
 };
 
+/**
+ * GET /api/you — the dossier: two short paragraphs about this account, generated from the
+ * plan, the goals and four weeks of what was actually logged
+ * (backend services/readings/dossier.ts).
+ *
+ * It replaced the "How you train / How you eat" row groups on the You screen: a grid of
+ * fields is a form with the inputs taken out, and the interesting half of a plan is the
+ * part nobody has said yet. `missing` is that half, written as invitations.
+ *
+ * Null when there is nothing to say yet, or when the provider was unavailable — the page
+ * renders without it, like every other generated line in this app.
+ */
+export type Dossier = {
+  known: string;
+  missing: string;
+  model: string | null;
+  created_at: string;
+};
+
+export type YouView = {
+  date: IsoDate;
+  dossier: Dossier | null;
+};
+
 // ---------------------------------------------------------------------------
 // The log pipeline (backend/src/services/fusion/schema.ts)
 // ---------------------------------------------------------------------------
@@ -798,6 +822,38 @@ export type BoardCardioPoint = {
   pace_min_mi: number | null;
 };
 
+/**
+ * The coverage ledger, one entry per muscle the coach rotates through plus stretching
+ * (backend services/coach/features.ts §coverageLedger). It is what the body map is
+ * coloured from and what the coach's rotation is held to — one ledger, two readers.
+ */
+export type CoverageEntry = {
+  key: string;
+  label: string;
+  days_since: number | null;
+  last_date?: IsoDate | null;
+  /** Optional for one release: an older server carried only the 14- and 28-day counts. */
+  sets_7d?: number;
+  sets_14d: number;
+  sets_28d: number;
+  unit: 'sets' | 'sessions';
+  overdue: boolean;
+};
+
+/** Light ×0.5, moderate ×1, vigorous ×2 — how a minute of cardio is counted. */
+export type CardioIntensity = 'light' | 'moderate' | 'vigorous';
+
+/** A goal named it, the user said it out loud, or the WHO's 150 is standing in. */
+export type CardioTargetSource = 'goal' | 'stated' | 'default';
+
+export type CardioBreakdownRow = {
+  exercise: string;
+  intensity: CardioIntensity;
+  multiplier: number;
+  minutes: number;
+  equiv_minutes: number;
+};
+
 /** Minutes, never a load: cardio steps by the week's total, not by the last session. */
 export type BoardCardioNext = {
   rule: 'cardio';
@@ -824,6 +880,10 @@ export type BoardCardioRow = {
   distance_mi: number | null;
   pace_min_mi: number | null;
   best_pace_min_mi: number | null;
+  /** How this activity's minutes are counted, and why (services/coach/cardioIntensity.ts). */
+  intensity?: CardioIntensity;
+  intensity_multiplier?: number;
+  intensity_why?: string;
   /** "20 min · 1.2 mi · 16.7 min/mi" — as much of it as the session measured. */
   summary_text: string;
   delta_text: string | null;
@@ -847,21 +907,31 @@ export type TrainingBoard = {
      * debt first, each with whether the rotation owes it one. The same ledger the brief is
      * built from, so the tab and the coach never disagree about what is overdue.
      */
-    coverage?: {
-      key: string;
-      label: string;
-      days_since: number | null;
-      sets_14d: number;
-      sets_28d: number;
-      unit: 'sets' | 'sessions';
-      overdue: boolean;
-    }[];
+    coverage?: CoverageEntry[];
   };
   cardio: {
     weeks: { start: IsoDate; minutes: number }[];
+    /** Raw minutes logged this week, before any intensity is applied. */
     minutes_this_week: number;
+    /**
+     * The same week weighted by intensity — light ×0.5, moderate ×1, vigorous ×2 — which is
+     * what the target is actually measured in (backend services/coach/cardioIntensity.ts).
+     * Optional for one release: an older server does not send it.
+     */
+    equiv_minutes_this_week?: number;
     weekly_target_min: number;
+    /** Equivalent minutes still to go this week; 0 when the week is already there. */
     short_by_min: number;
+    /** "20 brisk + 15 run×2" — where the equivalent minutes came from. */
+    equiv_text?: string;
+    /** "22 moderate min or 11 hard" — two ways to close the same gap. Null when there is none. */
+    alternatives_text?: string | null;
+    /** Where the weekly target came from: a goal, something they said, or the WHO's 150. */
+    target_source?: CardioTargetSource;
+    /** Every cardio activity this week, largest first — the breakdown behind the headline. */
+    breakdown?: CardioBreakdownRow[];
+    /** The same week folded into the three classes, for the legend under the number. */
+    intensity_mix?: { intensity: CardioIntensity; minutes: number; equiv_minutes: number }[];
     last: { date: IsoDate; pace_min_mi: number; distance_mi: number } | null;
     best: { date: IsoDate; pace_min_mi: number; distance_mi: number } | null;
     /**
@@ -869,7 +939,7 @@ export type TrainingBoard = {
      * not know about them, which is not the same as sending an empty list.
      */
     activities?: BoardCardioRow[];
-    /** True when a goal named the weekly minutes rather than the WHO's 150 standing in. */
+    /** True when a goal or a statement named the minutes rather than the WHO's 150. */
     target_stated?: boolean;
   };
   body: {

@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { config } from "../../config/index.js";
-import { buildRightNowPrompt } from "../../services/readings/prompt.js";
+import { buildDossierPrompt, buildRightNowPrompt } from "../../services/readings/prompt.js";
 import {
+	DOSSIER_SCHEMA_NAME,
+	DossierSchema,
 	IN_SHORT_SCHEMA_NAME,
 	InShortSchema,
 	RIGHT_NOW_SCHEMA_NAME,
 	RightNowSchema,
 } from "../../services/readings/schema.js";
 import { dayViewFixture } from "../../test/fixtures/dayView.js";
+import { dossierInputsFixture } from "../../test/fixtures/dossier.js";
 import { createAnthropicLlm } from "./anthropic.js";
 
 // The WP3 half of WP2's lesson: a structured-output schema is compiled into a decoding
@@ -51,6 +54,24 @@ EATING
 OPEN SLOTS (nothing logged here yet — a fact about the log, not something the user owes)
 Dinner (meal)`;
 
+/**
+ * The phrasings this app does not use about a person's own log (concept-v2 §Principles 8,
+ * user decision 2026-08-31). Shared by the day reading and the dossier, because "nothing is
+ * owed" is one rule and two prompts are held to it.
+ */
+const OBLIGATION_PHRASES = [
+	"is due",
+	"are due",
+	"expected",
+	"still need",
+	"still needs",
+	"you should log",
+	"don't forget",
+	"remember to",
+	"missing",
+	"owe",
+];
+
 describe.skipIf(!apiKey)("anthropic day readings (contract)", () => {
 	it("compiles the right_now grammar and answers in two sentences with one next action", async () => {
 		const answer = await coach().parseStructured({
@@ -86,18 +107,7 @@ next action. Use only the numbers on the sheet.\n\n${DAY_SHEET}`,
 		const said = `${answer.text} ${answer.next_action.label} ${answer.next_action.hint ?? ""} ${answer.actions
 			.map((action) => action.label)
 			.join(" ")}`.toLowerCase();
-		for (const forbidden of [
-			"is due",
-			"are due",
-			"expected",
-			"still need",
-			"still needs",
-			"you should log",
-			"don't forget",
-			"remember to",
-			"missing",
-			"owe",
-		]) {
+		for (const forbidden of OBLIGATION_PHRASES) {
 			expect({ forbidden, said }).toMatchObject({ forbidden, said: expect.not.stringContaining(forbidden) });
 		}
 	}, 90_000);
@@ -112,5 +122,50 @@ three sentences, no advice.\n\n${DAY_SHEET}`,
 			messages: [{ role: "user", content: "Write the In short reading for the day above." }],
 		});
 		expect(answer.text.length).toBeGreaterThan(20);
+	}, 90_000);
+});
+
+// The dossier (migration 0017). Two paragraphs of prose about a person, and every rule it
+// is held to is a wording rule — which is exactly the kind that a prompt can state, a
+// reviewer can approve, and a model can then quietly ignore. So it is asked for real, on
+// the real prompt, over the real sheet.
+describe.skipIf(!apiKey)("anthropic dossier (contract)", () => {
+	it("writes two paragraphs of prose and asks rather than scolds", async () => {
+		const inputs = dossierInputsFixture();
+		const answer = await coach().parseStructured({
+			system: buildDossierPrompt(inputs),
+			schema: DossierSchema,
+			schemaName: DOSSIER_SCHEMA_NAME,
+			maxTokens: 500,
+			messages: [{ role: "user", content: "Write the two paragraphs for the person above." }],
+		});
+
+		// Two paragraphs, and they are paragraphs: each one is prose, not a list wearing a
+		// field name. A model that answers in bullets has answered the wrong question.
+		for (const [name, text] of [
+			["known", answer.known],
+			["missing", answer.missing],
+		] as const) {
+			expect({ name, empty: text.trim().length === 0 }).toEqual({ name, empty: false });
+			for (const bullet of ["\n-", "\n•", "\n*", "\n1.", "\n2."]) {
+				expect({ name, bullet, text }).toMatchObject({ name, bullet, text: expect.not.stringContaining(bullet) });
+			}
+		}
+
+		// Nothing in either paragraph reads as a debt the user has run up.
+		const said = `${answer.known} ${answer.missing}`.toLowerCase();
+		for (const forbidden of OBLIGATION_PHRASES) {
+			expect({ forbidden, said }).toMatchObject({ forbidden, said: expect.not.stringContaining(forbidden) });
+		}
+		// And "you haven't told me" is the specific shape this prompt was written against.
+		for (const scold of ["haven't told me", "have not told me", "you failed", "you never"]) {
+			expect({ scold, said }).toMatchObject({ scold, said: expect.not.stringContaining(scold) });
+		}
+
+		// The second paragraph is an invitation: it asks for something and says what it buys.
+		expect(answer.missing.toLowerCase()).toMatch(/tell me|let me know|say|name|share|if you/);
+
+		// And the first one is about THIS person: the sheet's own facts, not a horoscope.
+		expect(answer.known.toLowerCase()).toMatch(/four|4|new millennium|bench|week/);
 	}, 90_000);
 });
