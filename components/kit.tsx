@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Easing, Pressable, View, type ViewProps, type ViewStyle } from 'react-native';
 
-import { IconClose } from '@/components/icons';
+import { IconClose, IconPhoto } from '@/components/icons';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
 
@@ -299,12 +299,18 @@ export function Row({
   onPress,
   pressLabel,
   onTitlePress,
+  titleMedia,
   onDelete,
   deleteLabel,
   divider = true,
   testID,
   children,
 }: {
+  /**
+   * The clock stamp, and whether this list has a clock column at all. A string draws it,
+   * `null` reserves the column without a stamp (so a timed list stays aligned), and leaving
+   * the prop off drops the column entirely — see the note in the body.
+   */
   time?: string | null;
   title: string;
   sub?: string | null;
@@ -319,6 +325,13 @@ export function Row({
    * a row that is a link in some rows and not in others has to say which it is.
    */
   onTitlePress?: () => void;
+  /**
+   * How many photographs the sheet behind the title has. Above zero draws a small `dim`
+   * photo glyph after the name, so the underline says what the tap will get before it is
+   * taken (field report 2026-09-01). Undefined — an older server, a title that is not an
+   * exercise — draws nothing, which is the honest answer rather than a glyph that lies.
+   */
+  titleMedia?: number | null;
   /** A logged row can be taken back: draws {@link DeleteControl} at the end of the row. */
   onDelete?: () => void;
   /** What the ✕ says it is deleting, when the title is not the readable name. */
@@ -337,9 +350,19 @@ export function Row({
         borderBottomWidth: divider ? 1 : 0,
         borderBottomColor: C.line,
       }}>
-      <View style={{ width: 50 }}>
-        {time ? <Sub style={[{ paddingTop: 2 }, TABULAR]}>{time}</Sub> : null}
-      </View>
+      {/* The clock column, and only for a list that keeps one. It used to be drawn
+          unconditionally, which left a 50 pt gutter down the left of every untimed list —
+          the coach's plan, its finisher, the goal history — and the field report of
+          2026-09-01 was a screenshot of it with "why is this space here?".
+
+          The contract is `time !== undefined`, not `time`: a timed list where one row has
+          no stamp passes `time={null}` and keeps its column, so the times below it stay in
+          line. Omitting the prop entirely is what says "this list has no clock in it". */}
+      {time !== undefined ? (
+        <View style={{ width: 50 }}>
+          {time ? <Sub style={[{ paddingTop: 2 }, TABULAR]}>{time}</Sub> : null}
+        </View>
+      ) : null}
       <View style={{ flex: 1, paddingRight: 10 }}>
         {onTitlePress ? (
           <Pressable
@@ -347,9 +370,16 @@ export function Row({
             accessibilityRole="button"
             accessibilityLabel={`${title} — how it is done`}
             style={({ alignSelf: 'flex-start' })}>
-            <Body style={{ textDecorationLine: 'underline', textDecorationColor: C.track }}>
-              {title}
-            </Body>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+              <Body style={{ textDecorationLine: 'underline', textDecorationColor: C.track }}>
+                {title}
+              </Body>
+              {(titleMedia ?? 0) > 0 ? (
+                <View testID={testID ? `${testID}-photo` : undefined}>
+                  <IconPhoto size={13} color={C.dim} />
+                </View>
+              ) : null}
+            </View>
           </Pressable>
         ) : (
           <Body>{title}</Body>

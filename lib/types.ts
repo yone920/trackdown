@@ -113,6 +113,14 @@ export type DayActivity = {
   exercise: string | null;
   /** The catalogue row the name resolved to; null makes the sheet name-only. */
   exercise_id: string | null;
+  /**
+   * How many illustrations the catalogue holds for it. The row draws a photo glyph beside
+   * the name when it is above zero, so the underline says what a tap will get, and the
+   * count travels with the tap so the sheet knows how many skeletons to draw before it has
+   * fetched anything (field report 2026-09-01). Optional for one release: an older server
+   * does not send it, and "unknown" draws no glyph rather than a wrong one.
+   */
+  media_count?: number;
   /** The machine it was done on, when they named one — drawn as the sub-line. */
   equipment: string | null;
   category: ActivityCategory | null;
@@ -383,6 +391,8 @@ export type BriefExercise = {
   name: string;
   /** Resolved server-side when the brief is returned, so the app never name-matches. */
   exercise_id?: string | null;
+  /** Illustrations behind the name; drives the glyph and the sheet's skeleton count. */
+  media_count?: number;
   load_lb: number | null;
   sets: number | null;
   reps: number | null;
@@ -423,8 +433,21 @@ export type CoachBrief = {
     type?: string;
     targets?: string[];
     exercises?: BriefExercise[];
-    /** The short stretch / mobility close on a training day. Empty on a rest day. */
-    finisher?: { name: string; minutes?: number | null; note?: string | null }[];
+    /**
+     * The short stretch / mobility close on a training day. Empty on a rest day.
+     *
+     * Resolved like the Do list since 2026-09-01, and for one reason: these rows did not
+     * open at all on a tap. Most of them carry no `exercise_id` — the catalogue has never
+     * heard of a couch stretch — and they open the sheet in name-only mode, which is what
+     * that mode is for.
+     */
+    finisher?: {
+      name: string;
+      minutes?: number | null;
+      note?: string | null;
+      exercise_id?: string | null;
+      media_count?: number;
+    }[];
     /** True when every line of a non-empty plan is done — the "Plan complete" state. */
     complete?: boolean;
   } | null;
@@ -794,6 +817,8 @@ export type BoardNextStep = {
 export type BoardLift = {
   exercise: string;
   exercise_id: string | null;
+  /** Illustrations behind the name. Optional for one release; see {@link DayActivity}. */
+  media_count?: number;
   category: ActivityCategory | null;
   muscle_groups: string[];
   /** On "assistance" the load is the help the machine gives — less of it is progress. */
@@ -872,6 +897,8 @@ export type BoardCardioNext = {
 export type BoardCardioRow = {
   exercise: string;
   exercise_id: string | null;
+  /** Illustrations behind the name. Optional for one release; see {@link DayActivity}. */
+  media_count?: number;
   category: ActivityCategory | null;
   last_date: IsoDate;
   days_since: number;

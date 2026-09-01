@@ -3917,6 +3917,139 @@ describe("the exercise sheet", () => {
 			expect(exercise.exercise_id).toMatch(/^[0-9a-f-]{36}$/);
 		}
 	});
+
+	// ── the honest affordance: which names have a picture ─────────────────────────
+	// Field report 2026-09-01: nothing said which exercise names had illustrations, so
+	// every tap was a gamble, and the finisher's stretches were not tappable at all.
+
+	it("carries media_count on the day's rows, the board's rows and every line of the plan", async () => {
+		const tz = 0;
+		const today = localDay(new Date(), tz).date;
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({ description: "3 × 5 bench at 135 lb", exercise: "bench press", sets: 3, reps: 5, load_lb: 135, kcal: 110 });
+
+		// The day: Bench Press has two frames (the beforeAll imported them), so the name
+		// carries a glyph before anything is tapped.
+		const day = await request(app).get(`/api/day/${today}?tz=${tz}`).set(headers);
+		const benched = day.body.items.activities.find((a: { exercise: string }) => a.exercise === "Bench Press");
+		expect(benched).toMatchObject({ exercise_id: bench.id, media_count: 2 });
+		// A row that never resolved to a catalogue id answers 0 rather than nothing at all.
+		for (const activity of day.body.items.activities) expect(typeof activity.media_count).toBe("number");
+
+		const board = await request(app).get(`/api/training/board?tz=${tz}`).set(headers);
+		const lift = board.body.lifts.find((row: { exercise: string }) => row.exercise === "Bench Press");
+		expect(lift).toMatchObject({ exercise_id: bench.id, media_count: 2 });
+
+		// The finisher's stretches are catalogued now (2026-09-01), so give one of them the
+		// two frames the import would have downloaded and leave the other uncatalogued.
+		await db.pool.query(`UPDATE exercise_catalog SET media_count = 2 WHERE name = 'Chest Stretch'`);
+		coach.nextBrief = {
+			...SAMPLE_BRIEF,
+			workout: {
+				...SAMPLE_BRIEF.workout,
+				exercises: [
+					{ name: "Bench Press", load_lb: 135, sets: 3, reps: 5, minutes: null, note: null, is_new: false },
+					...SAMPLE_BRIEF.workout.exercises,
+				],
+				finisher: [
+					...SAMPLE_BRIEF.workout.finisher,
+					{ name: "Shake It Out", minutes: 1, note: null },
+				],
+			},
+		};
+		const plan = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, context: "media counts please" });
+		expect(plan.status).toBe(200);
+		const planned = plan.body.brief.workout.exercises;
+		expect(planned[0]).toMatchObject({ name: "Bench Press", exercise_id: bench.id, media_count: 2 });
+		// Lat Pulldown and Overhead Press are catalogued but were never imported here, so
+		// they resolve to an id and to no pictures — which is exactly the distinction the
+		// glyph is drawn from.
+		expect(planned[1]).toMatchObject({ name: "Lat Pulldown", media_count: 0 });
+		expect(planned[1].exercise_id).toMatch(/^[0-9a-f-]{36}$/);
+
+		// The finisher is resolved on the same lookup. "Doorway Chest Stretch" is an alias of
+		// the seeded Chest Stretch, so it gets an id and its pictures; "Shake It Out" is not
+		// a movement anybody has catalogued and opens the sheet in name-only mode. Both
+		// open, which is the whole of the fix.
+		const finisher = plan.body.brief.workout.finisher as {
+			name: string;
+			exercise_id: string | null;
+			media_count: number;
+		}[];
+		expect(finisher[0]).toMatchObject({ name: "Doorway Chest Stretch", media_count: 2 });
+		expect(finisher[0]?.exercise_id).toMatch(/^[0-9a-f-]{36}$/);
+		expect(finisher[1]).toEqual({
+			name: "Shake It Out",
+			minutes: 1,
+			note: null,
+			exercise_id: null,
+			media_count: 0,
+		});
+		coach.nextBrief = SAMPLE_BRIEF;
+	});
+
+	// ── ?w=: fewer bytes on one bar of cellular ───────────────────────────────────
+
+	it("resizes a frame to an allowed width, caches it beside the original, and serves the cache after", async () => {
+		const { rows } = await db.pool.query<{ id: string }>(
+			`SELECT id FROM exercise_catalog WHERE name = 'Lat Pulldown'`
+		);
+		const pulldown = rows[0]!.id;
+		await db.pool.query(`UPDATE exercise_catalog SET media_count = 1 WHERE id = $1`, [pulldown]);
+		// A real 900 px JPEG, so sharp has something it can actually decode.
+		const original = await sharp({ create: { width: 900, height: 675, channels: 3, background: { r: 90, g: 120, b: 200 } } })
+			.jpeg()
+			.toBuffer();
+		await exerciseMedia.put(pulldown, 0, original);
+
+		const full = await request(app).get(`/api/exercises/${pulldown}/media/0`).set(headers);
+		expect(full.status).toBe(200);
+		expect((await sharp(full.body).metadata()).width).toBe(900);
+
+		const small = await request(app).get(`/api/exercises/${pulldown}/media/0?w=320`).set(headers);
+		expect(small.status).toBe(200);
+		expect(small.headers["content-type"]).toBe("image/jpeg");
+		expect(small.headers["cache-control"]).toBe("private, max-age=31536000, immutable");
+		// The width is part of the identity, or a cache could answer a 320 with the original.
+		expect(small.headers["etag"]).toBe(`"${pulldown}-0-w320"`);
+		expect((await sharp(small.body).metadata()).width).toBe(320);
+		expect(small.body.byteLength).toBeLessThan(full.body.byteLength);
+
+		// Filed beside the original rather than recomputed: one resize per width, ever.
+		expect(exerciseMedia.frames.has(`${pulldown}/0@320`)).toBe(true);
+		expect(exerciseMedia.frames.has(`${pulldown}/0`)).toBe(true);
+		const again = await request(app).get(`/api/exercises/${pulldown}/media/0?w=320`).set(headers);
+		expect(again.body.byteLength).toBe(small.body.byteLength);
+
+		// A width above the original's own is the original's pixels, not a blurred upscale.
+		const wide = await request(app).get(`/api/exercises/${pulldown}/media/0?w=1280`).set(headers);
+		expect((await sharp(wide.body).metadata()).width).toBe(900);
+	});
+
+	it("400s a width it does not serve, rather than quietly answering full-size", async () => {
+		for (const query of ["w=500", "w=0", "w=-320", "w=640px", "w=", "w=abc"]) {
+			const res = await request(app).get(`/api/exercises/${bench.id}/media/0?${query}`).set(headers);
+			expect(res.status, query).toBe(400);
+		}
+		// No width at all is still the original, and still a year's cache.
+		const plain = await request(app).get(`/api/exercises/${bench.id}/media/0`).set(headers);
+		expect(plain.status).toBe(200);
+		expect(plain.headers["etag"]).toBe(`"${bench.id}-0"`);
+	});
+
+	it("serves the original when the stored bytes are not an image sharp can resize", async () => {
+		// bench's frames are the two strings the beforeAll wrote. A frame is a picture of a
+		// movement and is never worth a 500.
+		const res = await request(app).get(`/api/exercises/${bench.id}/media/0?w=640`).set(headers);
+		expect(res.status).toBe(200);
+		expect(res.body.toString()).toBe("frame-zero");
+		expect(res.headers["etag"]).toBe(`"${bench.id}-0"`);
+	});
 });
 
 // ---------------------------------------------------------------------------

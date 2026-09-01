@@ -64,6 +64,14 @@ export interface DayItemActivity extends DayActivity {
 	delta_vs_last: DeltaVsLast | null;
 	/** Photos logged with this exercise — the thumbnail row on Today and Day. */
 	evidence: EvidencePhoto[];
+	/**
+	 * How many illustrations the catalogue holds for this row's exercise; 0 when it holds
+	 * none and when the row never resolved to a catalogue id. Today and Day draw a photo
+	 * glyph beside the names that have one, so the underline says what a tap will get
+	 * (field report 2026-09-01). It lives on the *item* rather than on `DayActivity`
+	 * because it is a fact about the catalogue, not about the row that was logged.
+	 */
+	media_count: number;
 }
 
 export interface DayItemMeal extends DayMeal {
@@ -581,9 +589,23 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 			bucket.set(key, [...(bucket.get(key) ?? []), photo]);
 		}
 	}
+	// Whether the sheet behind each name has pictures in it. One query for the day, keyed by
+	// the ids the rows already carry, so it costs nothing for a day of untyped descriptions
+	// and one small IN for a day of catalogued lifts.
+	const mediaCounts = new Map<string, number>();
+	const catalogIds = [...new Set(items.map((item) => item.exercise_id).filter((id): id is string => !!id))];
+	if (catalogIds.length > 0) {
+		const { rows } = await db.query<{ id: string; media_count: number }>(
+			`SELECT id, media_count FROM exercise_catalog WHERE id = ANY($1::uuid[])`,
+			[catalogIds]
+		);
+		for (const row of rows) mediaCounts.set(row.id, row.media_count);
+	}
+
 	const activityItems: DayItemActivity[] = items.map((item) => ({
 		...item,
 		evidence: item.id ? (photosByActivity.get(item.id) ?? []) : [],
+		media_count: item.exercise_id ? (mediaCounts.get(item.exercise_id) ?? 0) : 0,
 	}));
 	const mealItems: DayItemMeal[] = meals.map((meal) => ({
 		...meal,

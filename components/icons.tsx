@@ -109,6 +109,22 @@ export function IconCamera(p: IconProps) {
   );
 }
 
+/**
+ * Photo — a framed picture with a sun and a horizon. Drawn small and `dim` beside an
+ * exercise name that has illustrations behind it, so an underline says what a tap will get
+ * before it is tapped (field report 2026-09-01). A name without one is still tappable; it
+ * simply has nothing to promise.
+ */
+export function IconPhoto(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Rect x={3} y={5} width={18} height={14} rx={2.5} {...base(p)} />
+      <Circle cx={8.5} cy={10} r={1.6} {...base(p)} />
+      <Path d="M3.5 16.5 8.5 12l3.5 3 3-2.5 5.5 4.5" {...base(p)} />
+    </Frame>
+  );
+}
+
 export function IconMic(p: IconProps) {
   return (
     <Frame size={p.size}>

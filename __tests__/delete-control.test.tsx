@@ -79,3 +79,46 @@ describe('DeleteControl', () => {
     expect(screen.queryByText('Delete?')).toBeNull();
   });
 });
+
+// ── the clock column ─────────────────────────────────────────────────────────────────
+// Field report 2026-09-01, with a screenshot: "why is this space here?". Every `Row` drew
+// a 50 pt column for the time stamp, including on the coach's plan, its finisher and the
+// goal history — none of which have a clock in them. The column belongs to lists that
+// keep times, and a list says so by passing the prop at all.
+
+/** The widths of every view in the tree — the gutter is the only 50 pt one in a Row. */
+function widths(tree: unknown): number[] {
+  const found: number[] = [];
+  const walk = (node: unknown): void => {
+    if (!node || typeof node !== 'object') return;
+    const element = node as { props?: { style?: unknown }; children?: unknown[] };
+    const style = element.props?.style;
+    const styles = Array.isArray(style) ? style : [style];
+    for (const entry of styles) {
+      const width = (entry as { width?: unknown } | null | undefined)?.width;
+      if (typeof width === 'number') found.push(width);
+    }
+    for (const child of element.children ?? []) walk(child);
+  };
+  walk(tree);
+  return found;
+}
+
+describe('Row and its clock column', () => {
+  it('reserves the 50 pt gutter for a row that keeps a time', () => {
+    const view = render(<Row time="8:10a" title="Bench Press" />);
+    expect(widths(view.toJSON())).toContain(50);
+    expect(screen.getByText('8:10a')).toBeTruthy();
+  });
+
+  it('keeps the gutter, empty, for a timed list whose row has no stamp', () => {
+    // `null` is how a list that IS timed says this one row has nothing to show: the times
+    // above and below it have to stay in line.
+    expect(widths(render(<Row time={null} title="Bench Press" />).toJSON())).toContain(50);
+  });
+
+  it('draws no gutter at all when the list has no clock in it', () => {
+    // The coach's plan, its finisher, the goal history.
+    expect(widths(render(<Row title="Doorway Chest Stretch" sub="2 min" />).toJSON())).not.toContain(50);
+  });
+});

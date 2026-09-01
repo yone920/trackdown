@@ -108,10 +108,21 @@ export default function Coach() {
    */
   const noPlan = !brief && !busy && coach.isSuccess;
 
-  // The sheets for everything on the plan, warmed while the user is reading it. Tapping a
-  // movement's name in a gym should not be a round trip (lib/queries.ts §usePrefetchExercises).
-  // The finisher's items carry no catalogue id, so there is nothing to warm for them.
-  usePrefetchExercises((brief?.workout?.exercises ?? []).map((exercise) => exercise.exercise_id));
+  // The sheets for everything on the plan, warmed while the user is reading it — the row
+  // AND its first photograph, so a tap on a movement's name in a gym is a screen that was
+  // already there rather than a round trip (lib/queries.ts §usePrefetchExercises). The
+  // finisher goes on the list too: most of its items resolve to nothing and warm nothing,
+  // and the ones that do resolve are the ones a person is most likely to be unsure about.
+  usePrefetchExercises([
+    ...(brief?.workout?.exercises ?? []).map((exercise) => ({
+      id: exercise.exercise_id,
+      mediaCount: exercise.media_count,
+    })),
+    ...(brief?.workout?.finisher ?? []).map((item) => ({
+      id: item.exercise_id,
+      mediaCount: item.media_count,
+    })),
+  ]);
 
   // Three ways this screen can have something to say above the brief, in the order they
   // matter: the server kept the old answer and said why; the request never landed; the
@@ -300,8 +311,13 @@ export default function Coach() {
                     testID={`coach-do-${index}`}
                     title={exercise.name}
                     onTitlePress={() =>
-                      openExercise(router, { id: exercise.exercise_id, name: exercise.name })
+                      openExercise(router, {
+                        id: exercise.exercise_id,
+                        name: exercise.name,
+                        mediaCount: exercise.media_count,
+                      })
                     }
+                    titleMedia={exercise.media_count}
                     sub={[
                       exercise.load_lb != null ? `${exercise.load_lb} lb` : null,
                       exercise.sets != null && exercise.reps != null
@@ -323,7 +339,11 @@ export default function Coach() {
                           testID={`coach-new-${index}`}
                           label="New to you"
                           onPress={() =>
-                            openExercise(router, { id: exercise.exercise_id, name: exercise.name })
+                            openExercise(router, {
+                              id: exercise.exercise_id,
+                              name: exercise.name,
+                              mediaCount: exercise.media_count,
+                            })
                           }
                         />
                       </View>
@@ -361,10 +381,23 @@ export default function Coach() {
           {brief.workout.finisher && brief.workout.finisher.length > 0 ? (
             <Card testID="coach-finisher" style={{ marginTop: 10, paddingVertical: 4 }}>
               <GroupHeading label="To finish" right={`${brief.workout.finisher.length} items`} />
+              {/* Every one of these opens (field report 2026-09-01: they did not). A
+                  stretch is rarely in the catalogue, so most of them open the sheet in
+                  name-only mode — a title and a form video, which is a search and knows
+                  what a couch stretch looks like even when we do not. */}
               {brief.workout.finisher.map((item, index, all) => (
                 <Row
                   key={`${item.name}-${index}`}
+                  testID={`coach-finisher-${index}`}
                   title={item.name}
+                  onTitlePress={() =>
+                    openExercise(router, {
+                      id: item.exercise_id,
+                      name: item.name,
+                      mediaCount: item.media_count,
+                    })
+                  }
+                  titleMedia={item.media_count}
                   sub={[item.minutes != null ? `${item.minutes} min` : null, item.note]
                     .filter(Boolean)
                     .join(' · ')}

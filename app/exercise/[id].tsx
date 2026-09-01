@@ -6,7 +6,7 @@ import { Linking, Modal, Pressable, ScrollView, View } from 'react-native';
 import { IconChevronLeft, IconClose } from '@/components/icons';
 import { Card, Section, Skeleton } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
-import { authHeaders, exerciseMediaUrl } from '@/lib/api';
+import { authHeaders, exerciseMediaUrl, SHEET_PHOTO_WIDTH } from '@/lib/api';
 import { formVideoUrl, NO_EXERCISE_ID } from '@/lib/exercise';
 import { useExercise } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
@@ -20,11 +20,24 @@ import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
 //
 // **It renders on the first frame** (user decision 2026-08-31). The name travels with the
 // tap, so the title, the eyebrow and the video button are all correct before any request
-// has finished; the two photographs are skeleton tiles of exactly the right size until
-// their bytes arrive, so nothing on the screen moves when they do. The catalogue row is
-// cached for the session and across launches (lib/exercise-cache.ts), and the rows for
-// everything on the coach's plan and the lifts board are prefetched, so a tap on any of
-// those is a screen that was already there.
+// has finished; the photographs are skeleton tiles of exactly the right size until their
+// bytes arrive, so nothing on the screen moves when they do. The catalogue row is cached
+// for the session and across launches (lib/exercise-cache.ts), and the rows for everything
+// on the coach's plan and the lifts board are prefetched, so a tap on any of those is a
+// screen that was already there — and a prefetched sheet draws with no spinner at all,
+// because `useExercise` finds its data in the cache and never enters a loading state.
+//
+// **The count travels too** (field report 2026-09-01). `media` on the params is how many
+// photographs this exercise has, read from the same row the tapped screen was drawing.
+// With it the skeleton is the right skeleton: two boxes for a bench press, none at all for
+// a stretch, rather than two boxes that turn out to be nothing. Without it — an older
+// server, a link from somewhere that does not know — it falls back to two, which is what
+// it always drew.
+//
+// **The photographs are asked for at 640 px** (`SHEET_PHOTO_WIDTH`), which is retina for a
+// full-width 4:3 tile on every phone this ships to and a fraction of the bytes of the
+// dataset's original. The full-screen zoom asks for the original, because that is the one
+// place the pixels are the point.
 //
 // **The written steps are gone.** They were four numbered paragraphs of free-exercise-db
 // prose above the muscles and the kit — the thing a person is least likely to read on a
@@ -56,6 +69,19 @@ function Pill({ label, strong = false }: { label: string; strong?: boolean }) {
   );
 }
 
+/** Every catalogued exercise the import matched has two frames; it is the honest guess. */
+const DEFAULT_PHOTO_COUNT = 2;
+
+/** The sheet draws a start position and an end position. A third would be scrolling. */
+const MAX_PHOTOS = 2;
+
+/** How many photographs the tapped row promised. `null` when it did not say. */
+function countParam(value: string | string[] | undefined): number | null {
+  if (typeof value !== 'string' || value === '') return null;
+  const count = Number(value);
+  return Number.isInteger(count) && count >= 0 ? Math.min(count, MAX_PHOTOS) : null;
+}
+
 /** Underscores are how the catalogue spells a two-word muscle ("lower_back"). */
 function words(value: string): string {
   return value.replace(/_/g, ' ');
@@ -64,10 +90,12 @@ function words(value: string): string {
 export default function ExerciseSheetScreen() {
   const router = useRouter();
   const insets = useScreenInsets();
-  const params = useLocalSearchParams<{ id?: string; name?: string }>();
+  const params = useLocalSearchParams<{ id?: string; name?: string; media?: string }>();
 
   const id = typeof params.id === 'string' && params.id ? params.id : NO_EXERCISE_ID;
   const passedName = typeof params.name === 'string' ? params.name : '';
+  // How many photographs the tapped row said there were. `null` is "nobody told us".
+  const passedMedia = countParam(params.media);
 
   const exercise = useExercise(id);
   const sheet = exercise.data ?? null;
@@ -75,6 +103,9 @@ export default function ExerciseSheetScreen() {
   // only ever adds to it.
   const name = sheet?.name ?? passedName;
   const media = sheet?.media ?? [];
+  // The skeleton's shape, before there is anything to draw: what the tap said, or the
+  // two-photograph guess when it said nothing.
+  const skeletons = passedMedia ?? DEFAULT_PHOTO_COUNT;
   // Which photograph is open full-screen. A picture of a movement is the whole reason for
   // this screen and a 160 px tile is not enough of one.
   const [zoomed, setZoomed] = useState<number | null>(null);
@@ -110,15 +141,17 @@ export default function ExerciseSheetScreen() {
       ) : null}
 
       {/* The two positions, full width and stacked — the pictures are the sheet. While the
-          row is being fetched they are two skeleton tiles of exactly this size, so nothing
+          row is being fetched they are skeleton tiles of exactly this size, so nothing
           moves when the bytes land: the screen is already the right screen and is only
           missing pixels.
 
-          A sheet reached with no catalogue id has nothing to fetch, so it skips straight
-          to the empty state rather than pretending to load photos that cannot exist. */}
+          How MANY tiles is what the tap said (`media`), so an exercise with no pictures
+          goes straight to the empty state instead of promising two that never arrive, and
+          one with two draws two. A sheet reached with no catalogue id has nothing to fetch
+          at all, so it never gets here in a loading state. */}
       <View style={{ gap: 10, marginTop: 18 }}>
-        {exercise.isLoading ? (
-          [0, 1].map((index) => (
+        {exercise.isLoading && skeletons > 0 ? (
+          Array.from({ length: skeletons }, (_unused, index) => index).map((index) => (
             <View key={index} style={{ width: '100%', aspectRatio: 4 / 3 }}>
               <Skeleton
                 testID={`exercise-photo-skeleton-${index}`}
@@ -128,7 +161,7 @@ export default function ExerciseSheetScreen() {
             </View>
           ))
         ) : media.length > 0 ? (
-          media.slice(0, 2).map((frame) => (
+          media.slice(0, MAX_PHOTOS).map((frame) => (
             <Pressable
               key={frame.index}
               testID={`exercise-photo-${frame.index}`}
@@ -143,14 +176,17 @@ export default function ExerciseSheetScreen() {
                 backgroundColor: C.track,
               }}>
               <Image
-                source={{ uri: exerciseMediaUrl(id, frame.index), headers: authHeaders() }}
+                source={{
+                  uri: exerciseMediaUrl(id, frame.index, SHEET_PHOTO_WIDTH),
+                  headers: authHeaders(),
+                }}
                 style={{ width: '100%', height: '100%' }}
                 contentFit="cover"
                 transition={140}
                 // The frames are immutable and the route says so for a year; keeping them
                 // on disk means the second look at an exercise costs no request at all.
                 cachePolicy="disk"
-                recyclingKey={`${id}-${frame.index}`}
+                recyclingKey={`${id}-${frame.index}-${SHEET_PHOTO_WIDTH}`}
               />
             </Pressable>
           ))

@@ -2,10 +2,10 @@ import { useRouter } from 'expo-router';
 import { useMemo } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, View } from 'react-native';
 
+import { ExerciseName } from '@/components/exercise-name';
 import { IconChevronLeft } from '@/components/icons';
 import { Card, Section } from '@/components/kit';
-import { Body, Disp, Eyebrow, Sub } from '@/components/type';
-import { openExercise } from '@/lib/exercise';
+import { Disp, Eyebrow, Sub } from '@/components/type';
 import { liftGroups, STALE_DAYS } from '@/lib/progress-sections';
 import { useTrainingBoard } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
@@ -94,7 +94,6 @@ export default function Lifts() {
 
 /** Name · trend dot, then load · when. No next step: see the note at the top of the file. */
 function CompactLiftRow({ lift, dim, last }: { lift: BoardLift; dim: boolean; last: boolean }) {
-  const router = useRouter();
   const color = lift.sentiment === 'good' ? C.good : lift.sentiment === 'watch' ? C.accent : C.dim;
 
   return (
@@ -107,15 +106,12 @@ function CompactLiftRow({ lift, dim, last }: { lift: BoardLift; dim: boolean; la
         opacity: dim ? 0.7 : 1,
       }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`${lift.exercise} — how it is done`}
-          onPress={() => openExercise(router, { id: lift.exercise_id, name: lift.exercise })}
-          style={{ flexShrink: 1 }}>
-          <Body style={{ textDecorationLine: 'underline', textDecorationColor: C.track }}>
-            {lift.exercise}
-          </Body>
-        </Pressable>
+        <ExerciseName
+          testID={`all-lift-name-${lift.exercise}`}
+          name={lift.exercise}
+          id={lift.exercise_id}
+          mediaCount={lift.media_count}
+        />
         {/* Which way it has gone, as a dot. The words are on Progress; here the colour is
             the whole sentence, and `sentiment` already knows that less help is progress. */}
         <View

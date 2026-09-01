@@ -84,6 +84,7 @@ const CLOSED = makeDay({
         description: '3 × 8 bench at 135 lb',
         exercise: 'Bench Press',
         exercise_id: '11111111-2222-4333-8444-555555555555',
+        media_count: 2,
         equipment: null,
         category: 'strength',
         muscle_groups: ['chest'],
@@ -182,6 +183,41 @@ describe('Day', () => {
     expect(screen.getByText('Bench Press')).toBeTruthy();
     expect(screen.getByText('3 × 8 · 135 lb')).toBeTruthy();
     expect(screen.getByText('+5 lb')).toBeTruthy();
+  });
+
+  it('draws a logged cardio activity once, under Cardio, never under its muscle tags', async () => {
+    // Field report 2026-09-01: one treadmill walk was drawn twice — once under "calves"
+    // and once under "glutes" — because the muscle fan-out drew an activity under every
+    // heading it touched. Cardio's muscle tags credit the body map; they do not file it.
+    const walked = JSON.parse(JSON.stringify(CLOSED)) as typeof CLOSED;
+    walked.items.activities.push({
+      ...walked.items.activities[1]!,
+      id: 'a3',
+      description: 'Incline treadmill walk',
+      exercise: 'Incline Treadmill Walk',
+      muscle_groups: ['calves', 'glutes'],
+      duration_min: 17,
+      kcal: 146,
+      source: 'manual',
+    });
+    walked.muscle_summary = [
+      ...walked.muscle_summary,
+      { muscle: 'calves', sets: 0, exercises: [] },
+      { muscle: 'glutes', sets: 0, exercises: [] },
+    ];
+    mockApi.mockImplementation((path: string) =>
+      path.startsWith('/api/day/') ? Promise.resolve(walked) : Promise.resolve(null),
+    );
+
+    renderDay();
+    await waitFor(() => expect(screen.getByText('Training')).toBeTruthy());
+    expect(screen.getAllByText('Incline Treadmill Walk')).toHaveLength(1);
+    expect(screen.getByText('Cardio')).toBeTruthy();
+    expect(screen.getByText('17 min')).toBeTruthy();
+    // The strength lift still files under its muscle; the cardio-only muscles draw no heading.
+    expect(screen.getByText('chest')).toBeTruthy();
+    expect(screen.queryByText('calves')).toBeNull();
+    expect(screen.queryByText('glutes')).toBeNull();
   });
 
   it('colours the delta by whether it was progress, not by which way the number went', async () => {
@@ -293,6 +329,35 @@ describe('Day', () => {
     });
   });
 
+  describe('a day with nothing eaten', () => {
+    // Field report 2026-09-01: "PROTEIN 0 g / CARBS 0 g / FAT 0 g" before breakfast
+    // helps nobody. An empty day prints one line; the macros return with the first bite.
+    const empty = (isToday: boolean) => {
+      const day = JSON.parse(JSON.stringify(CLOSED)) as typeof CLOSED;
+      day.items.meals = [];
+      day.is_today = isToday;
+      if (isToday) day.closed_at = null;
+      mockApi.mockImplementation((path: string) =>
+        path.startsWith('/api/day/') ? Promise.resolve(day) : Promise.resolve(null),
+      );
+    };
+
+    it('live: one line with a wink, no zero macro rows, no 0 kcal summary', async () => {
+      empty(true);
+      renderDay();
+      await waitFor(() => expect(screen.getByTestId('eating-empty')).toBeTruthy());
+      expect(screen.queryByText('Protein')).toBeNull();
+      expect(screen.queryByText('0 kcal')).toBeNull();
+    });
+
+    it('closed: says it plainly, without the joke', async () => {
+      empty(false);
+      renderDay();
+      await waitFor(() => expect(screen.getByText('Nothing eaten was logged.')).toBeTruthy());
+      expect(screen.queryByText('Protein')).toBeNull();
+    });
+  });
+
   it('shows the body numbers and the footer', async () => {
     renderDay();
     await waitFor(() => expect(screen.getByText('Body')).toBeTruthy());
@@ -335,5 +400,38 @@ describe('Day', () => {
     await waitFor(() =>
       expect(mockApi).toHaveBeenCalledWith('/api/entries/meals/m1', { method: 'DELETE' }),
     );
+  });
+});
+
+// ── the exercise name, on Day ────────────────────────────────────────────────────────
+// Field report 2026-09-01.
+
+describe('the names on a Day', () => {
+  beforeEach(() => {
+    mockApi.mockReset();
+    mockPush.mockReset();
+    mockApi.mockImplementation((path: string) =>
+      path.startsWith('/api/day/') ? Promise.resolve(CLOSED) : Promise.resolve(null),
+    );
+  });
+
+  it('takes its photo count with it into the sheet, and draws the glyph beside the name', async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
+        <Day />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByText('Bench Press')).toBeTruthy());
+
+    expect(screen.getByTestId('row-activity-a1-photo')).toBeTruthy();
+    fireEvent.press(screen.getByText('Bench Press'));
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: '/exercise/[id]',
+      params: {
+        id: '11111111-2222-4333-8444-555555555555',
+        name: 'Bench Press',
+        media: '2',
+      },
+    });
   });
 });

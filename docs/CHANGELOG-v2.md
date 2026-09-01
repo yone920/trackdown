@@ -87,6 +87,170 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-01 — a name you can tap, a picture you can see coming, and no empty gutter (`fix-exercise-sheet-ux`)
+
+Four screenshots from a gym on one bar of cellular, and every one of them was about the
+same line of the app: **the exercise name**. Some of them did nothing when you pressed
+them. The ones that worked took three round trips and arrived as full-size photographs.
+None of them said, before the tap, whether there was anything behind it. And down the left
+of the plan ran fifty points of nothing.
+
+#### A — no dead taps
+
+`openExercise` always navigated; what did not was the *finisher*, whose rows had no
+`onTitlePress` at all. They are stretches, so almost none of them resolved to a catalogue
+row, and a row with nothing behind it had been left as a row you cannot press — which on a
+phone reads as a broken app, not as an absence of data.
+
+Every exercise name in the app is now a door: the coach's Do list **and its finisher**,
+Today, Day, the DayLog, the six on Progress, the cardio rows, and the all-lifts screen.
+Without an id it opens the sheet in **name-only mode**, where the form video is a YouTube
+search and works for a movement nobody catalogued. Today's and Day's rows that never
+resolved a movement open under their own description rather than not at all.
+
+#### B — the catalogue knows nineteen stretches now
+
+The deeper reason the finisher was dead: `exercise_catalog` had one mobility row called
+**Stretching** and nothing a finisher is actually made of. `data/exercises.json` gains
+**nineteen** — Chest, Triceps, Hip Flexor, Quad, Hamstring, Shoulder, Calf, Lat, Glute,
+Neck, Groin, Upper Back, Biceps, Forearm, Side and IT Band stretches, Child's Pose,
+Cat-Cow and World's Greatest — each named the way the coach writes it, each aliased both to
+the phrasings a person uses ("doorway chest stretch", "couch stretch", "figure four") and
+to the **free-exercise-db entry that has photographs of it** ("Chest And Front Of Shoulder
+Stretch", "Kneeling Hip Flexor", "Lying Glute"). All nineteen match a photo-backed entry;
+the catalogue's illustrated share went 99/129 → 118/148 with the same misses as before.
+
+The qualifier-safe matcher did the rest unchanged, which is the point of it: "Doorway Chest
+Stretch" resolves, "chest press" still does not resolve to a stretch, and `stretching`,
+`hip mobility`, `bench press` and `assisted chin up` all still land exactly where they did.
+
+**The import is not automatic on this deploy.** `import-exercise-media` short-circuits when
+the media volume already has frames, so the new rows need one `--force` run on the host
+after the release (in the deploy notes, and in the report).
+
+#### C — the affordance, and no legend
+
+Names with illustrations carry a small stroke `IconPhoto`, `dim`, beside the underline.
+Names without carry nothing and stay tappable. There is no legend: a small picture beside a
+word does not need one.
+
+`media_count` is threaded from the row the server already stores, on the lookup that already
+resolves the id — so it costs no extra query anywhere except the day, which pays one
+`id = ANY(...)`. It reaches: `CatalogMatch`, the brief's exercises **and finisher**
+(`withExerciseIds` resolves both now), `BoardLift`, `BoardCardioRow`, and `DayItemActivity`.
+It is optional in the app's types, and unknown draws **no** glyph — the alternative is a
+glyph that sometimes lies.
+
+#### D — instant open
+
+The count travels with the tap (`media` on the navigation params), so the sheet draws its
+own skeleton on the first frame: two boxes for a bench press, **none** for a stretch. Two
+grey rectangles that turn out to be nothing was a small lie the sheet had been telling.
+`useExercise` was already `staleTime: Infinity` with a disk cache (`lib/exercise-cache.ts`),
+and there is now a test that a prefetched row renders the finished sheet with **no skeleton
+and no request at all**.
+
+#### E — smaller bytes
+
+`GET /api/exercises/:id/media/:n?w=` takes **320, 640 or 1280** — a closed list, because
+every distinct width is a file on disk for ever. sharp resizes once, on the first request
+that asks, and the result is filed **beside the original** in the media store
+(`<id>/<n>@<w>.jpg`); every request after is a plain read of a smaller file. The app asks
+for 640 for the sheet's photographs and leaves the full-screen zoom at full size, which is
+the one place the pixels are the point.
+
+- **Anything else in `w` is a 400.** A client asking for 640 and quietly getting four
+  megabytes is the bug the parameter exists to fix, so it is refused loudly.
+- **The width is in the ETag** (`"<id>-<n>-w640"`): two sizes of one frame are two
+  documents, and an ETag that did not say which would let a cache answer a 640 with an
+  original.
+- **Everything about the variant is best-effort except the picture.** A store that cannot be
+  written to costs the next reader a resize; bytes sharp will not decode fall back to the
+  original. A frame is a photograph of a movement and is never worth a 500.
+- The prefetch asks for the same 640. The width is in the URL, so a prefetch at any other
+  size would warm a cache entry the sheet never reads — a download for nobody.
+
+#### F — the prefetch did cover the plan, and now covers more of it
+
+The report suggested the coach plan had been missed. It had not: `app/coach.tsx` has called
+`usePrefetchExercises` since `wp-progress-you-rework`, and `app/(tabs)/progress.tsx` covers
+the top six and the cardio rows. Both were verified and both are now tested by watching
+`Image.prefetch`. What changed: the finisher is on the list too, the count is passed so a
+name with **no** photographs costs no image request at all, and the photo is warmed at the
+width the sheet will ask for.
+
+#### G — the clock column belongs to lists that keep a clock
+
+`Row` always drew a 50 pt gutter for the time stamp — on the coach's plan, its finisher and
+the goal history, none of which have times in them. The contract is now `time !== undefined`
+rather than a truthy `time`: a timed list whose row has no stamp passes `time={null}` and
+keeps its column, so the times above and below stay in line; leaving the prop off is how a
+list says it has no clock. Every current caller was audited; the timed lists (Today's and
+Day's meals and activities) all pass a string.
+
+#### H — Day: one row per activity, and no macros for a day with no meals
+
+Two field reports fixed in the same tree and shipped here (`app/day/[date].tsx`):
+
+- **A treadmill walk was drawn twice**, under "calves" and under "glutes", because the
+  muscle fan-out drew an activity under every heading it touched. Training now renders each
+  activity exactly once: **Cardio** gets its own heading with the day's total minutes — its
+  muscle tags credit the body map, they do not file a walk — a lift belongs to the first
+  muscle heading that claims it, and anything left over goes under "Also".
+- **A day with nothing eaten no longer prints "PROTEIN 0 g · CARBS 0 g · FAT 0 g."** It
+  prints one line instead — hour-picked and playful on the live day (`nothingEatenYet`),
+  plainly "Nothing eaten was logged." on a closed one — and the section's "0 kcal" summary
+  is suppressed. The macros, the hints and the pattern all come back with the first meal.
+
+**Tests** — **686 passing, 2 skipped** in `backend` (was 669/2); **279 passing** in the app
+(was 255).
+
+- `src/app.test.ts`: `media_count` on the day's rows, the board's rows and every line of
+  the plan including the finisher; the resize round trip end to end (900 px original → 320
+  px answer, the variant filed beside the original, the second request the same bytes, 1280
+  handing back the original's 900 rather than an upscale); six bad widths, each a 400; and
+  a frame whose bytes are not an image served as the original rather than as a 500.
+- `src/services/images.test.ts` (+5): the width parser on every input shape, the resize and
+  its no-enlargement rule, and the throw the route's fallback is built on.
+- `src/adapters/storage/local.test.ts` (+2): a variant filed beside its original and not on
+  top of it, idempotently; a width outside the list refused before it can name a file.
+- `src/services/exerciseMatch.test.ts` (+3): twenty-seven phrasings of the nineteen
+  stretches resolving, nothing the catalogue already owned taken from it, and the guard
+  still refusing a stretch as an answer to a movement.
+- `src/scripts/import-exercise-media.test.ts` (+1, fixture +1): a `stretching` entry matched
+  onto Chest Stretch through the alias that names it.
+- `__tests__/exercise.test.tsx` (8 → 13): the skeleton count from the tap, none at all when
+  the tap said none, the two-box fallback when nobody said, a prefetched sheet with no
+  skeleton and no request, and 640 on the tiles against full size in the zoom.
+- `__tests__/coach.test.tsx` (26 → 30), `lifts.test.tsx` (5 → 8), `progress.test.tsx`
+  (30 → 32), `today.test.tsx` (21 → 23), `day.test.tsx` (+ the cardio and empty-Eating
+  regressions), `delete-control.test.tsx` (5 → 8, the clock column).
+
+**Decisions**
+
+- **The widths live on the port**, not in the route: they bound the filenames a store can
+  ever be asked to write, and a caller-chosen number would be a file on disk per number.
+- **A variant is a cache, not a second object.** The original is the truth; deleting every
+  variant would cost the next reader one resize and nothing else.
+- **`media_count` is optional in the app's types.** An older phone against a newer server is
+  the case that matters here, and "unknown" has to draw nothing rather than guess.
+- **The stretches are seeded, not imported.** `data/exercises.json` is the catalogue's source
+  of truth and `db:migrate` reseeds it on every container start, so this needed no migration.
+
+**Deferred**
+
+- **The DayLog's "How to do …" link carries no count**, so it draws no glyph and its sheet
+  falls back to two skeletons. The day-log payload does not thread `media_count` yet.
+- **`?w=` has no `webp`.** Half the bytes again for the same picture, and every client here
+  is an `expo-image` that would take it — but it is a second variant per width on disk and
+  a second thing to get wrong in the same release.
+- **The all-lifts screen does not prefetch.** It is reached by a tap from a screen that
+  already warmed the six that matter, and warming twenty sheets to save one is the wrong
+  trade on a phone.
+- **`anthropic.fusion.contract.test.ts` › "never returns a meal that is both internally
+  inconsistent and confident" is still flaky against the live model**, exactly as
+  `wp-progress-you-rework` recorded. Nothing in this branch touches fusion.
+
 ### 2026-08-31 — a body instead of a bar chart, and a page that says who you are (`wp-progress-you-rework`)
 
 Five changes the user asked for after a week on the phone, and the same complaint under

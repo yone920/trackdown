@@ -12,7 +12,11 @@
 //   * "Air Bike" — a floor crunch that happens to share a name with our **Assault Bike**'s
 //     alias. It must NOT match; it is the reason AMBIGUOUS_SOURCE_NAMES exists.
 //
-// A fourth, "Pretend Machine Fly", matches nothing at all: the miss list has to be real.
+//   * "Chest And Front Of Shoulder Stretch" — a `stretching` entry, matched onto our
+//     **Chest Stretch** through an alias. The finisher's rows were name-only until the
+//     stretches were seeded (2026-09-01); this is the rule that gives them pictures.
+//
+// A fifth, "Pretend Machine Fly", matches nothing at all: the miss list has to be real.
 
 export const DATASET_FIXTURE = [
 	{
@@ -56,6 +60,19 @@ export const DATASET_FIXTURE = [
 		instructions: ["Lie flat and bring the opposite knee and elbow together."],
 		category: "strength",
 		images: ["Air_Bike/0.jpg", "Air_Bike/1.jpg"],
+	},
+	{
+		id: "Chest_And_Front_Of_Shoulder_Stretch",
+		name: "Chest And Front Of Shoulder Stretch",
+		force: "static",
+		level: "beginner",
+		mechanic: null,
+		equipment: "other",
+		primaryMuscles: ["chest"],
+		secondaryMuscles: ["shoulders"],
+		instructions: ["Stand in a doorway with the forearm on the frame.", "Turn away until the chest opens."],
+		category: "stretching",
+		images: ["Chest_And_Front_Of_Shoulder_Stretch/0.jpg", "Chest_And_Front_Of_Shoulder_Stretch/1.jpg"],
 	},
 	{
 		id: "Pretend_Machine_Fly",

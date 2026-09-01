@@ -2,7 +2,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { Image } from 'expo-image';
 import { useEffect } from 'react';
 
-import { api, authHeaders, exerciseMediaUrl, tzOffsetMin, upload } from './api';
+import { api, authHeaders, exerciseMediaUrl, SHEET_PHOTO_WIDTH, tzOffsetMin, upload } from './api';
 import { rememberExercise } from './exercise-cache';
 import type {
   AnalyzeResponse,
@@ -133,10 +133,17 @@ async function fetchExercise(id: string): Promise<ExerciseSheet> {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** What a screen hands the prefetcher: an id it may not have, and a count it may not know. */
+export type PrefetchableExercise = {
+  id?: string | null;
+  mediaCount?: number | null;
+};
+
 /**
- * Warms the sheets for the exercises already on screen — the coach's Do list and the lifts
- * board (user decision 2026-08-31: "prefetch details and the first photo for exercises
- * visible on the coach plan and lifts board").
+ * Warms the sheets for the exercises already on screen — the coach's plan (its Do list AND
+ * its finisher) and the six lifts and cardio rows on Progress (user decision 2026-08-31:
+ * "prefetch details and the first photo for exercises visible on the coach plan and lifts
+ * board"; both surfaces re-verified 2026-09-01 after a report that the plan felt slow).
  *
  * The row and the first photograph, which together are everything the sheet draws above
  * the fold. Deliberately cheap and deliberately quiet:
@@ -145,21 +152,34 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  *     the list can be handed over on every render and only ever fetches what is new.
  *   * It runs in an effect rather than during render, so a slow catalogue never delays a
  *     screen that has everything it needs to draw.
+ *   * The photograph is fetched at exactly the width the sheet asks for
+ *     ({@link SHEET_PHOTO_WIDTH}). The width is in the URL, so a prefetch at any other size
+ *     would warm a cache entry the sheet never reads — a download for nobody.
+ *   * A caller that already knows the count says so, and an exercise with no photographs
+ *     costs no image request at all: it is skipped before the sheet is even consulted.
  *   * Failures are swallowed. A prefetch that fails costs the user nothing: the sheet
  *     fetches on the tap, exactly as it did before this existed.
  */
-export function usePrefetchExercises(ids: readonly (string | null | undefined)[]): void {
+export function usePrefetchExercises(
+  exercises: readonly (PrefetchableExercise | string | null | undefined)[],
+): void {
   const qc = useQueryClient();
-  // The ids as one string, so the effect re-runs when the *set* changes rather than on
-  // every render that rebuilt the array.
-  const key = ids.filter((id): id is string => !!id && UUID.test(id)).join(',');
+  // The list as one string, so the effect re-runs when the *set* changes rather than on
+  // every render that rebuilt the array. The count rides in it because a row whose photos
+  // arrived after the first render should warm them on that render and not before.
+  const key = exercises
+    .map((entry) => (typeof entry === 'string' || entry == null ? { id: entry } : entry))
+    .filter((entry): entry is PrefetchableExercise => !!entry.id && UUID.test(entry.id))
+    .map((entry) => `${entry.id}:${entry.mediaCount ?? ''}`)
+    .join(',');
 
   useEffect(() => {
     if (!key) return;
     let cancelled = false;
     const run = async () => {
-      for (const id of key.split(',')) {
+      for (const entry of key.split(',')) {
         if (cancelled) return;
+        const [id, count] = entry.split(':') as [string, string];
         try {
           await qc.prefetchQuery({
             queryKey: ['exercise', id],
@@ -167,11 +187,15 @@ export function usePrefetchExercises(ids: readonly (string | null | undefined)[]
             gcTime: Infinity,
             queryFn: () => fetchExercise(id),
           });
+          // A name the row already said has no pictures is a row with nothing to warm.
+          if (count === '0') continue;
           const sheet = qc.getQueryData<ExerciseSheet>(['exercise', id]);
           // The first frame only: the second is below the fold and the tap will fetch it
           // in the time it takes to scroll.
           if (sheet && sheet.media.length > 0) {
-            await Image.prefetch(exerciseMediaUrl(id, 0), { headers: authHeaders() }).catch(() => false);
+            await Image.prefetch(exerciseMediaUrl(id, 0, SHEET_PHOTO_WIDTH), {
+              headers: authHeaders(),
+            }).catch(() => false);
           }
         } catch {
           // See above: a prefetch is an optimisation and never a requirement.

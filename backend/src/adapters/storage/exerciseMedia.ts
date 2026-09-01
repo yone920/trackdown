@@ -2,15 +2,15 @@ import { createReadStream } from "node:fs";
 import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Readable } from "node:stream";
-import type { ExerciseMediaStore } from "../../ports/exerciseMedia.js";
+import { EXERCISE_MEDIA_WIDTHS, type ExerciseMediaStore } from "../../ports/exerciseMedia.js";
 
-// ExerciseMediaStore on a directory: `<root>/<exercise id>/<n>.jpg`. In production the
-// root is `exercise-media` inside the evidence volume, so the illustrations ride along
-// with the photo backup and survive a rebuild — which is also why the importer can skip
-// its work on a restart.
+// ExerciseMediaStore on a directory: `<root>/<exercise id>/<n>.jpg`, with resized variants
+// beside them as `<n>@<width>.jpg`. In production the root is `exercise-media` inside the
+// evidence volume, so the illustrations ride along with the photo backup and survive a
+// rebuild — which is also why the importer can skip its work on a restart.
 //
-// Unlike an evidence key, this path is derived from values the caller supplies, so both
-// halves are validated: a uuid and a small integer, nothing else.
+// Unlike an evidence key, this path is derived from values the caller supplies, so every
+// part of it is validated: a uuid, a small integer, and a width from a closed list.
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -34,12 +34,16 @@ export interface LocalExerciseMediaStoreOptions {
 export function createLocalExerciseMediaStore({ root }: LocalExerciseMediaStoreOptions): ExerciseMediaStore {
 	const absoluteRoot = path.resolve(root);
 
-	function resolveFrame(exerciseId: string, index: number): string {
+	function resolveFrame(exerciseId: string, index: number, width?: number): string {
 		if (!UUID.test(exerciseId)) throw new Error(`Not an exercise id: "${exerciseId}"`);
 		if (!Number.isInteger(index) || index < 0 || index > MAX_MEDIA_INDEX) {
 			throw new Error(`Not a media index: ${String(index)}`);
 		}
-		const full = path.resolve(absoluteRoot, exerciseId.toLowerCase(), `${index}.jpg`);
+		if (width !== undefined && !(EXERCISE_MEDIA_WIDTHS as readonly number[]).includes(width)) {
+			throw new Error(`Not a media width: ${String(width)}`);
+		}
+		const name = width === undefined ? `${index}.jpg` : `${index}@${width}.jpg`;
+		const full = path.resolve(absoluteRoot, exerciseId.toLowerCase(), name);
 		// Belt and braces, as in the evidence store: the two patterns above already forbid
 		// a "..", but a store that can be talked into writing outside its root is the kind
 		// of bug worth checking twice.
@@ -50,16 +54,16 @@ export function createLocalExerciseMediaStore({ root }: LocalExerciseMediaStoreO
 	return {
 		describe: `local:${absoluteRoot}`,
 
-		async put(exerciseId: string, index: number, data: Buffer): Promise<number> {
-			const file = resolveFrame(exerciseId, index);
+		async put(exerciseId: string, index: number, data: Buffer, width?: number): Promise<number> {
+			const file = resolveFrame(exerciseId, index, width);
 			await mkdir(path.dirname(file), { recursive: true });
 			await writeFile(file, data);
 			return data.byteLength;
 		},
 
-		async has(exerciseId: string, index: number): Promise<boolean> {
+		async has(exerciseId: string, index: number, width?: number): Promise<boolean> {
 			try {
-				const info = await stat(resolveFrame(exerciseId, index));
+				const info = await stat(resolveFrame(exerciseId, index, width));
 				// A zero-byte file is a half-finished download, not a picture.
 				return info.size > 0;
 			} catch {
@@ -67,8 +71,8 @@ export function createLocalExerciseMediaStore({ root }: LocalExerciseMediaStoreO
 			}
 		},
 
-		async get(exerciseId: string, index: number): Promise<Readable> {
-			const file = resolveFrame(exerciseId, index);
+		async get(exerciseId: string, index: number, width?: number): Promise<Readable> {
+			const file = resolveFrame(exerciseId, index, width);
 			// stat first, so a missing frame is an error here rather than an 'error' event
 			// after the response headers have already gone out.
 			await stat(file);
