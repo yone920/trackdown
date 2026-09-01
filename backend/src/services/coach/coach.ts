@@ -63,6 +63,13 @@ const MAX_OBSERVED_EQUIPMENT = 20;
 export type BriefExercise = Brief["workout"]["exercises"][number] & {
 	exercise_id: string | null;
 	/**
+	 * How many illustrations the catalogue holds for this name; 0 when it holds none and
+	 * when the name resolved to nothing at all. Resolved with the id, on the same lookup,
+	 * so the plan can show which names have a picture behind them before anyone taps
+	 * (field report 2026-09-01).
+	 */
+	media_count: number;
+	/**
 	 * The local clock an appended item was added at ("2:05p"), null for the plan's original
 	 * lines. It is what the app's "added 2:05p" divider is drawn from — stored on the brief
 	 * because it is a fact about the ANSWER (when the coach said it), unlike `completion`,
@@ -73,8 +80,21 @@ export type BriefExercise = Brief["workout"]["exercises"][number] & {
 	completion?: ExerciseCompletion;
 };
 
-export type BriefWorkout = Omit<Brief["workout"], "exercises"> & {
+/**
+ * One line of the finisher, resolved the same way the Do list is. It gets an id and a media
+ * count for exactly one reason: the field report of 2026-09-01 was that the stretch items
+ * did not open at all on a tap. They are movements with names, so they open like every
+ * other movement with a name — most of them into the sheet's name-only mode, which is the
+ * fallback that mode exists for.
+ */
+export type BriefFinisherItem = NonNullable<Brief["workout"]["finisher"]>[number] & {
+	exercise_id: string | null;
+	media_count: number;
+};
+
+export type BriefWorkout = Omit<Brief["workout"], "exercises" | "finisher"> & {
 	exercises: BriefExercise[];
+	finisher: BriefFinisherItem[];
 	/** True when every line of a non-empty Do list is done — the "Plan complete" state. */
 	complete?: boolean;
 };
@@ -157,36 +177,52 @@ function toWorkout(workout: StoredWorkout | null): BriefWorkout {
 	if (!workout) return { type: "rest", targets: [], exercises: [], finisher: [] };
 	return {
 		...workout,
-		finisher: workout.finisher ?? [],
+		finisher: (workout.finisher ?? []).map((item) => ({
+			...item,
+			exercise_id: null,
+			media_count: 0,
+		})),
 		exercises: workout.exercises.map((exercise) => ({
 			...exercise,
 			is_new: exercise.is_new ?? false,
 			added_at: exercise.added_at ?? null,
 			exercise_id: null,
+			media_count: 0,
 		})),
 	};
 }
 
 /**
- * Resolves each Do-list name to its `exercise_catalog` id, by name or alias — the same
- * lookup that gives a logged activity its `exercise_id`, so the sheet the coach links to
- * is the sheet the Day screen links to.
+ * Resolves every name on the plan — the Do list and the finisher both — to its
+ * `exercise_catalog` row, by name or alias. The same lookup that gives a logged activity
+ * its `exercise_id`, so the sheet the coach links to is the sheet the Day screen links to.
+ *
+ * The finisher was added to it on 2026-09-01. Most stretches do not resolve to anything —
+ * "couch stretch" is not in the catalogue and probably never will be — and that is fine:
+ * they open the sheet in name-only mode, where the form video is a search and works for a
+ * movement nobody has catalogued. What they must not do is nothing, which is what they did.
+ *
+ * `media_count` rides along on the same rows: knowing which names have a picture is the
+ * difference between an underline that promises something and one that gambles.
  */
 export async function withExerciseIds(db: Queryable, brief: CoachBriefRecord): Promise<CoachBriefRecord> {
 	const exercises = brief.workout.exercises;
-	if (exercises.length === 0) return brief;
-	const matches = await lookupExercises(
-		db,
-		exercises.map((exercise) => exercise.name)
-	);
+	const finisher = brief.workout.finisher ?? [];
+	if (exercises.length === 0 && finisher.length === 0) return brief;
+	const matches = await lookupExercises(db, [
+		...exercises.map((exercise) => exercise.name),
+		...finisher.map((item) => item.name),
+	]);
+	const resolve = (name: string) => {
+		const match = matches.get(name.trim().toLowerCase());
+		return { exercise_id: match?.id ?? null, media_count: match?.media_count ?? 0 };
+	};
 	return {
 		...brief,
 		workout: {
 			...brief.workout,
-			exercises: exercises.map((exercise) => ({
-				...exercise,
-				exercise_id: matches.get(exercise.name.trim().toLowerCase())?.id ?? null,
-			})),
+			exercises: exercises.map((exercise) => ({ ...exercise, ...resolve(exercise.name) })),
+			finisher: finisher.map((item) => ({ ...item, ...resolve(item.name) })),
 		},
 	};
 }
@@ -897,12 +933,17 @@ export function appendToBrief(current: CoachBriefRecord, answer: RevisedBrief, c
 			type: current.workout.type === "rest" && added.length > 0 ? answer.workout.type : current.workout.type,
 			targets,
 			exercises: [
-				...current.workout.exercises.map(({ exercise_id: _id, completion: _done, ...exercise }) => exercise),
+				...current.workout.exercises.map(
+					({ exercise_id: _id, media_count: _media, completion: _done, ...exercise }) => exercise
+				),
 				...added,
 			],
 			// The finisher belongs to the whole session, so a longer session gets the newer
 			// one — but never an empty one in place of a finisher that was already there.
-			finisher: answer.workout.finisher.length > 0 ? answer.workout.finisher : current.workout.finisher,
+			finisher:
+				answer.workout.finisher.length > 0
+					? answer.workout.finisher
+					: current.workout.finisher.map(({ exercise_id: _id, media_count: _media, ...item }) => item),
 		},
 		nutrition: current.nutrition,
 		nudge: current.nudge,
@@ -917,14 +958,14 @@ function toBrief(record: CoachBriefRecord): Brief {
 		workout: {
 			type: record.workout.type,
 			targets: record.workout.targets,
-			// The catalogue ids are ours, not the model's; they mean nothing to it and cost
-			// a line of JSON each. `added_at` and `completion` go the same way: when an item
-			// arrived and whether it has been done are facts about this app, not about the
-			// session the model is being asked to change.
+			// The catalogue ids and media counts are ours, not the model's; they mean nothing
+			// to it and cost a line of JSON each. `added_at` and `completion` go the same
+			// way: when an item arrived and whether it has been done are facts about this
+			// app, not about the session the model is being asked to change.
 			exercises: record.workout.exercises.map(
-				({ exercise_id: _id, added_at: _added, completion: _done, ...exercise }) => exercise
+				({ exercise_id: _id, media_count: _media, added_at: _added, completion: _done, ...exercise }) => exercise
 			),
-			finisher: record.workout.finisher,
+			finisher: record.workout.finisher.map(({ exercise_id: _id, media_count: _media, ...item }) => item),
 		},
 		nutrition: record.nutrition,
 		nudge: record.nudge,

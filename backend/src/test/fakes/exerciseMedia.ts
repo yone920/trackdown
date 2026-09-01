@@ -6,29 +6,32 @@ import type { ExerciseMediaStore } from "../../ports/exerciseMedia.js";
 // or a network, so a failed run leaves nothing behind.
 
 export interface FakeExerciseMediaStore extends ExerciseMediaStore {
-	/** "<exercise id>/<n>" → the bytes that were put. */
+	/** "<exercise id>/<n>", or "<exercise id>/<n>@<width>" → the bytes that were put. */
 	readonly frames: Map<string, Buffer>;
 }
 
 export function createFakeExerciseMediaStore(): FakeExerciseMediaStore {
 	const frames = new Map<string, Buffer>();
-	const key = (exerciseId: string, index: number): string => `${exerciseId}/${index}`;
+	// A resized variant is a key beside the original, exactly as it is a file beside it on
+	// disk (adapters/storage/exerciseMedia.ts).
+	const key = (exerciseId: string, index: number, width?: number): string =>
+		width === undefined ? `${exerciseId}/${index}` : `${exerciseId}/${index}@${width}`;
 
 	return {
 		describe: "fake:memory",
 		frames,
 
-		async put(exerciseId: string, index: number, data: Buffer): Promise<number> {
-			frames.set(key(exerciseId, index), Buffer.from(data));
+		async put(exerciseId: string, index: number, data: Buffer, width?: number): Promise<number> {
+			frames.set(key(exerciseId, index, width), Buffer.from(data));
 			return data.byteLength;
 		},
 
-		async has(exerciseId: string, index: number): Promise<boolean> {
-			return frames.has(key(exerciseId, index));
+		async has(exerciseId: string, index: number, width?: number): Promise<boolean> {
+			return frames.has(key(exerciseId, index, width));
 		},
 
-		async get(exerciseId: string, index: number): Promise<Readable> {
-			const found = frames.get(key(exerciseId, index));
+		async get(exerciseId: string, index: number, width?: number): Promise<Readable> {
+			const found = frames.get(key(exerciseId, index, width));
 			if (!found) throw new Error(`No frame ${index} for exercise ${exerciseId}`);
 			return Readable.from(found);
 		},

@@ -180,6 +180,13 @@ export interface CatalogMatch {
 	aliases: string[];
 	/** Which way its load points (migration 0013). See db/exercises.ts. */
 	load_direction: LoadDirection;
+	/**
+	 * How many illustrations the catalogue holds for it; 0 for the rows the import never
+	 * matched. Carried on the match so every screen that draws a resolved name can say,
+	 * *before* the tap, whether there is a picture behind it (field report 2026-09-01:
+	 * nothing indicated which names had illustrations).
+	 */
+	media_count: number;
 }
 
 /**
@@ -212,7 +219,7 @@ export async function lookupExercises(
 	if (wanted.length === 0) return matches;
 
 	const { rows } = await db.query<CatalogMatch>(
-		`SELECT id, name, category, primary_muscles, secondary_muscles, aliases, load_direction
+		`SELECT id, name, category, primary_muscles, secondary_muscles, aliases, load_direction, media_count
 		   FROM exercise_catalog ORDER BY name`
 	);
 	const index = buildExerciseIndex(rows);

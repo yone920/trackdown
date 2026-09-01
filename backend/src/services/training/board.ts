@@ -86,6 +86,12 @@ export interface BoardLift {
 	exercise: string;
 	/** The catalogue row, so the name opens the same sheet Today's rows open. */
 	exercise_id: string | null;
+	/**
+	 * How many illustrations that row has. The board draws a photo glyph beside the names
+	 * that have one, so a tap on an underline is a promise and not a gamble (field report
+	 * 2026-09-01). 0 both for a row with no pictures and for a name that matched nothing.
+	 */
+	media_count: number;
 	category: ActivityCategory | null;
 	muscle_groups: string[];
 	/** What the number MEANS. On "assistance" it is the help the machine gives. */
@@ -139,6 +145,8 @@ export interface BoardCardioNext {
 export interface BoardCardioRow {
 	exercise: string;
 	exercise_id: string | null;
+	/** As on {@link BoardLift}: whether there is a picture behind the name. */
+	media_count: number;
 	category: ActivityCategory | null;
 	last_date: IsoDate;
 	days_since: number;
@@ -600,6 +608,12 @@ export interface BuildBoardInput {
 	catalog?: CatalogFacts;
 	/** Catalogue ids by lower-cased exercise name, so a row can open its sheet. */
 	exerciseIds?: Record<string, string | null>;
+	/**
+	 * Illustration counts by the same key, so a row can say whether the sheet has pictures
+	 * in it before it is opened. A separate map rather than a field on `exerciseIds`
+	 * because a name with no catalogue row still has an answer here, and it is 0.
+	 */
+	mediaCounts?: Record<string, number>;
 	trainingDaysTarget?: number | null;
 }
 
@@ -609,6 +623,7 @@ export function buildBoard({
 	facts,
 	catalog = EMPTY_CATALOG_FACTS,
 	exerciseIds = {},
+	mediaCounts = {},
 	trainingDaysTarget = null,
 }: BuildBoardInput): TrainingBoard {
 	const gap = gapRule(features.days_since_last_workout);
@@ -631,6 +646,7 @@ export function buildBoard({
 		return {
 			exercise: feature.exercise,
 			exercise_id: exerciseIds[key] ?? null,
+			media_count: mediaCounts[key] ?? 0,
 			category: feature.category,
 			muscle_groups: feature.muscle_groups,
 			load_direction: direction,
@@ -666,7 +682,7 @@ export function buildBoard({
 	const distances = distanceIndex(facts);
 	const cardio: BoardCardioRow[] = features.exercises
 		.filter((feature) => sectionOf(feature) === "cardio")
-		.map((feature) => cardioRowOf(feature, features.cardio, distances, exerciseIds));
+		.map((feature) => cardioRowOf(feature, features.cardio, distances, exerciseIds, mediaCounts));
 
 	return {
 		date: facts.date,
@@ -693,7 +709,8 @@ function cardioRowOf(
 	feature: ExerciseFeature,
 	cardio: CardioFeature,
 	distances: Map<string, number>,
-	exerciseIds: Record<string, string | null>
+	exerciseIds: Record<string, string | null>,
+	mediaCounts: Record<string, number>
 ): BoardCardioRow {
 	const key = feature.exercise.trim().toLowerCase();
 	// Oldest first: a chart is read left to right.
@@ -721,6 +738,7 @@ function cardioRowOf(
 	return {
 		exercise: feature.exercise,
 		exercise_id: exerciseIds[key] ?? null,
+		media_count: mediaCounts[key] ?? 0,
 		category: feature.category,
 		last_date: feature.last.date,
 		days_since: feature.days_since,
@@ -894,12 +912,18 @@ export async function loadBoard(db: Queryable, userId: string, { tzOffsetMin, no
 	const exerciseIds = Object.fromEntries(
 		names.map((name) => [name.trim().toLowerCase(), matches.get(name.trim().toLowerCase())?.id ?? null])
 	);
+	// The same lookup, read twice: a name the catalogue knows also knows how many pictures
+	// it has, and the board draws a glyph for the ones that have any.
+	const mediaCounts = Object.fromEntries(
+		names.map((name) => [name.trim().toLowerCase(), matches.get(name.trim().toLowerCase())?.media_count ?? 0])
+	);
 
 	return buildBoard({
 		features,
 		facts,
 		catalog,
 		exerciseIds,
+		mediaCounts,
 		trainingDaysTarget,
 	});
 }
