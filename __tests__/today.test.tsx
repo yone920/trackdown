@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import React from 'react';
 
 import Today from '@/app/(tabs)/index';
+import { clock } from '@/lib/format';
 import type { CoachStatus, DayActivity, DayMeal } from '@/lib/types';
 import { makeDay, makeGoal, makeMetric, makeWeek } from './fixtures';
 
@@ -70,6 +71,33 @@ beforeEach(() => {
   mockApi.mockReset();
   mockPush.mockReset();
 });
+
+/** One logged exercise, for the Training section's own tests. */
+function lift(overrides: Partial<DayActivity> = {}): DayActivity {
+  return {
+    id: 'a1',
+    logged_at: '2026-08-30T08:10:00.000Z',
+    description: '3 × 8 bench at 135 lb',
+    exercise: 'Bench Press',
+    exercise_id: 'ex-bench',
+    media_count: 0,
+    equipment: null,
+    category: 'strength',
+    muscle_groups: ['chest'],
+    sets: 3,
+    reps: 8,
+    load_lb: 135,
+    duration_min: null,
+    distance_mi: null,
+    kcal: 264,
+    source: 'manual',
+    confidence: 'high',
+    block_id: 'b1',
+    delta_vs_last: null,
+    evidence: [],
+    ...overrides,
+  };
+}
 
 describe('Today', () => {
   it('shows the day number with no verdict on an empty day, and the no-goal banner', async () => {
@@ -196,17 +224,24 @@ describe('Today', () => {
     expect(screen.getByText("Get today's plan")).toBeTruthy();
   });
 
-  it('opens the coach page and generates nothing, either way', async () => {
+  it('switches to the Plan tab and generates nothing, either way', async () => {
+    // The plan has its own tab (user decision 2026-09-01); what is left on Today is a
+    // status row. Tapping it still generates nothing — it only changes tab.
     serve({ coach: noPlan({ has_plan: true, headline: 'Pull day', done_count: 1, total_count: 3 }) });
     renderToday();
 
     await waitFor(() => expect(screen.getByText("Today's plan")).toBeTruthy());
     fireEvent.press(screen.getByTestId('coach-button'));
-    expect(mockPush).toHaveBeenCalledWith('/coach');
-    expect(mockApi.mock.calls.map(([path]) => path)).not.toContain('/api/coach/next/regenerate');
+    expect(mockPush).toHaveBeenCalledWith('/plan');
+    const asked = mockApi.mock.calls.map(([path]) => path);
+    expect(asked).not.toContain('/api/coach/next/regenerate');
+    expect(asked).not.toContain('/api/coach/next');
   });
 
-  it('marks an estimated block "est." on the training line and on the block itself', async () => {
+  it('marks an estimated day\'s training "est." on the Training line', async () => {
+    // Lifts print no calories, so the figure is a MET estimate. It is said once now: the
+    // per-block heading it was also said on is gone, because Today no longer groups by
+    // block (user decision 2026-09-01).
     const block = {
       id: 'b1',
       title: 'Chest & Triceps',
@@ -222,16 +257,22 @@ describe('Today', () => {
       category: 'strength' as const,
       health: null,
     };
-    serve({ day: makeDay({ blocks: [block], earned: 264 }) });
+    serve({
+      day: makeDay({
+        blocks: [block],
+        earned: 264,
+        items: { meals: [], weights: [], activities: [lift()] },
+      }),
+    });
     renderToday();
 
-    await waitFor(() => expect(screen.getByText('Chest & Triceps')).toBeTruthy());
-    expect(screen.getByText(/264 kcal earned/)).toBeTruthy();
-    // Once on the section's earned line, once on the block's own header.
-    expect(screen.getAllByText('est.')).toHaveLength(2);
+    await waitFor(() => expect(screen.getByText(/264 kcal earned/)).toBeTruthy());
+    expect(screen.getAllByText(/est\./)).toHaveLength(1);
+    // The block's own title is no longer a heading on Today.
+    expect(screen.queryByText('Chest & Triceps')).toBeNull();
   });
 
-  it('leaves a block that reported its own calories unmarked', async () => {
+  it('leaves training that reported its own calories unmarked', async () => {
     const block = {
       id: 'b1',
       title: 'Walk',
@@ -247,11 +288,21 @@ describe('Today', () => {
       category: 'cardio' as const,
       health: null,
     };
-    serve({ day: makeDay({ blocks: [block], earned: 180 }) });
+    serve({
+      day: makeDay({
+        blocks: [block],
+        earned: 180,
+        items: {
+          meals: [],
+          weights: [],
+          activities: [lift({ id: 'a9', exercise: 'Walk', category: 'cardio', muscle_groups: [], kcal: 180 })],
+        },
+      }),
+    });
     renderToday();
 
-    await waitFor(() => expect(screen.getByText('Walk')).toBeTruthy());
-    expect(screen.queryByText('est.')).toBeNull();
+    await waitFor(() => expect(screen.getByText(/180 kcal earned/)).toBeTruthy());
+    expect(screen.queryByText(/est\./)).toBeNull();
   });
 
   // A day that has one lift and one meal in it, so a delete has something to change.
@@ -576,5 +627,125 @@ describe("Today's exercise names", () => {
 
     expect(screen.getByTestId('row-activity-a8-photo')).toBeTruthy();
     expect(screen.queryByTestId('row-activity-a9-photo')).toBeNull();
+  });
+});
+
+describe('Today — training, grouped the way the closed Day groups it', () => {
+  // User decision 2026-09-01: Today is the only page for the open day, and it files
+  // training the way Day does — Cardio first with its minutes, then muscle headings with
+  // set counts. It used to group by auto-block, so the same workout read two ways.
+
+  const PRESS = lift({ id: 'a1', exercise: 'Bench Press', muscle_groups: ['chest', 'triceps'] });
+  const WALK = lift({
+    id: 'a2',
+    exercise: 'Incline Treadmill Walk',
+    description: 'Incline treadmill walk',
+    category: 'cardio',
+    muscle_groups: ['calves', 'glutes'],
+    duration_min: 17,
+    sets: null,
+    reps: null,
+    load_lb: null,
+    logged_at: '2026-08-30T08:35:00.000Z',
+    kcal: 146,
+  });
+  const BIKE = lift({
+    id: 'a4',
+    exercise: 'Stationary Bike',
+    description: 'Stationary bike',
+    category: 'cardio',
+    muscle_groups: [],
+    duration_min: 23,
+    sets: null,
+    reps: null,
+    load_lb: null,
+    logged_at: '2026-08-30T08:20:00.000Z',
+    kcal: 120,
+  });
+  const YOGA = lift({
+    id: 'a3',
+    exercise: 'Yoga class',
+    description: 'Yoga class',
+    category: null,
+    muscle_groups: [],
+    sets: null,
+    reps: null,
+    load_lb: null,
+    kcal: 0,
+  });
+
+  function serveTraining(activities: DayActivity[], muscles: { muscle: string; sets: number }[]) {
+    serve({
+      day: makeDay({
+        earned: 410,
+        items: { meals: [], weights: [], activities },
+        muscle_summary: muscles.map((group) => ({ ...group, exercises: [] })),
+      }),
+    });
+  }
+
+  it('draws Cardio first with its minutes, then the muscle groups with their set counts', async () => {
+    serveTraining([PRESS, WALK, BIKE], [{ muscle: 'chest', sets: 6 }]);
+    renderToday();
+
+    await waitFor(() => expect(screen.getByText('Cardio')).toBeTruthy());
+    // The heading carries the day's cardio TOTAL — 17 + 23 — which no single row prints.
+    expect(screen.getByText('40 min')).toBeTruthy();
+    expect(screen.getByText('chest')).toBeTruthy();
+    expect(screen.getByText('6 sets')).toBeTruthy();
+    expect(screen.getByText('Bench Press')).toBeTruthy();
+  });
+
+  it('draws a logged cardio activity once, under Cardio, never under its muscle tags', async () => {
+    // The same regression the Day page carries (field report 2026-09-01: one treadmill
+    // walk drawn under both "calves" and "glutes").
+    serveTraining(
+      [PRESS, WALK],
+      [
+        { muscle: 'chest', sets: 6 },
+        { muscle: 'calves', sets: 0 },
+        { muscle: 'glutes', sets: 0 },
+      ],
+    );
+    renderToday();
+
+    await waitFor(() => expect(screen.getByText('Cardio')).toBeTruthy());
+    expect(screen.getAllByText('Incline Treadmill Walk')).toHaveLength(1);
+    expect(screen.queryByText('calves')).toBeNull();
+    expect(screen.queryByText('glutes')).toBeNull();
+  });
+
+  it('files a lift under the FIRST heading that claims it, and not under both', async () => {
+    serveTraining(
+      [PRESS],
+      [
+        { muscle: 'chest', sets: 6 },
+        { muscle: 'triceps', sets: 6 },
+      ],
+    );
+    renderToday();
+
+    await waitFor(() => expect(screen.getByText('chest')).toBeTruthy());
+    expect(screen.getAllByText('Bench Press')).toHaveLength(1);
+    expect(screen.queryByText('triceps')).toBeNull();
+  });
+
+  it('puts a movement no heading knows under "Also" rather than losing it', async () => {
+    serveTraining([PRESS, YOGA], [{ muscle: 'chest', sets: 6 }]);
+    renderToday();
+
+    await waitFor(() => expect(screen.getByText('Also')).toBeTruthy());
+    expect(screen.getByText('Yoga class')).toBeTruthy();
+  });
+
+  it('keeps the session span as a note on the header, not as the grouping', async () => {
+    // When a workout happened is a fact about it, not a way to file it. The block titles
+    // that used to be the headings are gone.
+    serveTraining([PRESS, WALK], [{ muscle: 'chest', sets: 6 }]);
+    renderToday();
+
+    await waitFor(() => expect(screen.getByText('Training')).toBeTruthy());
+    const span = `${clock(PRESS.logged_at)}–${clock(WALK.logged_at)}`;
+    expect(screen.getByText(new RegExp(span))).toBeTruthy();
   });
 });

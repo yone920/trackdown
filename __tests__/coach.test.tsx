@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
-import Coach from '@/app/coach';
+import Coach from '@/app/(tabs)/plan';
 import type { CoachBrief, CoachNext } from '@/lib/types';
 
 // The Coach screen, and the two things the field report broke.

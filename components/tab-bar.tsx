@@ -3,22 +3,32 @@ import { router } from 'expo-router';
 import { Pressable, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { IconAvatar, IconDays, IconPlus, IconProgress, IconToday, type IconProps } from '@/components/icons';
+import {
+  IconAvatar,
+  IconDays,
+  IconPlan,
+  IconPlus,
+  IconProgress,
+  IconToday,
+  type IconProps,
+} from '@/components/icons';
 import { Eyebrow } from '@/components/type';
 import { C, SPACE } from '@/lib/theme';
 
-// Today · Days · Progress · You, 84 high, stroke icons at 1.8, inactive `dim`
+// Today · Plan · Days · Progress · You, 84 high, stroke icons at 1.8, inactive `dim`
 // (docs/design-system.md §Tokens). Written by hand rather than configured, because the
 // floating `+` sits above it and the two have to agree about where the bar ends.
 
 const ICONS: Record<string, (p: IconProps) => React.ReactElement> = {
   index: IconToday,
+  plan: IconPlan,
   days: IconDays,
   progress: IconProgress,
 };
 
 const LABELS: Record<string, string> = {
   index: 'Today',
+  plan: 'Plan',
   days: 'Days',
   progress: 'Progress',
 };

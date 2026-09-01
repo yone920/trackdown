@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react-native';
 import React from 'react';
 import { SafeAreaInsetsContext, type EdgeInsets } from 'react-native-safe-area-context';
 
-import Coach from '@/app/coach';
+import Coach from '@/app/(tabs)/plan';
 import Day from '@/app/day/[date]';
 import DayLog from '@/app/day/[date]/log';
 import ExerciseSheet from '@/app/exercise/[id]';
@@ -83,7 +83,7 @@ const SCREENS: [name: string, Screen: () => React.ReactElement, testID: string][
   ['Days', Days, 'days-list'],
   ['Progress', Progress, 'progress-scroll'],
   ['You', You, 'you-scroll'],
-  ['Coach', Coach, 'coach-scroll'],
+  ['Coach', Coach, 'plan-scroll'],
   ['Log', LogSheet, 'log-scroll'],
   ['Day', Day, 'day-scroll'],
   ['DayLog', DayLog, 'day-log-scroll'],

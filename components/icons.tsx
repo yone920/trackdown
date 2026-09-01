@@ -65,6 +65,18 @@ export function IconProgress(p: IconProps) {
   );
 }
 
+/** Plan — a checklist: today's moves, and the ones already ticked off. */
+export function IconPlan(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Polyline points="3,7 4.8,8.8 8,5.5" {...base(p)} />
+      <Polyline points="3,16 4.8,17.8 8,14.5" {...base(p)} />
+      <Line x1={11} y1={7} x2={21} y2={7} {...base(p)} />
+      <Line x1={11} y1={16} x2={21} y2={16} {...base(p)} />
+    </Frame>
+  );
+}
+
 /** Goals — a flag on a pole. */
 export function IconGoals(p: IconProps) {
   return (

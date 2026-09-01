@@ -56,10 +56,12 @@ export function invalidateAfterLog(qc: ReturnType<typeof useQueryClient>): void 
 // ---------------------------------------------------------------------------
 
 /** GET /api/day/:date — the live day when `date` is today, the record when it is past. */
-export function useDay(date: IsoDate) {
+export function useDay(date: IsoDate, options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['day', date],
-    enabled: !!date,
+    // `enabled` is a caller's veto, never a way to turn a blank date on: app/day/[date].tsx
+    // stops asking for a day it is about to redirect away from (user decision 2026-09-01).
+    enabled: !!date && options.enabled !== false,
     queryFn: () => api<DayView>(`/api/day/${date}`, { query: { tz: tzOffsetMin() } }),
   });
 }
