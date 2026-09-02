@@ -32,6 +32,7 @@ import {
   useWeek,
 } from '@/lib/queries';
 import { DaysList } from '@/components/days-list';
+import { WeighIns } from '@/components/weigh-ins';
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
 import type { BoardCardioRow, BoardLift, GoalRecord, GoalWithProgress, TrainingBoard } from '@/lib/types';
@@ -210,6 +211,14 @@ export default function Progress() {
 
       <LiftsBoard board={board.data ?? null} loading={board.isLoading} />
       <Cardio board={board.data ?? null} judge={judge} />
+      {/* The weigh-ins themselves. They lost their only surface when Today's Body section
+          came off (field report 2026-09-02): the numbers still fed every average while the
+          rows were unreachable, so a mistyped reading could be seen everywhere and fixed
+          nowhere. Body state belongs on this page. */}
+      <View nativeID="weigh-ins">
+        <WeighIns />
+      </View>
+
       <Coverage board={board.data ?? null} judge={judge} />
       {weightGoalOwnsBody ? null : <BodySection board={board.data ?? null} />}
 

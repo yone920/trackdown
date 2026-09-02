@@ -5660,3 +5660,42 @@ describe("the outlier guard on a weigh-in", () => {
 		expect(weight.check.avg_7d).toBeGreaterThan(200);
 	});
 });
+
+describe("correcting a doubted weigh-in", () => {
+	it("clears the doubt, because the number they just checked is not the one we questioned", async () => {
+		// The field report's own repair: 110 was a slip for 210. Once it is fixed, leaving
+		// "check" beside it would be the app failing to notice its question was answered.
+		const token = await signUp("corrects-weight@example.com");
+		const auth = { Authorization: `Bearer ${token}` };
+		const created = await request(app)
+			.post("/api/log/confirm")
+			.set(auth)
+			.send({
+				client_id: randomUUID(),
+				results: [
+					{
+						kind: "weight",
+						weight_lb: 110,
+						confidence: "high",
+						sources: null,
+						check: { delta_lb: 100, avg_7d: 210, previous_lb: 210, previous_at: new Date().toISOString(), question: "?" },
+					},
+				],
+			});
+		expect(created.status).toBe(201);
+		const id = created.body.weights[0].id;
+
+		const flagged = await db.pool.query(`SELECT confidence FROM weight_logs WHERE id = $1`, [id]);
+		expect(flagged.rows[0].confidence).toBe("low");
+
+		const patched = await request(app)
+			.patch(`/api/weight/${id}`)
+			.set(auth)
+			.send({ weight_lb: 210, correction_instruction: "it was 210, I mistyped" });
+		expect(patched.status).toBe(200);
+		expect(patched.body.weight_lb).toBe(210);
+
+		const after = await db.pool.query(`SELECT confidence FROM weight_logs WHERE id = $1`, [id]);
+		expect(after.rows[0].confidence).toBeNull();
+	});
+});

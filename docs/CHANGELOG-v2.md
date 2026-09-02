@@ -87,6 +87,45 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-02 — the weigh-ins had nowhere to be (`fix-weigh-in-surface`)
+
+A gap **we made**. When Today's Body section came off in the Train / Eat / Home restructure,
+weigh-in ROWS lost their only open-day surface. The numbers went on feeding the 7-day
+average, the goal card, the week header and the coach — while the records themselves became
+unreachable.
+
+So the user who logged **110** when they meant **210** could see the consequences on every
+screen and correct them on none. Loud and untouchable is the worst shape a record can be in,
+and it is worse than never having shown it at all.
+
+**Weight gets its own home on Progress**, which is the "where am I" page and where body
+state belongs. `components/weigh-ins.tsx`: dated rows, newest first — *"110.0 lb · today"*,
+*"212.0 lb · Mon Aug 31"* — with the same three affordances every logged row has anywhere
+else. Tap to correct in words, ✕ to take it back. There is no reason a weigh-in should
+behave differently from a meal, and now it does not.
+
+- A reading the app **doubted** and the user kept carries a quiet "check" (migration 0020),
+  so on a list of numbers the questionable one is the obvious one.
+- A long history goes behind one *Earlier* chip rather than a wall of rows.
+- **Home's 7-day weight card is the door to it.** An average you cannot get underneath is an
+  average you cannot fix.
+
+**And correcting a doubted reading clears the doubt.** 110 → 210 is no longer the number we
+questioned, so the mark goes with the old value — leaving "check" beside a figure the user
+has just been back and checked would be the app failing to notice its own question was
+answered.
+
+Checked, per the brief, that nothing else lost weigh-ins in the restructure: the past-day
+page keeps its Body numbers, and the raw day-log export still reads `weight_logs` and still
+emits `kind: "weight"` entries, editable.
+
+**Verified** — app **403 → 410** across **30 suites**: rows with their weights and dates
+newest-first, the doubt mark, the correction opening dated to the day the reading was
+LOGGED (not today — that is the day whose log the sheet reads it back from), the two-tap
+delete hitting `/api/weight/:id`, the Earlier expansion, the empty state, and Home's card
+navigating. Backend **757 → 758** for the cleared mark; the weight PATCH round trip was
+already covered end to end, which is the path this unblocks.
+
 ### 2026-09-02 — a wrong verdict that flatters (`fix-weight-outliers`)
 
 A 110 lb weigh-in from somebody who weighs about 212. Slip or test, the app swallowed it

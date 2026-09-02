@@ -184,9 +184,18 @@ export default function Home() {
         ) : null}
       </Pressable>
 
-      {/* The body, over a week. Not today's number — today's number is noise, and this
-          page is about the direction (concept-v2 §Calories: "the week is the unit"). */}
+      {/* The body, over a week — today's number is noise, and this page is about the
+          direction (concept-v2 §Calories: "the week is the unit"). And a door to the
+          readings behind it (field report 2026-09-02:
+          a weigh-in had nowhere to be corrected). An average you cannot get underneath is
+          an average you cannot fix. */}
       <Section title="Weight" summary={body?.latest_date ? dateLabel(body.latest_date) : null}>
+        <Pressable
+          testID="home-weight"
+          accessibilityRole="button"
+          accessibilityLabel="Your weigh-ins"
+          onPress={() => router.push('/progress')}
+          style={({ opacity: 1 })}>
         <View style={{ flexDirection: 'row', gap: 10 }}>
           <Stat label="7-day avg" value={body?.avg_7d == null ? '—' : body.avg_7d.toFixed(1)} unit="lb" />
           <Stat
@@ -200,6 +209,10 @@ export default function Home() {
             color={trendColor(body?.trend_per_week ?? null, goal?.kind ?? null)}
           />
         </View>
+        <Sub testID="home-weight-door" style={{ marginTop: 8, color: C.dim }}>
+          See every weigh-in ›
+        </Sub>
+        </Pressable>
         {body?.avg_7d == null ? (
           <Card style={{ marginTop: 10 }}>
             <Sub testID="home-weight-empty" style={{ lineHeight: 18 }}>

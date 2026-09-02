@@ -623,6 +623,15 @@ export type FieldSource = 'photo' | 'text' | null;
  * The app's doubt about one weigh-in (backend services/weightCheck.ts). Present only when a
  * reading sits implausibly far from the user's own recent average — normally null.
  */
+/** One weigh-in as `GET /api/weight` returns it. */
+export type WeighIn = {
+  id: string;
+  weight_lb: number;
+  logged_at: string;
+  /** 'low' when the app doubted it and the user confirmed anyway (migration 0020). */
+  confidence?: Confidence | null;
+};
+
 export type WeighInCheck = {
   delta_lb: number;
   avg_7d: number;

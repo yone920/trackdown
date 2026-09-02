@@ -533,6 +533,11 @@ export async function updateWeight(db: Queryable, userId: string, id: string, pa
 		sets.push(`${key} = $${params.length}`);
 	}
 	if (sets.length === 0) return getWeight(db, userId, id);
+	// A CORRECTED reading is not the reading that was doubted, so the doubt goes with the
+	// old number (migration 0020). Leaving the mark on would leave "check" beside a figure
+	// the user has just been back and checked — which is the app failing to notice it was
+	// answered.
+	if (patch.weight_lb !== undefined) sets.push("confidence = NULL");
 	const { rows } = await db.query(
 		`UPDATE weight_logs SET ${sets.join(", ")} WHERE user_id = $1 AND id = $2 RETURNING *`,
 		params

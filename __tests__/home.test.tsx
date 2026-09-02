@@ -168,6 +168,18 @@ describe('Home', () => {
     expect(screen.getByText('−0.6')).toBeTruthy();
   });
 
+  it('opens the weigh-ins from the weight card', async () => {
+    // Field report 2026-09-02: a mistyped reading fed every average and could be corrected
+    // nowhere. An average you cannot get underneath is an average you cannot fix.
+    serve();
+    renderHome();
+
+    await waitFor(() => expect(screen.getByTestId('home-weight')).toBeTruthy());
+    expect(screen.getByTestId('home-weight-door')).toHaveTextContent(/every weigh-in/);
+    fireEvent.press(screen.getByTestId('home-weight'));
+    expect(mockPush).toHaveBeenCalledWith('/progress');
+  });
+
   it('says so plainly when nobody has weighed in', async () => {
     serve({ training: board({ body: { latest: null, latest_date: null, avg_7d: null, trend_per_week: null, series: [] } }) as never });
     renderHome();

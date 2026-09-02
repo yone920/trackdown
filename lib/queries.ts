@@ -16,6 +16,7 @@ import { LOST_ANSWER_NOTE, pollForPlan } from './coach-recovery';
 import { rememberExercise } from './exercise-cache';
 import type {
   EatingView,
+  WeighIn,
   AnalyzeResponse,
   CoachNext,
   CoachStatus,
@@ -86,6 +87,21 @@ export function useEating() {
   return useQuery({
     queryKey: ['eating'],
     queryFn: () => api<EatingView>('/api/eating', { query: { tz: tzOffsetMin() } }),
+  });
+}
+
+/**
+ * GET /api/weight — the weigh-ins themselves, newest first.
+ *
+ * They had no surface at all between the Today restructure and 2026-09-02: the numbers went
+ * on feeding the averages and the goal card while the ROWS were unreachable, so a user who
+ * mistyped one could not get at it to fix it. Body state belongs on Progress, and this is
+ * what that section reads.
+ */
+export function useWeighIns(limit = 60) {
+  return useQuery({
+    queryKey: ['weight', 'list', limit],
+    queryFn: () => api<WeighIn[]>('/api/weight', { query: { order: 'desc', limit } }),
   });
 }
 
