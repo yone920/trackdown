@@ -12,6 +12,7 @@ import {
   tzOffsetMin,
   upload,
 } from './api';
+import { monthWindow } from './calendar';
 import { LOST_ANSWER_NOTE, pollForPlan } from './coach-recovery';
 import { readerLine } from './errors';
 import { rememberExercise } from './exercise-cache';
@@ -144,6 +145,23 @@ export function useWeek(end?: IsoDate) {
 export function useDays(before?: IsoDate, limit = 14) {
   return useQuery({
     queryKey: ['days', before ?? 'top', limit],
+    queryFn: () => api<DaysView>('/api/days', { query: { tz: tzOffsetMin(), before, limit } }),
+  });
+}
+
+/**
+ * One month of days, for the calendar sheet (components/calendar-sheet.tsx).
+ *
+ * No new endpoint: `before` on `GET /api/days` is exclusive and the list comes back newest
+ * first, so the first of the NEXT month with a limit of 31 covers any month exactly
+ * (lib/calendar.ts §monthWindow). A month with gaps spills a few rows out of the older end
+ * of the window; the sheet keeps the ones whose date is in the month.
+ */
+export function useDaysInMonth(month: string, options: { enabled?: boolean } = {}) {
+  const { before, limit } = monthWindow(month);
+  return useQuery({
+    queryKey: ['days', 'month', month],
+    enabled: options.enabled ?? true,
     queryFn: () => api<DaysView>('/api/days', { query: { tz: tzOffsetMin(), before, limit } }),
   });
 }

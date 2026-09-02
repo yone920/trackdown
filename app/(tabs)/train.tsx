@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, View } from 'react-native';
 
 import { IconAvatar, IconChevronRight } from '@/components/icons';
@@ -20,6 +20,7 @@ import { useScreenInsets } from '@/lib/screen';
 import { C, RADIUS, SPACE, TABULAR } from '@/lib/theme';
 import { sessionSpan, splitBySource } from '@/lib/training-groups';
 import { OFFLINE_MESSAGE } from '@/lib/errors';
+import { CalendarButton, CalendarSheet } from '@/components/calendar-sheet';
 
 // TRAIN — the session, and nothing else (user decision 2026-09-01: each tab owns one verb).
 //
@@ -44,6 +45,9 @@ import { OFFLINE_MESSAGE } from '@/lib/errors';
 export default function Train() {
   const router = useRouter();
   const insets = useScreenInsets();
+  // The month sheet, opened from the header. Closed by default and fetching nothing until
+  // it is asked for (components/calendar-sheet.tsx).
+  const [calendar, setCalendar] = useState(false);
   const keyboard = useKeyboardHeight();
   // Recomputed on every render, so an app left open overnight asks for the new day.
   const date = localDateKey();
@@ -132,6 +136,9 @@ export default function Train() {
             Train
           </Disp>
         </View>
+        {/* Any day that has already happened, from the header (user request 2026-09-02).
+            One sheet, shared with the other tab — components/calendar-sheet.tsx. */}
+        <CalendarButton testID="train-calendar" onPress={() => setCalendar(true)} />
         <Pressable
           testID="train-you"
           accessibilityLabel="You"
@@ -170,6 +177,8 @@ export default function Train() {
           onPress={() => router.push('/train/log')}
         />
       )}
+
+      <CalendarSheet visible={calendar} onClose={() => setCalendar(false)} />
     </ScrollView>
   );
 }
