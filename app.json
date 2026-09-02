@@ -34,6 +34,8 @@
       "package": "net.yonelab.trackdown",
       "permissions": [
         "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
       ]
     },
@@ -80,6 +82,12 @@
       "eas": {
         "projectId": "c38fdd21-3f60-43ad-9c44-1213e921a8c4"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/c38fdd21-3f60-43ad-9c44-1213e921a8c4"
     }
   }
 }
