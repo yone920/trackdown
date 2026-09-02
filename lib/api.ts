@@ -21,23 +21,9 @@ export class ApiError extends Error {
   }
 }
 
-/**
- * The model provider is busy — a 529 or a 429 that survived its one retry on the server.
- *
- * Read from the CODE, not from the prose: the message is for a person and may be reworded
- * any time, and matching on English is how a fix stops working in a language nobody
- * planned for. The status is the fallback for a server that has not learned the code yet.
- */
-export function isBusyError(error: unknown): boolean {
-  return error instanceof ApiError && (error.code === 'provider_overloaded' || error.status === 503);
-}
-
-/**
- * The one line the user sees when the reader is busy. It never carries a status, a request
- * id or a line of JSON — the user saw all three under their input box on 2026-09-02, and
- * none of them was theirs to read.
- */
-export const BUSY_MESSAGE = 'The reader is busy right now — try again in a few seconds.';
+// What a failure SAYS is not this file's business any more: one busy-provider sentence
+// lived here, which is exactly the piecemeal shape that let the next status through
+// untranslated. Every error line in the app now comes from `lib/errors.ts`, by code.
 
 type Query = Record<string, string | number | boolean | undefined>;
 

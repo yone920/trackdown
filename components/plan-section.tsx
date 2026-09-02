@@ -22,6 +22,7 @@ import {
 import { sessionSpan, splitBySource } from '@/lib/training-groups';
 import { C, TABULAR } from '@/lib/theme';
 import type { BriefExercise, CoachBrief, ExerciseCompletion } from '@/lib/types';
+import { readerLine } from '@/lib/errors';
 
 // The day's plan, where the day is (user decision 2026-09-01). It used to be a page of its
 // own behind an accent button at the bottom of Today, which meant the answer to "what
@@ -159,7 +160,9 @@ export function PlanSection() {
   // brief is simply older than the log. None of them replaces the brief.
   const note =
     (busy ? null : (coach.data?.note ?? null)) ??
-    (askCoach.isError && !asking ? (askCoach.error as Error).message : null) ??
+    // By code, never by the throw's own message: an ask that failed on the provider used to
+    // print whatever the SDK said into the note card (lib/errors.ts).
+    (askCoach.isError && !asking ? readerLine(askCoach.error, 'The coach could not answer just now.') : null) ??
     // The one the old flow never had: the generate call that came back as nothing. It used
     // to leave the page on "Nothing planned yet" with no word of what happened, while the
     // plan sat finished on the server (field report 2026-09-02).
@@ -559,7 +562,9 @@ export function PlanSection() {
 
       {coach.error && !brief ? (
         <Card style={{ marginTop: 18 }}>
-          <Sub style={{ color: C.accent }}>{(coach.error as Error).message}</Sub>
+          <Sub style={{ color: C.accent }}>
+            {readerLine(coach.error, 'The coach could not answer just now.')}
+          </Sub>
           <View style={{ marginTop: 14, alignSelf: 'flex-start' }}>
             <Chip label="Try again" variant="primary" onPress={() => coach.refetch()} />
           </View>

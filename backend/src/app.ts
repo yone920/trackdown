@@ -7,6 +7,7 @@ import type { Auth } from "./auth.js";
 import { checkDatabase } from "./db/client.js";
 import { createRequireUser } from "./middleware/auth.js";
 import { beginTiming } from "./middleware/timing.js";
+import { isLlmError } from "./services/llmErrors.js";
 import type { CoachPort } from "./ports/coach.js";
 import type { ExerciseMediaStore } from "./ports/exerciseMedia.js";
 import type { EvidenceStore } from "./ports/storage.js";
@@ -53,6 +54,12 @@ export interface AppDeps {
 
 // Express 5 forwards rejected promises from async handlers to the error handler, so
 // routes can `await` without try/catch.
+/**
+ * What a bug in here says out loud. One sentence, no internals: the log has the real one,
+ * and the app renders its own copy for anything it does not recognise anyway.
+ */
+export const UNEXPECTED_MESSAGE = "Something went wrong on our end.";
+
 export function createApp({
 	pool,
 	auth,
@@ -121,14 +128,32 @@ export function createApp({
 	app.use(youRouter(pool, profileReadings));
 	app.use(coachRouter(pool, coach, readings));
 
+	// The last word on every failure, and the reason the field reports stopped.
+	//
+	// It used to echo `error.message` into the body. For an SDK error that message IS the
+	// provider's JSON — `400 {"type":"error","error":{"type":"invalid_request_error",
+	// "message":"Your credit balance is too low…"},"request_id":…}` — so a route that
+	// simply let a throw propagate (which Express 5 encourages: async rejections come
+	// here) published the provider's internals to a phone. Twice, with two different
+	// statuses (services/llmErrors.ts).
+	//
+	// Now: a model failure answers by CODE, and anything else answers with one fixed line.
+	// An unexpected 500 is a bug in here, and its message is for the log — a stack-adjacent
+	// sentence on a screen in a gym helps nobody and can carry anything.
 	app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 		const message = error instanceof Error ? error.message : String(error);
+		// The CORS refusal is this app's own sentence, and naming the origin is the point.
 		if (message.startsWith("Origin ")) {
 			res.status(403).json({ error: message });
 			return;
 		}
+		if (isLlmError(error)) {
+			console.error(`❌ unhandled llm failure: ${error.message}`);
+			res.status(error.status).json({ error: error.userMessage, code: error.code });
+			return;
+		}
 		console.error("Unhandled error:", error);
-		res.status(500).json({ error: message });
+		res.status(500).json({ error: UNEXPECTED_MESSAGE });
 	});
 
 	return app;

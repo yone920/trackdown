@@ -19,6 +19,7 @@ import { keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
 import { useScreenInsets } from '@/lib/screen';
 import { C, RADIUS, SPACE, TABULAR } from '@/lib/theme';
 import { sessionSpan, splitBySource } from '@/lib/training-groups';
+import { OFFLINE_MESSAGE } from '@/lib/errors';
 
 // TRAIN — the session, and nothing else (user decision 2026-09-01: each tab owns one verb).
 //
@@ -78,7 +79,7 @@ export default function Train() {
     return (
       <View style={{ flex: 1, backgroundColor: C.bg, padding: SPACE.screen, justifyContent: 'center' }}>
         <Disp size={26}>Could not reach the server</Disp>
-        <Sub style={{ marginTop: 8 }}>{(day.error as Error | null)?.message ?? 'No day to show.'}</Sub>
+        <Sub style={{ marginTop: 8 }}>{day.error ? OFFLINE_MESSAGE : 'No day to show.'}</Sub>
         <View style={{ marginTop: 18, alignSelf: 'flex-start' }}>
           <Chip label="Try again" variant="primary" onPress={onRefresh} />
         </View>

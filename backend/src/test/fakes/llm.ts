@@ -15,6 +15,13 @@ export interface FakeLlm extends LlmPort {
 	readonly outputs: unknown[];
 	/** Every request the code under test made, oldest first. */
 	readonly requests: LlmParseRequest<unknown>[];
+	/**
+	 * Set to make the next call throw — the provider-outage path, the way the CoachPort
+	 * fake already has one. Tests set the SDK's own error shape (a status, a nested
+	 * `error.type`, a `request_id`) so that what they exercise is the real translation
+	 * (adapters/llm/policy.ts), not a tidy Error nobody's provider throws.
+	 */
+	failNext: Error | null;
 }
 
 export function createFakeLlm(model = "fake-model"): FakeLlm {
@@ -25,7 +32,13 @@ export function createFakeLlm(model = "fake-model"): FakeLlm {
 		nextOutput: undefined,
 		outputs,
 		requests,
+		failNext: null,
 		async parseStructured(request) {
+			if (fake.failNext) {
+				const error = fake.failNext;
+				fake.failNext = null;
+				throw error;
+			}
 			// Recorded as the MODEL sees it: a prompt split for caching is still one prompt,
 			// and a test asserting on `system` is asking what the model was told — not how
 			// the bytes were divided for a cache breakpoint (ports/llm.ts §systemPrefix).

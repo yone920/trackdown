@@ -13,6 +13,7 @@ import {
   upload,
 } from './api';
 import { LOST_ANSWER_NOTE, pollForPlan } from './coach-recovery';
+import { readerLine } from './errors';
 import { rememberExercise } from './exercise-cache';
 import type {
   EatingView,
@@ -469,7 +470,9 @@ export function useStartWorkout() {
         // A refusal is a refusal: say it, and do not sit there polling for a plan that was
         // never going to be written. Only a lost or slow answer is worth waiting on.
         if (error instanceof ApiError) {
-          if (!gone.current) setNote(error.message);
+          // The refusal in the app's words, from the code the server sent — the server's
+          // own sentence used to go straight into the note (lib/errors.ts).
+          if (!gone.current) setNote(readerLine(error, 'The coach could not start that just now.'));
           return;
         }
       }

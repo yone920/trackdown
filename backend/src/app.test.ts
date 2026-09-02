@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import request from "supertest";
 import sharp from "sharp";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
 import { createAuth, type Auth } from "./auth.js";
 import { sweepUnlinkedEvidence } from "./services/evidence.js";
@@ -18,6 +18,7 @@ import { createFakeLlm } from "./test/fakes/llm.js";
 import { createFakeCoach, SAMPLE_BRIEF } from "./test/fakes/coach.js";
 import { createFakeExerciseMediaStore } from "./test/fakes/exerciseMedia.js";
 import { createFakeEvidenceStore } from "./test/fakes/storage.js";
+import { withErrorPolicy } from "./adapters/llm/policy.js";
 
 // End-to-end through Express + Better Auth + a real Postgres: the sign-up/sign-in flow the
 // app uses, then the CRUD the screens depend on, then free-text logging over a fake LlmPort.
@@ -31,8 +32,12 @@ const PASSWORD = "correct-horse-battery";
 // The fake LlmPort, not a fake parser: the real services/parseLog runs, so the prompt,
 // the schema and the route are all exercised — only the provider call is replaced.
 const llm = createFakeLlm();
-const parser = createLogParser(llm);
-const fusion = createFusionAnalyzer(llm);
+// Wrapped in the SAME policy the container wraps a real provider in
+// (adapters/llm/policy.ts), so a fake outage is translated exactly as a live one is and
+// these tests can assert on what a phone would actually receive. `llm` itself stays the
+// fake, so `nextOutput`, `requests` and `failNext` all still read through it.
+const parser = createLogParser(withErrorPolicy(llm, "fake"));
+const fusion = createFusionAnalyzer(withErrorPolicy(llm, "fake"));
 const store = createFakeEvidenceStore();
 // The illustrations behind GET /api/exercises/:id/media/:n. Imported for real by
 // scripts/import-exercise-media.ts; here the test puts two bytes in and reads them back.
@@ -40,7 +45,7 @@ const exerciseMedia = createFakeExerciseMediaStore();
 // The readings run on the coach model — a second port in production, so a second fake here:
 // sharing one would make a Today request eat the answer queued for the next parse.
 const coachLlm = createFakeLlm("fake-coach-model");
-const readings = createDayReadings(coachLlm);
+const readings = createDayReadings(withErrorPolicy(coachLlm, "fake"));
 // The You screen's dossier, on the same fake port as the day readings — in production both
 // run on the coach model, and the tests below count calls on it.
 const profileReadings = createProfileReadings(coachLlm);
@@ -2931,7 +2936,11 @@ describe("coach — a return after two weeks off", () => {
 		coach.failNext = new Error("ANTHROPIC_API_KEY is not set");
 		const res = await request(app).get(`/api/coach/next?tz=0`).set({ Authorization: `Bearer ${token}` });
 		expect(res.status).toBe(503);
-		expect(res.body.error).toContain("unavailable");
+		// By CODE now, not by the provider's sentence: the body used to append the first
+		// 160 characters of whatever was thrown (services/llmErrors.ts).
+		expect(res.body.code).toBe("reader_unavailable");
+		expect(res.body.error).toBe("The reader is down right now. Your words are kept — try again in a bit.");
+		expect(JSON.stringify(res.body)).not.toMatch(/ANTHROPIC_API_KEY|request_id|\{"type"/);
 	});
 
 	it("serves the last brief when the provider fails and there is one", async () => {
@@ -5697,5 +5706,106 @@ describe("correcting a doubted weigh-in", () => {
 
 		const after = await db.pool.query(`SELECT confidence FROM weight_logs WHERE id = $1`, [id]);
 		expect(after.rows[0].confidence).toBeNull();
+	});
+});
+
+// ── the reader's failures, as the phone receives them ────────────────────────────────
+//
+// Field reports 2026-09-02, two days running: first a 529 and then a credit-balance 400
+// were printed verbatim under the logger's input box, the second one *after* the 529 had
+// been humanised by name. The lesson is that naming statuses does not scale, so the policy
+// is a closed set of codes with a total function into it (services/llmErrors.ts), and this
+// block is the boundary held to it from the outside: **whatever the provider throws, the
+// response is a code and a sentence, on every route that can reach a model.**
+
+describe("a provider failure, on the wire", () => {
+	let auth: Record<string, string>;
+
+	/** How the Anthropic SDK throws: status on the object, its JSON in the message. */
+	const sdkError = (status: number, body: unknown) =>
+		Object.assign(new Error(`${status} ${JSON.stringify(body)}`), { status, request_id: "req_011CeewngNS13kwW7m9XwGy5" });
+
+	const CREDIT_400 = () =>
+		sdkError(400, {
+			type: "error",
+			error: { type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API." },
+		});
+
+	/** Nothing the provider said may appear in a body — prose, status, id or JSON. */
+	function expectNoProviderTrace(body: unknown): void {
+		const text = JSON.stringify(body);
+		expect(text).not.toMatch(/request_id|req_011|credit balance|invalid_request_error|overloaded_error|anthropic|"type":"error"/i);
+		expect(text).not.toMatch(/\b(400|401|429|500|529)\b/);
+		expect(text).not.toMatch(/fake-model|fake-coach-model/);
+	}
+
+	beforeEach(async () => {
+		const token = await signUp(`reader-${Math.random().toString(36).slice(2, 8)}@example.com`);
+		auth = { Authorization: `Bearer ${token}` };
+		llm.failNext = null;
+		coach.failNext = null;
+	});
+
+	it("answers an exhausted credit balance with a code and a human line, on the log route", async () => {
+		llm.failNext = CREDIT_400();
+		const res = await request(app).post("/api/parse-log").set(auth).send({ text: "barbell curl 3x10 at 50" });
+
+		expect(res.status).toBe(503);
+		expect(res.body).toEqual({
+			error: "The reader is down right now. Your words are kept — try again in a bit.",
+			code: "reader_unavailable",
+		});
+		expectNoProviderTrace(res.body);
+	});
+
+	it("answers the same way on the fusion route, which is where it was printed", async () => {
+		llm.failNext = CREDIT_400();
+		const res = await request(app).post("/api/log/analyze").set(auth).field("text", "three sets of ten");
+
+		expect(res.status).toBe(503);
+		expect(res.body.code).toBe("reader_unavailable");
+		expectNoProviderTrace(res.body);
+	});
+
+	it("still calls a busy provider busy — the distinction the user acts on", async () => {
+		llm.failNext = sdkError(529, { type: "error", error: { type: "overloaded_error", message: "Overloaded" } });
+		const res = await request(app).post("/api/log/analyze").set(auth).field("text", "three sets of ten");
+
+		expect(res.status).toBe(503);
+		expect(res.body).toEqual({
+			error: "The reader is busy right now — try again in a few seconds.",
+			code: "provider_overloaded",
+		});
+		expectNoProviderTrace(res.body);
+	});
+
+	it("calls an answer it could not use a failure, and never a 500 with a stack in it", async () => {
+		llm.failNext = new Error("fake-model returned no structured output (stop reason: max_tokens).");
+		const res = await request(app).post("/api/log").set(auth).send({ text: "barbell curl 3x10 at 50" });
+
+		expect(res.status).toBe(502);
+		expect(res.body).toEqual({ error: "That didn't get read. Nothing was lost — try again.", code: "reader_failed" });
+		expectNoProviderTrace(res.body);
+	});
+
+	it("says nothing about the provider on the coach route either", async () => {
+		coach.failNext = CREDIT_400();
+		const res = await request(app).get("/api/coach/next?tz=0").set(auth);
+
+		expect(res.status).toBe(503);
+		expect(res.body.code).toBe("reader_unavailable");
+		expectNoProviderTrace(res.body);
+	});
+
+	// The half of the promise that is about the user rather than about the provider: a
+	// failed read must not cost somebody the sentence they typed. Nothing is written on
+	// analyze, so the text is still theirs to send again.
+	it("keeps what was typed — a failed read writes nothing and loses nothing", async () => {
+		llm.failNext = CREDIT_400();
+		await request(app).post("/api/log/analyze").set(auth).field("text", "barbell curl 3x10 at 50");
+
+		const after = await request(app).post("/api/log/analyze").set(auth).field("text", "barbell curl 3x10 at 50");
+		// The next attempt is served normally: the failure consumed nothing but itself.
+		expect(after.status).not.toBe(503);
 	});
 });

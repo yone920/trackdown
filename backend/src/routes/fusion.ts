@@ -9,7 +9,7 @@ import { isAcceptedUploadMime, ACCEPTED_UPLOAD_MIMES } from "../services/images.
 import type { FusionAnalyzer, FusionPhoto } from "../services/fusion/analyze.js";
 import { buildFusionContext } from "../services/fusion/context.js";
 import { diffResults } from "../services/corrections.js";
-import { isOverloadError, OVERLOADED_CODE, OVERLOADED_MESSAGE } from "../services/providerErrors.js";
+import { sendLlmError } from "./llmError.js";
 import { checkWeighIn, type RecentWeights } from "../services/weightCheck.js";
 import { ConfirmBody, NothingToSaveError, confirmLog } from "../services/fusion/confirm.js";
 import { FusionResultSchema, MAX_PARTS, type FusionResult } from "../services/fusion/schema.js";
@@ -184,10 +184,12 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 			base64: s.image.data.toString("base64"),
 		}));
 
-		// A provider that is merely busy is weather, not a fault, and it must not reach the
-		// phone as the SDK's own JSON (field report 2026-09-02: a 529 with its request id
-		// was printed under the input box). It is already retried once at the transport
-		// layer; if it is still busy, it is one human line and a status the app can map.
+		// **Every** way the reader can fail ends here, not just the busy one. This used to
+		// re-throw anything that was not a 529, and the re-throw landed in the central
+		// handler, which published `error.message` — which is how a 400 saying "Your credit
+		// balance is too low" was printed under the input box the day after the 529 was
+		// humanised (field reports 2026-09-02, services/llmErrors.ts). A code and a human
+		// line, whatever went wrong; the provider's account of it goes to the log.
 		let results: FusionResult[];
 		let photoParts: number[];
 		try {
@@ -201,9 +203,7 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 			results = answer.results;
 			photoParts = answer.photoParts;
 		} catch (error) {
-			if (!isOverloadError(error)) throw error;
-			console.warn("⚠️  Reader busy, asking the user to try again:", describe(error));
-			res.status(503).json({ error: OVERLOADED_MESSAGE, code: OVERLOADED_CODE });
+			sendLlmError(res, error, revise ? "fusion.revise" : "fusion.analyze");
 			return;
 		}
 
@@ -289,13 +289,6 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 	});
 
 	return router;
-}
-
-/** The status and request id for the log; never for the user. */
-function describe(error: unknown): string {
-	const status = (error as { status?: unknown } | null)?.status ?? "?";
-	const requestId = (error as { request_id?: unknown } | null)?.request_id;
-	return requestId ? `${status} (${String(requestId)})` : String(status);
 }
 
 /**

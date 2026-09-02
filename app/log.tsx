@@ -17,7 +17,7 @@ import { EvidenceThumbs, LocalThumbs } from '@/components/evidence';
 import { IconCamera, IconClose, IconKeyboard, IconMic } from '@/components/icons';
 import { BigButton, Card, Chip, Chips, Skeleton, SkeletonLines } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
-import { ApiError, BUSY_MESSAGE, isBusyError } from '@/lib/api';
+import { readerLine } from '@/lib/errors';
 import {
   recordToResult,
   resultToPatch,
@@ -211,7 +211,7 @@ export default function LogSheet() {
       // A question stays on the say-it step: there is nothing to review yet.
       if (read.length > 0 && !question) setStep('review');
     } catch (caught) {
-      setError(readerError(caught, 'Could not read that.'));
+      setError(readerLine(caught, 'Could not read that.'));
     }
   };
 
@@ -241,7 +241,7 @@ export default function LogSheet() {
       setChanged(true);
       setStep('review');
     } catch (caught) {
-      setError(readerError(caught, 'Could not make that change.'));
+      setError(readerLine(caught, 'Could not make that change.'));
     }
   };
 
@@ -263,7 +263,7 @@ export default function LogSheet() {
       await askCoach.mutateAsync({ revision: line, mode: 'append' });
       router.back();
     } catch (caught) {
-      setError(readerError(caught, 'Could not adjust the plan.'));
+      setError(readerLine(caught, 'Could not adjust the plan.'));
     }
   };
 
@@ -317,7 +317,7 @@ export default function LogSheet() {
       await patch.mutateAsync({ kind: editKind, id: editId!, patch: body, instruction: told });
       router.back();
     } catch (caught) {
-      setError(readerError(caught, 'Could not save that change.'));
+      setError(readerLine(caught, 'Could not save that change.'));
     }
   };
 
@@ -347,7 +347,7 @@ export default function LogSheet() {
       if (keepOpen) reset();
       else router.back();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not save that.');
+      setError(readerLine(caught, 'Could not save that.'));
     }
   };
 
@@ -380,9 +380,12 @@ export default function LogSheet() {
         if (revising) void runRevise(final);
         else void runAnalyze(final, photos);
       },
-      onError: (message) => {
+      // The platform's own speech error is a developer string ("recognition_failed",
+      // "No speech input"): the user needs to know the app did not hear them, not what the
+      // recogniser called it.
+      onError: () => {
         setListening(false);
-        setError(message);
+        setError('Could not hear that — try again, or type it.');
       },
       onEnd: () => setListening(false),
     });
@@ -759,15 +762,4 @@ export default function LogSheet() {
   );
 }
 
-/**
- * What went wrong, in the user's language.
- *
- * A busy provider is the one failure this app hits that is nobody's fault and fixes itself,
- * so it gets its own sentence — and never the SDK's, which arrived on screen once as
- * `529 {"type":"error",...,"request_id":...}` under the input box (field report
- * 2026-09-02). The typed text is kept either way; it always was.
- */
-function readerError(caught: unknown, fallback: string): string {
-  if (isBusyError(caught)) return BUSY_MESSAGE;
-  return caught instanceof ApiError ? caught.message : fallback;
-}
+

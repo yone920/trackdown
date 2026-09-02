@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type { MessageParam, TextBlockParam, Usage } from "@anthropic-ai/sdk/resources/messages";
 import type { LlmMessage, LlmPort } from "../../ports/llm.js";
-import { isOverloadError } from "../../services/providerErrors.js";
+import { isOverloadError } from "../../services/llmErrors.js";
 
 // Claude behind LlmPort. `messages.parse` + `zodOutputFormat` is the SDK's structured-output
 // path: the schema goes out as the output format and comes back already parsed.

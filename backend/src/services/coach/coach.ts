@@ -27,6 +27,7 @@ import {
 	type RevisionMode,
 } from "./schema.js";
 import { buildRules, type CoachGoal, type NudgeAction, type TrainingBackground } from "./rules.js";
+import { classifyProviderError, type LlmErrorCode } from "../llmErrors.js";
 
 // The brief: gathering its inputs, caching it for the day, and storing it
 // (docs/concept-v2.md §Coach — "on demand … cached for the rest of the day so repeated
@@ -619,10 +620,18 @@ export interface NextBriefResult {
 }
 
 /** Thrown when there is no brief to serve at all — the route turns it into a 503. */
+/**
+ * No brief, and no way to make one. Carries the POLICY CODE alongside the detail: the
+ * route answers from the code, and the detail — which is the provider's own account and
+ * used to be interpolated into the 503 body — is for the log (services/llmErrors.ts).
+ */
 export class CoachUnavailableError extends Error {
-	constructor(message: string) {
+	readonly code: LlmErrorCode;
+
+	constructor(message: string, code: LlmErrorCode = "reader_failed") {
 		super(message);
 		this.name = "CoachUnavailableError";
+		this.code = code;
 	}
 }
 
@@ -835,7 +844,7 @@ async function chooseBrief(
 			console.warn(`⚠️  Coach could not answer for ${inputs.date}, serving the previous brief:`, describe(error));
 			return { brief: previous, inputs, stale: true, note: failureNote(error, instruction) };
 		}
-		throw new CoachUnavailableError(describe(error));
+		throw new CoachUnavailableError(describe(error), classifyProviderError(error));
 	}
 }
 
