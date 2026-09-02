@@ -26,7 +26,13 @@ export function createFakeLlm(model = "fake-model"): FakeLlm {
 		outputs,
 		requests,
 		async parseStructured(request) {
-			requests.push(request as LlmParseRequest<unknown>);
+			// Recorded as the MODEL sees it: a prompt split for caching is still one prompt,
+			// and a test asserting on `system` is asking what the model was told — not how
+			// the bytes were divided for a cache breakpoint (ports/llm.ts §systemPrefix).
+			const seen = request.systemPrefix
+				? { ...request, system: [request.systemPrefix, request.system].filter(Boolean).join("\n\n") }
+				: request;
+			requests.push(seen as LlmParseRequest<unknown>);
 			return request.schema.parse(outputs.length > 0 ? outputs.shift() : fake.nextOutput);
 		},
 	};

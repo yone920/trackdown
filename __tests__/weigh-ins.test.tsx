@@ -130,3 +130,36 @@ describe('the weigh-ins list', () => {
     await waitFor(() => expect(screen.getByTestId('weigh-ins-empty')).toBeTruthy());
   });
 });
+
+describe('a corrected weigh-in stops showing the old number', () => {
+  // Field report 2026-09-02: the correction saved (the record card showed 210 with its
+  // "weight 110 → 210" audit line) and this list went on reading 110. The mutation was
+  // invalidating day/week/goals/training — but not the weigh-ins list itself.
+
+  it('refetches the list after a delete, so the row actually leaves', async () => {
+    let rows: WeighIn[] = [
+      { id: 'w1', weight_lb: 110, logged_at: at(0), confidence: 'low' },
+      { id: 'w2', weight_lb: 212, logged_at: at(2) },
+    ];
+    mockApi.mockImplementation((path: string, options?: { method?: string }) => {
+      if (options?.method === 'DELETE') {
+        const gone = path.split('/').pop();
+        rows = rows.filter((row) => row.id !== gone);
+        return Promise.resolve(undefined);
+      }
+      if (path === '/api/weight') return Promise.resolve(rows);
+      return Promise.resolve(null);
+    });
+
+    renderList();
+    await waitFor(() => expect(screen.getByText('110.0 lb')).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId('row-weight-w1-delete'));
+    fireEvent.press(screen.getByTestId('row-weight-w1-delete-confirm'));
+
+    // The list is re-read and the stale row is gone — not merely absent from the server.
+    await waitFor(() => expect(screen.queryByText('110.0 lb')).toBeNull());
+    expect(screen.getByText('212.0 lb')).toBeTruthy();
+    expect(mockApi.mock.calls.filter(([path]) => path === '/api/weight').length).toBeGreaterThan(1);
+  });
+});

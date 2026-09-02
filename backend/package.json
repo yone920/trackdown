@@ -17,7 +17,8 @@
 		"import-exercise-media": "tsx src/scripts/import-exercise-media.ts",
 		"db:migrate-from-supabase": "tsx src/scripts/migrate-from-supabase.ts",
 		"reset-password": "tsx src/scripts/reset-password.ts",
-		"seed-demo": "tsx src/scripts/seed-demo.ts"
+		"seed-demo": "tsx src/scripts/seed-demo.ts",
+		"measure-cache": "tsx src/scripts/measure-cache.ts"
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.122.0",

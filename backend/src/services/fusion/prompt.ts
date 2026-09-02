@@ -213,15 +213,14 @@ function describeToday(context: FusionContext): string {
 	return lines.length > 0 ? bullet(lines) : "- nothing logged yet today";
 }
 
-function describeVocabulary(context: FusionContext): string {
+/**
+ * The half of the vocabulary that is the SAME for everybody: the catalogue and the two
+ * rules about reading a name off it. Split from the user's own recent spellings so the
+ * stable half can sit ahead of a cache breakpoint (ports/llm.ts §systemPrefix) — it is the
+ * single largest block in this prompt and it changes only when the catalogue does.
+ */
+function describeCatalogue(context: FusionContext): string {
 	const sections: string[] = [];
-	if (context.recentExercises.length > 0) {
-		sections.push(
-			`Exercises THIS user has logged recently (most recent first) — prefer these spellings:\n${bullet(
-				context.recentExercises
-			)}`
-		);
-	}
 	if (context.catalog.length > 0) {
 		const entries = context.catalog.map((e) =>
 			e.aliases.length > 0 ? `${e.name} (${e.aliases.join(", ")})` : e.name
@@ -237,6 +236,19 @@ function describeVocabulary(context: FusionContext): string {
 		"KEEP THE USER'S QUALIFIERS. Assisted, incline, decline, close-grip, wide-grip, single-arm, single-leg, seated, standing, smith, deficit, paused, banded and the like name a DIFFERENT movement — never drop one to reach a catalogue name, and never rename a variation to the plain version or to another variation. If the exact variation is not in the list above, keep the user's own phrase."
 	);
 	return sections.join("\n\n");
+}
+
+/** The half that is about THIS user: the spellings they have been using lately. */
+function describeRecentExercises(context: FusionContext): string {
+	if (context.recentExercises.length === 0) return "";
+	return `Exercises THIS user has logged recently (most recent first) — prefer these spellings:\n${bullet(
+		context.recentExercises
+	)}`;
+}
+
+/** Both halves, in the order they have always been read. Used where there is no caching. */
+function describeVocabulary(context: FusionContext): string {
+	return [describeRecentExercises(context), describeCatalogue(context)].filter(Boolean).join("\n\n");
 }
 
 function describeGoals(context: FusionContext): string {
@@ -567,7 +579,23 @@ proposed. Do not ask the question again, and do not return "unclear" a second ti
 the answer genuinely added nothing at all.`;
 }
 
-export function buildFusionSystemPrompt(context: FusionContext): string {
+/**
+ * The router prompt, in its two halves.
+ *
+ * `prefix` is everything that is the same for every log anybody ever makes — the routing
+ * rules, the evidence rules, the grouping and field rules, and the exercise catalogue. It
+ * is about 6,300 tokens and it is byte-identical from request to request, which is what
+ * makes it worth caching (ports/llm.ts §systemPrefix).
+ *
+ * `rest` is everything that is not: the clock, the day so far, this user's own recent
+ * spellings, their goals, the button they pressed, and the question they are answering.
+ *
+ * **The order changed; not one rule did.** The catalogue used to sit after the day's log
+ * and now sits before it, because a cache is a prefix match and a single volatile byte
+ * ahead of the boundary makes the whole thing a miss. Nothing was reworded, added or
+ * dropped in the move — `anthropic.fusion.contract.test.ts` is the gate on that.
+ */
+export function buildFusionSystemParts(context: FusionContext): { prefix: string; rest: string } {
 	const hint =
 		context.kindHint === null
 			? ""
@@ -575,7 +603,7 @@ export function buildFusionSystemPrompt(context: FusionContext): string {
 
 	const clarify = context.clarify ? `\n\n${clarifyBlock(context)}` : "";
 
-	return `${ROUTING}
+	const prefix = `${ROUTING}
 
 ${PARTS}
 
@@ -585,13 +613,23 @@ ${GROUPING}
 
 ${FIELDS}
 
-CONTEXT
+${describeCatalogue(context)}`;
+
+	const rest = `CONTEXT
 It is ${context.localTime} on ${context.localDate} in the user's timezone. Units: pounds and miles.
 
 Logged so far today:
 ${describeToday(context)}
 
-${describeVocabulary(context)}
+${describeRecentExercises(context)}
 
 ${describeGoals(context)}${hint}${clarify}`;
+
+	return { prefix, rest };
+}
+
+/** The whole router prompt as one string — what a provider without caching receives. */
+export function buildFusionSystemPrompt(context: FusionContext): string {
+	const { prefix, rest } = buildFusionSystemParts(context);
+	return `${prefix}\n\n${rest}`;
 }

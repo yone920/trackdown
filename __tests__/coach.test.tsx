@@ -1208,3 +1208,122 @@ describe('a generation whose answer is lost', () => {
     expect(mockApi.mock.calls.some(([path]) => path === '/api/coach/status')).toBe(false);
   });
 });
+
+// ── the Why folds once the session is under way ──────────────────────────────────────
+// User report 2026-09-02: "it looks stale after the workout". A paragraph about what the
+// morning was thinking reads badly next to work already logged. The Why never rewrites —
+// the sticky law holds and the words are identical either way. This is position only.
+
+describe('the Why card, before and during a session', () => {
+  const CHEST = '44444444-5555-4666-8777-888888888888';
+
+  function planWith(completion: unknown) {
+    const answer = next();
+    answer.brief.why = 'Back is five days since its last session.';
+    answer.brief.asked_at = '2026-08-30T07:27:00.000Z';
+    answer.brief.workout = {
+      type: 'strength',
+      targets: ['back'],
+      exercises: [
+        {
+          name: 'Lat Pulldown',
+          exercise_id: CHEST,
+          media_count: 0,
+          load_lb: 110,
+          sets: 3,
+          reps: 10,
+          minutes: null,
+          note: null,
+          ...(completion ? { completion } : {}),
+        },
+      ],
+      finisher: [],
+    } as never;
+    return answer;
+  }
+
+  const done = { done: true, sets_done: 3, sets_prescribed: 3, partial: false, records: [] };
+  const partial = { done: false, sets_done: 1, sets_prescribed: 3, partial: true, records: [] };
+
+  it('is fully open before anything has been done', async () => {
+    mockApi.mockResolvedValue(planWith(null));
+    renderCoach();
+
+    await screen.findByText('Pull day: back and shoulders');
+    expect(screen.getByTestId('coach-why-eyebrow')).toBeTruthy();
+    expect(screen.getByText(/Back is five days/)).toBeTruthy();
+    expect(screen.queryByTestId('coach-why-collapsed')).toBeNull();
+  });
+
+  it('folds to one line once a plan item is done, and says when it was written', async () => {
+    mockApi.mockResolvedValue(planWith(done));
+    renderCoach();
+
+    expect(await screen.findByTestId('coach-why-collapsed')).toBeTruthy();
+    // The paragraph is away, the timestamp is kept.
+    expect(screen.queryByText(/Back is five days/)).toBeNull();
+    expect(screen.getByText(/Why this plan · as of/)).toBeTruthy();
+  });
+
+  it('folds on a PARTIALLY done item too — the session has started either way', async () => {
+    mockApi.mockResolvedValue(planWith(partial));
+    renderCoach();
+    expect(await screen.findByTestId('coach-why-collapsed')).toBeTruthy();
+  });
+
+  it('expands again on a tap, with the same words it always had', async () => {
+    mockApi.mockResolvedValue(planWith(done));
+    renderCoach();
+
+    fireEvent.press(await screen.findByTestId('coach-why-collapsed'));
+    expect(screen.getByText('Back is five days since its last session.')).toBeTruthy();
+    expect(screen.queryByTestId('coach-why-collapsed')).toBeNull();
+  });
+
+  it('does not fold for off-plan work — that is not the plan starting', async () => {
+    // Something logged that the plan never asked for leaves the plan untouched.
+    const answer = planWith(null);
+    mockApi.mockImplementation((path: string) => {
+      if (path.startsWith('/api/day/')) {
+        return Promise.resolve(
+          makeDay({
+            items: {
+              meals: [],
+              weights: [],
+              activities: [
+                {
+                  id: 'a9',
+                  logged_at: '2026-08-30T12:00:00.000Z',
+                  description: 'walk',
+                  exercise: 'Walk',
+                  exercise_id: null,
+                  media_count: 0,
+                  equipment: null,
+                  category: 'cardio' as const,
+                  muscle_groups: [],
+                  sets: null,
+                  reps: null,
+                  load_lb: null,
+                  duration_min: 20,
+                  distance_mi: null,
+                  kcal: 90,
+                  source: 'manual' as const,
+                  confidence: 'high' as const,
+                  block_id: null,
+                  delta_vs_last: null,
+                  evidence: [],
+                },
+              ],
+            },
+          }),
+        );
+      }
+      return Promise.resolve(answer);
+    });
+    renderCoach();
+
+    await screen.findByText('Pull day: back and shoulders');
+    expect(screen.getByTestId('coach-why-eyebrow')).toBeTruthy();
+    expect(screen.queryByTestId('coach-why-collapsed')).toBeNull();
+  });
+});

@@ -4,7 +4,7 @@ import { checkMeal, discrepancyLine } from "./arithmetic.js";
 import type { FusionContext } from "./context.js";
 import { suggestRefinement } from "./refine.js";
 import {
-	buildFusionSystemPrompt,
+	buildFusionSystemParts,
 	buildGoalDetailSystemPrompt,
 	buildMealReconcilePrompt,
 	buildPartDetailSystemPrompt,
@@ -393,11 +393,17 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 		async analyze({ text, photos = [], context }) {
 			const messages = [{ role: "user" as const, content: buildFusionMessageContent(text, photos) }];
 
+			// Split so the rules and the catalogue — the same ~6,300 tokens on every log
+			// anybody makes — are cached, and only the day's own facts are re-read
+			// (ports/llm.ts §systemPrefix).
+			const routing = buildFusionSystemParts(context);
 			const answer = await llm.parseStructured({
-				system: buildFusionSystemPrompt(context),
+				systemPrefix: routing.prefix,
+				system: routing.rest,
 				schema: FusionRouteOutputSchema,
 				schemaName: FUSION_ROUTE_SCHEMA_NAME,
 				maxTokens: MAX_TOKENS,
+				label: "fusion.route",
 				messages,
 			});
 			const segments = usableSegments(answer.result, answer.more_kinds);

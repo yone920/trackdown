@@ -53,14 +53,40 @@ export function localDateKey(d: Date = new Date()): IsoDate {
   return `${y}-${m}-${day}`;
 }
 
-/** Everything a confirmed log can have changed. One list, so no screen goes stale. */
+/**
+ * Every query-key ROOT a log, a correction or a deletion can have changed.
+ *
+ * **The rule is that a correction invalidates everything that draws the corrected number**,
+ * and the way this list goes wrong is by omission: a new screen adds a query, nobody adds
+ * its root here, and that one surface quietly serves a stale value for ever. It happened —
+ * the Weigh-ins list read `['weight', …]`, which was not on this list, so a weigh-in
+ * corrected from 110 to 210 saved correctly, showed its audit line on the record card, and
+ * went on reading 110 on Progress (field report 2026-09-02).
+ *
+ * `you` is here because the dossier is written out of the profile, the goals and four weeks
+ * of logs: a stated constraint changes what it should say. The server still decides whether
+ * that is a new paragraph — it hashes its own inputs — so an invalidation costs a read and
+ * only sometimes a generation.
+ *
+ * `exercise` is deliberately absent and is the ONLY deliberate absence: the catalogue is
+ * the same for everybody and nothing a user logs changes it (queries.test.ts pins this, so
+ * the next omission fails a test rather than a screen).
+ */
+export const INVALIDATED_AFTER_LOG = [
+  'day',
+  'week',
+  'days',
+  'goals',
+  'profile',
+  'coach',
+  'training',
+  'you',
+  'eating',
+  'weight',
+] as const;
+
 export function invalidateAfterLog(qc: ReturnType<typeof useQueryClient>): void {
-  // `you` is on the list because the dossier is written out of the profile, the goals and
-  // four weeks of logs: a stated constraint changes what it should say. The server still
-  // decides whether that is a new paragraph — it hashes its own inputs — so an invalidation
-  // here costs a read and only sometimes a generation.
-  for (const key of ['day', 'week', 'days', 'goals', 'profile', 'coach', 'training', 'you', 'eating'])
-    qc.invalidateQueries({ queryKey: [key] });
+  for (const key of INVALIDATED_AFTER_LOG) qc.invalidateQueries({ queryKey: [key] });
 }
 
 // ---------------------------------------------------------------------------

@@ -10,7 +10,8 @@ import {
 import { bestCandidate, stem, suggestRefinement, tokens } from "./refine.js";
 import { carryForward, compactPart, segmentKindFor } from "./revise.js";
 import { localDay, type FusionContext } from "./context.js";
-import { buildFusionSystemPrompt, buildPartDetailSystemPrompt } from "./prompt.js";
+import { buildFusionSystemParts,
+	buildFusionSystemPrompt, buildPartDetailSystemPrompt } from "./prompt.js";
 import {
 	ActivitiesDetailOutputSchema,
 	FusionResultSchema,
@@ -1480,5 +1481,88 @@ describe("the photo-binding rules", () => {
 	it("does not put any of it on the activities call, which has no label to read", () => {
 		const prompt = buildPartDetailSystemPrompt(context, "activities");
 		expect(prompt).not.toContain("4 × protein + 4 × carbs + 9 × fat");
+	});
+});
+
+// ── the cache split ──────────────────────────────────────────────────────────────────
+// The prompt is divided so the unchanging part can be cached (ports/llm.ts §systemPrefix).
+// A cache is a PREFIX match, so the one thing that must never happen is a volatile byte
+// ahead of the boundary: it does not fail, it silently makes every request a miss.
+
+describe("the router prompt's cacheable prefix", () => {
+	it("contains the rules and the catalogue, which never vary by request", () => {
+		const { prefix } = buildFusionSystemParts(context);
+		expect(prefix).toContain("You are TrackDown's log reader");
+		expect(prefix).toContain("Exercise catalogue");
+		expect(prefix).toContain("KEEP THE IMPLEMENT THEY NAMED");
+		expect(prefix).toContain("GROUPING");
+	});
+
+	it("contains NOTHING that changes between two logs on the same day", () => {
+		const { prefix } = buildFusionSystemParts(context);
+		// The clock, the date, the day's own log, the user's recent spellings, their goals.
+		expect(prefix).not.toContain(context.localTime);
+		expect(prefix).not.toContain(context.localDate);
+		expect(prefix).not.toContain("Logged so far today");
+		expect(prefix).not.toContain("logged recently");
+		expect(prefix).not.toContain("Active goals");
+	});
+
+	it("is byte-identical for two different users on two different days", () => {
+		// The whole economic case in one assertion: if this ever stops being true, the
+		// prefix stops being read back and every request pays the write premium instead.
+		const other = {
+			...context,
+			localTime: "19:02",
+			localDate: "2027-01-14",
+			recentExercises: ["Zercher Squat"],
+			todayActivities: [],
+			todayMeals: [],
+			goals: [],
+		};
+		expect(buildFusionSystemParts(other).prefix).toBe(buildFusionSystemParts(context).prefix);
+	});
+
+	it("still hands the model every word it had before, in one prompt", () => {
+		// Moving text across the boundary must not lose any of it.
+		const { prefix, rest } = buildFusionSystemParts(context);
+		const whole = buildFusionSystemPrompt(context);
+		expect(whole).toContain(prefix);
+		expect(whole).toContain(rest);
+		for (const phrase of [
+			"ALWAYS LOG. BEST EFFORT.",
+			"Exercise catalogue",
+			"Logged so far today",
+			"KEEP THE USER'S QUALIFIERS",
+			"Units are POUNDS and MILES",
+		]) {
+			expect(whole).toContain(phrase);
+		}
+	});
+
+	it("clears the model's minimum once the real catalogue is in it", () => {
+		// **Haiku 4.5 will not cache a prefix under 4,096 tokens.** It does not error — it
+		// writes nothing and says nothing, which is the failure mode this test exists for.
+		//
+		// The rules alone are ~12,700 chars (~3,500 tokens) and would NOT clear that bar;
+		// the catalogue is what carries it over. So the check is made against a catalogue
+		// the size of the shipped one (148 entries), not the handful in the fixture.
+		const production = {
+			...context,
+			catalog: Array.from({ length: 148 }, (_, i) => ({
+				name: `Test Movement Number ${i}`,
+				aliases: [`alias ${i} one`, `alias ${i} two`],
+				category: "strength" as const,
+				primary_muscles: ["chest"],
+			})),
+		};
+		const chars = buildFusionSystemParts(production).prefix.length;
+		// ~3.6 chars per token, so 4,096 tokens is roughly 14,750 characters.
+		expect(chars / 3.6).toBeGreaterThan(4_096);
+
+		// And the rules on their own would not have been enough — worth knowing if the
+		// catalogue ever moves out of this prompt.
+		const bare = buildFusionSystemParts({ ...context, catalog: [] });
+		expect(bare.prefix.length / 3.6).toBeLessThan(4_096);
 	});
 });

@@ -87,6 +87,99 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-02 — cache what repeats, and only what repeats (`feat-prompt-caching`)
+
+Three items: prompt caching, the Why card folding once a session starts, and a stale list
+that was hiding a correction from the person who made it.
+
+#### The correction the user could not see
+
+They corrected the weigh-in — 110 → 210 — and the record card showed it, audit line and
+all. The **Weigh-ins list went on saying 110.**
+
+`invalidateAfterLog` listed nine query roots. The list reads `['weight', …]`, which was not
+one of them. So the write succeeded, every screen that draws from `day`/`goals`/`training`
+refreshed, and the one screen showing the row itself served cache for ever.
+
+The fix is one entry. **The guard is the interesting part**: `__tests__/queries.test.ts`
+reads `lib/queries.ts`, extracts every query-key root the app registers, and fails if one is
+neither invalidated nor listed as deliberately static (only `exercise` is — the catalogue is
+the same for everybody). The failure mode here is *a key nobody thought about*, and no
+amount of testing the keys we did think about would have caught it. Audited the analogous
+surfaces for meals and activities while there: those were already covered, because
+everything that draws them reads `day`, `eating`, `training` or `goals`.
+
+#### Prompt caching — measured, and mostly declined
+
+The bill said the org's cache hit rate was low. The instinct is to mark every prompt
+cacheable; the arithmetic says otherwise, and **the arithmetic is model-specific**: a cache
+write costs 1.25× and a read 0.1×, and a prefix shorter than the model's minimum silently
+caches *nothing* — no error, no warning, just a bill.
+
+| Call shape | Model (minimum) | Static prefix | Decision |
+|---|---|---|---|
+| **fusion router** | Haiku 4.5 (4,096) | **6,744 tok** | **cached** |
+| fusion detail | Haiku 4.5 (4,096) | ~4,000 tok | left alone — straddles the floor, would fail silently |
+| readings | Sonnet 4.5 (1,024) | 548 tok | left alone — under the floor |
+| coach | Sonnet 4.5 (1,024) | 1,666 tok | left alone — see below |
+
+**The router is cached, and it is the one that repeats.** `buildFusionSystemParts` splits the
+prompt at the boundary between what never varies — the routing, evidence, grouping and field
+rules, plus the 148-entry exercise catalogue — and what varies every time: the clock, the
+day's log, this user's recent spellings, their goals. **The catalogue moved ahead of the
+day's log**, because a cache is a prefix match and one volatile byte in front of the
+breakpoint makes the whole thing a miss. Not a word of any rule changed in the move, and the
+contract suite is the gate on that: **20/20 against the real API**, the flake included.
+
+Measured against the live API, three identical calls a second apart:
+
+```
+prefix 23,392 chars (~6,744 tok)   rest 320 chars (~104 tok)
+#1  read 0      wrote 6,744   uncached 104
+#2  read 6,744  wrote 0       uncached 104
+#3  read 6,744  wrote 0       uncached 104
+```
+
+Every router call after the first pays ~778 effective input tokens instead of 6,848 —
+**about 89% off** — and profits from the second call within the TTL onward.
+
+**The coach is deliberately NOT cached, and that is the finding worth keeping.** Its static
+block is 1,666 tokens, comfortably over Sonnet's floor, so it *could* be. But a coach brief
+is generated once a day and the TTL is five minutes: caching it would pay the 1.25× write on
+the one guaranteed call and read it back on none. That is +417 tokens of pure surcharge on
+the common path, to win only if a user happens to adjust twice within five minutes. Readings
+lose for a different reason — at 548 tokens they are under Sonnet's minimum and would cache
+nothing at all while looking like they had.
+
+**Kept single-layer**, like the retry work: `systemPrefix` is a provider-neutral fact about
+the prompt ("this part does not vary"), the Anthropic adapter turns it into a `cache_control`
+breakpoint, and the OpenAI adapter is untouched — it concatenates and sends exactly what it
+sent before. And it is **instrumented**: every call logs `read / wrote / uncached` beside the
+existing Server-Timing, because the costliest caching failure is the silent one — requests
+keep succeeding and the bill is merely higher. `npm run measure-cache` reproduces the numbers
+above on demand.
+
+#### The Why card folds once you start
+
+> it looks stale after the workout
+
+Before the session begins the reasoning is the point — a plan you have not begun is a claim,
+and its grounds are what you read it against. Once **any** plan item is done or part-done the
+work leads: the training card moves to the top and the Why folds to one tappable line, *"Why
+this plan · as of 7:27a"*, expanding inline on a tap.
+
+The Why still **never rewrites** — the sticky law holds, the words are identical either way.
+This is position, not generation. Off-plan work does not fold it: something the plan never
+asked for is not the plan starting.
+
+**Verified** — backend **758 → 763**, app **410 → 420** across **31 suites**. New: the cache
+split (the prefix holds the rules and the catalogue, contains nothing that varies between two
+logs on the same day, is byte-identical across two users on two different days, loses no text
+in the move, and clears Haiku's floor only once a production-sized catalogue is in it); the
+invalidation guard; the weigh-ins list refetching after a correction; and the Why folding on a
+done item, on a part-done item, expanding on tap, and staying open for off-plan work.
+Contract suite **20/20**.
+
 ### 2026-09-02 — the weigh-ins had nowhere to be (`fix-weigh-in-surface`)
 
 A gap **we made**. When Today's Body section came off in the Train / Eat / Home restructure,

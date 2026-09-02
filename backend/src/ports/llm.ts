@@ -25,6 +25,20 @@ export interface LlmMessage {
 export interface LlmParseRequest<Output> {
 	/** System prompt. Kept out of `messages` because both providers pass it separately. */
 	system?: string;
+	/**
+	 * The leading part of the system prompt that is IDENTICAL from request to request —
+	 * instructions and reference data, with nothing about this user, this day or this clock
+	 * in it. Rendered ahead of `system`; the two concatenated are the whole prompt.
+	 *
+	 * Provider-neutral on purpose: "this prefix is stable" is a fact about the prompt, not
+	 * about a vendor. A provider that can exploit it (Anthropic caches it) does; one that
+	 * cannot simply concatenates, and the request is byte-identical to what it was before.
+	 *
+	 * The contract a caller must keep: **nothing volatile may appear in here.** A date, a
+	 * name or a count in the prefix does not fail — it silently makes every request a cache
+	 * miss, which is the expensive kind of wrong (services/fusion/prompt.ts keeps the split).
+	 */
+	systemPrefix?: string;
 	messages: LlmMessage[];
 	schema: z.ZodType<Output>;
 	/**
@@ -34,6 +48,8 @@ export interface LlmParseRequest<Output> {
 	schemaName: string;
 	/** @default 1024 */
 	maxTokens?: number;
+	/** Names this call shape in the cache log ("fusion.route", "coach.brief"). */
+	label?: string;
 }
 
 export interface LlmPort {

@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
-import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
+import type { MessageParam, TextBlockParam, Usage } from "@anthropic-ai/sdk/resources/messages";
 import type { LlmMessage, LlmPort } from "../../ports/llm.js";
 import { isOverloadError } from "../../services/providerErrors.js";
 
@@ -68,6 +68,48 @@ function describeStatus(error: unknown): string {
 	return requestId ? `${status} (${String(requestId)})` : String(status);
 }
 
+/**
+ * The system prompt, as one or two blocks.
+ *
+ * With a stable prefix it becomes TWO text blocks and the first carries
+ * `cache_control: {type: "ephemeral"}` — a breakpoint at the boundary between what never
+ * changes (instructions, the exercise catalogue) and what changes every request (the clock,
+ * today's log, this user's goals). Caching is a PREFIX match, so the order is the whole
+ * mechanism: one volatile byte ahead of the breakpoint and nothing after it is ever read
+ * back.
+ *
+ * Without a prefix it is the plain string it always was — no marker, no write premium.
+ * Marking a prompt that is not reused is a pure surcharge: a write costs ~1.25x and a read
+ * ~0.1x, so a prefix needs a second request within the TTL merely to break even.
+ */
+function systemParam(prefix: string | undefined, rest: string | undefined) {
+	if (prefix === undefined || prefix === "") return rest === undefined ? {} : { system: rest };
+	const blocks: TextBlockParam[] = [
+		{ type: "text", text: prefix, cache_control: { type: "ephemeral" } },
+		...(rest === undefined || rest === "" ? [] : [{ type: "text" as const, text: rest }]),
+	];
+	return { system: blocks };
+}
+
+/**
+ * What the cache actually did, per call. **Measured, never assumed** — the costliest
+ * caching failure is silent: requests keep succeeding and the bill is merely higher, with
+ * nothing to announce it. `cache_read_input_tokens` stuck at zero across repeated requests
+ * means a volatile byte has crept ahead of the breakpoint.
+ *
+ * `input_tokens` is only the UNCACHED remainder, so the prompt's real size is the sum of
+ * all three — a small `input_tokens` on its own means nothing.
+ */
+function reportCache(model: string, label: string | undefined, usage: Usage | null | undefined): void {
+	if (!usage) return;
+	const read = usage.cache_read_input_tokens ?? 0;
+	const written = usage.cache_creation_input_tokens ?? 0;
+	if (read === 0 && written === 0) return;
+	console.info(
+		`🧠 cache ${label ?? "call"} (${model}): read ${read}, wrote ${written}, uncached ${usage.input_tokens}`
+	);
+}
+
 export function createAnthropicLlm({ apiKey, model, workspaceId }: AnthropicLlmOptions): LlmPort {
 	const client = new Anthropic({
 		apiKey,
@@ -76,16 +118,17 @@ export function createAnthropicLlm({ apiKey, model, workspaceId }: AnthropicLlmO
 
 	return {
 		model,
-		async parseStructured({ system, messages, schema, maxTokens = 1024 }) {
+		async parseStructured({ system, systemPrefix, messages, schema, maxTokens = 1024, label }) {
 			const response = await retryOnceIfBusy(() =>
 				client.messages.parse({
 					model,
 					max_tokens: maxTokens,
-					...(system === undefined ? {} : { system }),
+					...systemParam(systemPrefix, system),
 					messages: messages.map(toMessageParam),
 					output_config: { format: zodOutputFormat(schema) },
 				})
 			);
+			reportCache(model, label, response.usage);
 			if (response.parsed_output == null) {
 				throw new Error(
 					`${model} returned no structured output (stop reason: ${response.stop_reason ?? "unknown"}).`
