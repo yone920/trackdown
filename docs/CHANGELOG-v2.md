@@ -83,6 +83,98 @@ half-lived today.
 
 ---
 
+## Progress, as a scoreboard (`wp-scoreboard-page`)
+
+**2026-09-02.** User-approved from a reviewed mockup ("go ahead implement"). The Progress
+page is now **one screenful of live facts with no required scrolling**: seven compact tiles,
+each carrying its section's most important computed fact, each a door to the screen that
+holds the rest. If the user never taps anything, the page alone says how they are doing.
+
+What it replaces: the same page with everything open on it — the whole goal card, the six
+lift cards and their sparklines, the weigh-in rows, two full-width body figures, the cardio
+breakdown, the sessions-a-week bars and the entire days archive, in that order, several
+screens deep. Nobody reached the bottom of it.
+
+**Nothing was deleted.** This is hierarchy surgery: every feature survives behind its door,
+and `__tests__/progress-doors.test.tsx` is the proof — almost every assertion in it was a
+Progress-tab assertion before the rebuild, moved and otherwise untouched.
+
+**The rows**, top to bottom: the goal (ring, measure, dated last move) · the body (sparkline
+drawn on the row, "210.4 lb today · trend −0.8 lb / wk") · strength (a news line computed
+from the progression engine's own states, plus up to two movers with their prescription) ·
+coverage ("3 of 12 served · quiet: calves, core" and twelve muscle chips) · cardio
+(equivalent minutes against the target, the next prescription, a 5 px bar) · the last three
+days. Title row keeps the date eyebrow and the avatar door to You.
+
+**Where everything went**
+
+| Was on the page | Is now behind |
+|---|---|
+| goal card, readings trio, chart, Mark reached / Drop, reorder, history | `app/progress/goal.tsx` |
+| weight line, weigh-in rows (tap to correct, ✕ to delete) | `app/progress/body.tsx` |
+| the six live lifts, "All lifts" | `app/progress/strength.tsx` |
+| stacked figures, legend, overdue list, sessions-a-week bars | `app/progress/coverage.tsx` |
+| equivalent minutes, provenance, breakdown, pace, activity rows | `app/progress/cardio.tsx` |
+| the days archive | `app/days.tsx` (a real screen again, not a redirect) |
+
+**The figure got a better home.** Two full-width bodies cost most of a screen to say "the
+back of you is grey"; twelve chips say it in four lines. Tapping a chip opens the drawing
+**zoomed on that muscle, over the dimmed page**, with the facts the old tap-detail could only
+fit into one sentence: the band, when it was last trained and by what, and every exercise on
+the board feeding it (`components/progress/muscle-sheet.tsx`).
+
+**New**
+
+- `lib/scoreboard.ts` — every fact on every row, as arithmetic: `goalRow`/`goalDelta`,
+  `bodyRow`, `strengthRow`/`movers`, `coverageRow`, `muscleFacts`/`fedBy`, `cardioRow`,
+  `daysRow`/`daysHeadline`. Pure, and tested without a renderer, the way
+  `lib/progress-sections.ts` and `lib/body-map.ts` already were. Nothing in the screens
+  decides what a number means.
+- `components/progress/` — one file per row (`goal-tile`, `body-tile`, `strength-tile`,
+  `coverage-tile`, `cardio-tile`, `days-tile`), plus the shared `tile.tsx` (14 px radius,
+  15 px padding, 10 px gaps — the 20/18 `Card` is too loose to stack seven of), the
+  `muscle-sheet` popup and `detail-screen.tsx`, the shell all six rooms are built in.
+- Five routes under `app/progress/*`, registered in `app/_layout.tsx`, plus `days`.
+
+**Decisions**
+
+- **Movers are deterministic**: kind (`step_up` → `new`/`reference` → `step_down`/
+  `ease_back`/`restart`), then most recently trained, then the name. A `hold` is not news,
+  which is why the row shows two movers and not six rows of "holding".
+- **The step is an arrow only on a resistance lift** — "55 → 50 lb" on an assisted machine
+  reads like a step down, so those keep the prescription's own sentence.
+- **The delta on the goal row is computed from the weigh-ins, not from the goal's series**:
+  that series is a 7-day average, and "−1.6 lb since Mon, Aug 24" is a claim about what the
+  scale read. The page reads `GET /api/goals/:id/progress` for the primary goal — the same
+  query the screen behind the row uses, so react-query serves them one result.
+- **Chip colour is the ledger's three answers**: in the band (good), served but under it
+  (accent), never seen or owed a turn (dim). Same input as the figure, so the two cannot
+  disagree.
+- Cardio is hidden entirely when there is none and no goal asked for any — a row of zeroes
+  is the app inventing a shortfall.
+- The sessions-a-week bars went behind Coverage rather than Strength: they were always the
+  other half of that section.
+
+**Tests** — app suite 456 (was 420): `__tests__/scoreboard.test.ts` new (20, the arithmetic),
+`__tests__/progress.test.tsx` rewritten to the scoreboard contract (20 — seven rows drawn,
+nothing opened in place, every door, the chip popup, an empty account),
+`__tests__/progress-doors.test.tsx` new (28, the ported detail-screen behaviour).
+`__tests__/one-today.test.tsx` updated: the day rows moved to `day-row-<date>`, and `/days`
+is asserted as the archive rather than as a redirect. The board fixtures moved to
+`__tests__/fixtures.ts` so the page and its doors read one board.
+
+**Deferred / uncertain**
+
+- `__tests__/home.test.tsx` "says the day and its verdict once something has happened" fails
+  on `migrate-off-supabase` **before** this branch — a date-dependent `getByText(/12/)` that
+  matches twice on 2026-09-02. Left alone: it is not this WP's, and fixing it silently would
+  hide it.
+- The backend suite's Anthropic contract tests fail with `400 … credit balance is too low`
+  — an account condition, not a code one. Nothing in this WP touches the backend.
+- The muscle popup's "Fed by" matches the ledger key against the catalogue's own muscle
+  words on a normalised form (`upper_back` ≈ "upper back"). A lift the catalogue could not
+  label feeds nothing, and says so.
+
 ## Field fixes
 
 Real logs, from the phone, that the build plan had not imagined.

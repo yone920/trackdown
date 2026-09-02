@@ -72,13 +72,13 @@ describe('the Days list', () => {
     });
   }
 
-  it("sends today's row to the Today tab, not to a second copy of today", async () => {
+  it("sends today's row to the Train tab, not to a second copy of today", async () => {
     const today = todayKey();
     serveDays([makeDayRow({ date: today, is_today: true })]);
     wrap(<Progress />);
 
-    await waitFor(() => expect(screen.getByTestId(`day-${today}`)).toBeTruthy());
-    fireEvent.press(screen.getByTestId(`day-${today}`));
+    await waitFor(() => expect(screen.getByTestId(`day-row-${today}`)).toBeTruthy());
+    fireEvent.press(screen.getByTestId(`day-row-${today}`));
     expect(mockPush).toHaveBeenCalledWith('/train');
     expect(mockPush).not.toHaveBeenCalledWith(`/day/${today}`);
   });
@@ -87,8 +87,8 @@ describe('the Days list', () => {
     serveDays([makeDayRow({ date: '2026-08-29', is_today: false })]);
     wrap(<Progress />);
 
-    await waitFor(() => expect(screen.getByTestId('day-2026-08-29')).toBeTruthy());
-    fireEvent.press(screen.getByTestId('day-2026-08-29'));
+    await waitFor(() => expect(screen.getByTestId('day-row-2026-08-29')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('day-row-2026-08-29'));
     expect(mockPush).toHaveBeenCalledWith('/day/2026-08-29');
   });
 });
@@ -115,12 +115,21 @@ describe('a deep link to /day/<today>', () => {
   });
 });
 
-describe('Days, folded into Progress', () => {
-  // User decision 2026-09-01: five tabs, not six — the list of closed days is a section of
-  // Progress rather than a destination of its own. Every row, verdict and tap survived.
-  it('redirects /days to Progress — no dead route', () => {
-    render(<DaysRoute />);
-    expect(mockRedirect).toHaveBeenCalledWith('/progress');
+describe('Days, behind the Progress scoreboard', () => {
+  // Days was a tab, then a section at the top of Progress, and since 2026-09-02 it is the
+  // archive behind that page's three-day row. The route is real again, and every row,
+  // verdict and tap is still the Days list's own (components/days-list.tsx).
+  it('is the whole archive, and never a redirect', async () => {
+    mockApi.mockImplementation((path: string) => {
+      if (String(path).startsWith('/api/days'))
+        return Promise.resolve({ days: [makeDayRow({ date: '2026-08-29' })], next_before: null });
+      if (path === '/api/week') return Promise.resolve(makeWeek());
+      return Promise.resolve(null);
+    });
+    wrap(<DaysRoute />);
+
+    await waitFor(() => expect(screen.getByTestId('day-2026-08-29')).toBeTruthy());
+    expect(mockRedirect).not.toHaveBeenCalled();
   });
 });
 

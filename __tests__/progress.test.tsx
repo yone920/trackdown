@@ -1,14 +1,21 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
 import Progress from '@/app/(tabs)/progress';
-import type { BoardCardioRow, TrainingBoard } from '@/lib/types';
-import { makeGoal, makeMetric, makeWeek } from './fixtures';
+import type { TrainingBoard } from '@/lib/types';
+import { EMPTY_BOARD, makeBoard, makeDayRow, makeGoal, makeMetric, makeWeek } from './fixtures';
 
-// The merged Progress tab (user decision 2026-08-31): "what am I chasing and where do I
-// stand", with training first class. Goals used to be a tab of its own and the lifts were
-// on neither screen.
+// Progress, as a SCOREBOARD (user decision 2026-09-02, from a reviewed mockup).
+//
+// The contract this file holds the page to:
+//
+//   1. Seven rows, each carrying a computed fact — the page alone says how you are doing.
+//   2. **Nothing is open on it.** No body figure, no lift cards, no weigh-in rows, no days
+//      archive, no cardio breakdown. Those all still exist, one tap away, and the file that
+//      checks they survived is progress-doors.test.tsx.
+//   3. Every row is a door, and the doors go where they say.
+//   4. A tap on a muscle chip opens the figure over the page, with that muscle's facts.
 
 const mockApi = jest.fn();
 jest.mock('@/lib/api', () => ({
@@ -40,211 +47,65 @@ jest.mock('@/lib/auth', () => ({
 /**
  * The figure, stubbed: `react-native-body-highlighter` draws SVG paths, and a test that
  * asserted on path data would be asserting on the package rather than on us. What is ours
- * is the *data* handed to it — one entry per slug with the colour and the stroke the ledger
- * decided — and the tap it reports back. So the stub renders one pressable per part,
- * carrying exactly that.
+ * is the *data* handed to it — the slugs of the muscle that was tapped, in the ledger's
+ * colours — so the stub renders one node per part carrying exactly that.
  */
 jest.mock('react-native-body-highlighter', () => {
-  const { Pressable } = require('react-native');
+  const { View } = require('react-native');
   const ReactModule = require('react');
   return {
     __esModule: true,
-    default: ({ data, side, onBodyPartPress }: any) =>
+    default: ({ data, side }: any) =>
       ReactModule.createElement(
-        Pressable,
+        View,
         { testID: `figure-${side}` },
         data.map((part: any) =>
-          ReactModule.createElement(Pressable, {
+          ReactModule.createElement(View, {
             key: part.slug,
             testID: `part-${side}-${part.slug}`,
             accessibilityLabel: `${part.slug} ${part.styles.fill} ${part.styles.stroke}`,
-            onPress: () => onBodyPartPress(part),
           }),
         ),
       ),
   };
 });
 
-const BENCH = {
-  exercise: 'Bench Press',
-  exercise_id: 'ex-bench',
-  media_count: 2,
-  category: 'strength' as const,
-  muscle_groups: ['chest', 'triceps'],
-  load_direction: 'resistance' as const,
-  load_lb: 135,
-  sets: 3,
-  reps: 8,
-  load_text: '135 lb',
-  last_date: '2026-08-30',
-  days_since: 1,
-  sessions: 3,
-  best_load_lb: 135,
-  trend: 'up' as const,
-  trend_lb: 5,
-  delta_text: '+5 lb in four weeks',
-  sentiment: 'good' as const,
-  series: [
-    { date: '2026-08-16', load_lb: 130, sets: 3, reps: 8 },
-    { date: '2026-08-23', load_lb: 135, sets: 3, reps: 8 },
-    { date: '2026-08-30', load_lb: 135, sets: 3, reps: 8 },
-  ],
-  next: {
-    rule: 'hold' as const,
-    load_lb: 135,
-    sets: 3,
-    reps: 8,
-    text: 'Hold 135 lb until 3 × 8 twice',
-    eta: '~1–2 wks',
-    why: '1 of 2 sessions at target reps.',
-  },
-};
+/** The day the fixtures are written around, as `localDateKey()` reads the device clock. */
+function todayKey(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
 
-const CHIN = {
-  ...BENCH,
-  exercise: 'Assisted Chin-Up',
-  exercise_id: 'ex-chin',
-  load_direction: 'assistance' as const,
-  load_lb: 55,
-  load_text: '55 lb of assistance',
-  trend_lb: -5,
-  trend: 'down' as const,
-  delta_text: '5 lb less help',
-  sentiment: 'good' as const,
-  next: {
-    rule: 'step_up' as const,
-    load_lb: 50,
-    sets: 3,
-    reps: 10,
-    text: '50 lb of assistance next — one step less help',
-    eta: null,
-    why: 'Two sessions at target.',
-  },
-};
-
-/** The field report's own row: it used to be drawn between BENCH and CHIN. */
-const WALK: BoardCardioRow = {
-  exercise: 'Incline Treadmill Walk',
-  exercise_id: 'ex-walk',
-  // A treadmill is one of the movements free-exercise-db has no picture of: tappable,
-  // and honest about having nothing to show.
-  media_count: 0,
-  category: 'cardio',
-  last_date: '2026-08-30',
-  days_since: 1,
-  sessions: 4,
-  duration_min: 20,
-  distance_mi: 1.2,
-  pace_min_mi: 16.67,
-  best_pace_min_mi: 15.5,
-  summary_text: '20 min · 1.2 mi · 16.7 min/mi',
-  delta_text: '+5 min in four weeks',
-  sentiment: 'neutral',
-  series: [
-    { date: '2026-08-23', duration_min: 15, distance_mi: 0.9, pace_min_mi: 16.67 },
-    { date: '2026-08-30', duration_min: 20, distance_mi: 1.2, pace_min_mi: 16.67 },
-  ],
-  next: {
-    rule: 'cardio',
-    minutes: 22,
-    text: '22 min next',
-    eta: null,
-    why: '30 of 150 min this week, 120 short.',
-  },
-};
-
-/**
- * The coverage ledger, as the server sends it: chest worked hard this week, biceps lightly,
- * core three weeks ago and overdue, calves never seen at all.
- */
-const COVERAGE = [
-  { key: 'calves', label: 'calves', days_since: null, last_date: null, sets_7d: 0, sets_14d: 0, sets_28d: 0, unit: 'sets' as const, overdue: true },
-  { key: 'core', label: 'core', days_since: 21, last_date: '2026-08-10', sets_7d: 0, sets_14d: 0, sets_28d: 3, unit: 'sets' as const, overdue: true },
-  { key: 'chest', label: 'chest', days_since: 1, last_date: '2026-08-30', sets_7d: 12, sets_14d: 18, sets_28d: 18, unit: 'sets' as const, overdue: false },
-  { key: 'biceps', label: 'biceps', days_since: 5, last_date: '2026-08-26', sets_7d: 3, sets_14d: 6, sets_28d: 9, unit: 'sets' as const, overdue: false },
-];
-
-function makeBoard(overrides: Partial<TrainingBoard> = {}): TrainingBoard {
-  return {
-    date: '2026-08-31',
-    lifts: [BENCH, CHIN],
-    frequency: {
-      weeks: [
-        { start: '2026-08-10', sessions: 1 },
-        { start: '2026-08-17', sessions: 3 },
-        { start: '2026-08-24', sessions: 2 },
-      ],
-      sessions_this_week: 2,
-      average_per_week: 0.8,
-      training_days_target: 4,
-      muscles: [
-        { muscle: 'chest', sets_7d: 6, sets_28d: 18 },
-        { muscle: 'triceps', sets_7d: 3, sets_28d: 9 },
-      ],
-      coverage: COVERAGE,
-    },
-    cardio: {
-      weeks: [
-        { start: '2026-08-17', minutes: 60 },
-        { start: '2026-08-24', minutes: 30 },
-      ],
-      minutes_this_week: 30,
-      equiv_minutes_this_week: 50,
-      weekly_target_min: 150,
-      short_by_min: 100,
-      equiv_text: '20 brisk + 15 run×2',
-      alternatives_text: '100 moderate min or 50 hard',
-      target_source: 'default' as const,
-      breakdown: [
-        { exercise: 'Incline Treadmill Walk', intensity: 'moderate' as const, multiplier: 1, minutes: 20, equiv_minutes: 20 },
-        { exercise: 'Run', intensity: 'vigorous' as const, multiplier: 2, minutes: 15, equiv_minutes: 30 },
-      ],
-      intensity_mix: [
-        { intensity: 'moderate' as const, minutes: 20, equiv_minutes: 20 },
-        { intensity: 'vigorous' as const, minutes: 15, equiv_minutes: 30 },
-      ],
-      last: { date: '2026-08-29', pace_min_mi: 10.2, distance_mi: 3 },
-      best: { date: '2026-08-20', pace_min_mi: 9.4, distance_mi: 2 },
-      activities: [WALK],
-      target_stated: false,
-    },
-    body: {
-      latest: 210.4,
-      latest_date: '2026-08-31',
-      avg_7d: 210.9,
-      trend_per_week: -0.8,
+const weightGoal = () => ({
+  ...makeGoal('lose_fat', [
+    makeMetric({
+      measure: 'body_weight',
+      unit: 'lb',
+      direction: 'decrease',
+      target: 200,
+      current: 210.4,
+      baseline: 212,
+      percent: 0.13,
       series: [
         { date: '2026-08-24', value: 212 },
         { date: '2026-08-31', value: 210.4 },
       ],
-    },
-    ...overrides,
-  };
-}
-
-const EMPTY_BOARD = makeBoard({
-  lifts: [],
-  frequency: { weeks: [{ start: '2026-08-24', sessions: 0 }], sessions_this_week: 0, average_per_week: 0, training_days_target: null, muscles: [], coverage: [] },
-  cardio: {
-    weeks: [{ start: '2026-08-24', minutes: 0 }],
-    minutes_this_week: 0,
-    equiv_minutes_this_week: 0,
-    weekly_target_min: 150,
-    short_by_min: 150,
-    target_source: 'default',
-    breakdown: [],
-    last: null,
-    best: null,
-    activities: [],
-    target_stated: false,
-  },
-  body: { latest: null, latest_date: null, avg_7d: null, trend_per_week: null, series: [] },
+    }),
+  ]),
+  title: 'Get to 200 lb',
+  metrics: [{ measure: 'body_weight', target: 200, unit: 'lb', by: '2027-03-01' }],
 });
 
 function serve({
   goals = { active: [], history: [], no_goal: true },
   board = makeBoard(),
-}: { goals?: unknown; board?: TrainingBoard } = {}) {
+  days = [
+    makeDayRow({ date: todayKey(), is_today: true, earned: 175, summary: 'Pull day + walk' }),
+    makeDayRow({ date: '2026-08-30', earned: 300 }),
+    makeDayRow({ date: '2026-08-29', earned: 120 }),
+    makeDayRow({ date: '2026-08-28', earned: 90 }),
+  ],
+}: { goals?: unknown; board?: TrainingBoard; days?: unknown[] } = {}) {
   const calls: { path: string; body?: unknown; method?: string }[] = [];
   mockApi.mockImplementation((path: string, options?: { method?: string; body?: unknown }) => {
     calls.push({ path, ...(options ?? {}) });
@@ -253,11 +114,15 @@ function serve({
       return Promise.resolve({ metrics: (goals as { active: { progress: { metrics: unknown[] } }[] }).active[0]?.progress.metrics ?? [] });
     if (path === '/api/training/board') return Promise.resolve(board);
     if (path === '/api/week') return Promise.resolve(makeWeek());
+    if (path.startsWith('/api/days')) return Promise.resolve({ days, next_before: null });
     if (path === '/api/profile') return Promise.resolve({ id: 'u', stated_at: {}, targets: {} });
     return Promise.resolve(null);
   });
   return calls;
 }
+
+/** The board has arrived: the cardio row is drawn from it and from nothing else. */
+const boardReady = () => waitFor(() => expect(screen.getByTestId('tile-cardio')).toBeTruthy());
 
 function renderProgress() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -273,436 +138,207 @@ beforeEach(() => {
   mockPush.mockReset();
 });
 
-describe('Progress — the goal card', () => {
-  const weightGoal = () => ({
-    ...makeGoal('lose_fat', [
-      makeMetric({
-        measure: 'body_weight',
-        unit: 'lb',
-        direction: 'decrease',
-        target: 200,
-        current: 210.4,
-        baseline: 212,
-        percent: 0.13,
-        series: [
-          { date: '2026-08-03', value: 212 },
-          { date: '2026-08-31', value: 210.4 },
-        ],
-      }),
-    ]),
-    title: 'Get to 200 lb',
-    metrics: [{ measure: 'body_weight', target: 200, unit: 'lb', by: '2027-03-01' }],
-  });
-
-  it('says where it started, where it is, how far is left and how fast', async () => {
+describe('Progress — one screenful of live facts', () => {
+  it('draws all seven rows', async () => {
     serve({ goals: { active: [weightGoal()], history: [], no_goal: false } });
     renderProgress();
-    await waitFor(() => expect(screen.getByText('Get to 200 lb')).toBeTruthy());
-    expect(screen.getByTestId('goal-standing-goal-1').props.children).toContain('212.0 → 210.4 lb now');
-    expect(screen.getByTestId('goal-standing-goal-1').props.children).toContain('10.4 lb to go');
-    expect(screen.getByTestId('goal-pace-goal-1')).toBeTruthy();
-    expect(screen.getByTestId('goal-week-goal-1').props.children).toContain('4 of 7 served');
+
+    await waitFor(() => expect(screen.getByTestId('tile-goal')).toBeTruthy());
+    expect(screen.getByText('Progress')).toBeTruthy();
+    expect(screen.getByTestId('progress-date')).toBeTruthy();
+    expect(screen.getByTestId('tile-body')).toBeTruthy();
+    expect(screen.getByTestId('tile-strength')).toBeTruthy();
+    expect(screen.getByTestId('tile-coverage')).toBeTruthy();
+    expect(screen.getByTestId('tile-cardio')).toBeTruthy();
+    expect(screen.getByTestId('tile-days')).toBeTruthy();
   });
 
-  // The field report (2026-08-31): one weigh-in drew a tall empty box with a dashed line
-  // across it and the words "No movement yet" under it. Nothing had moved because nothing
-  // can move with one point.
-  const weighInsGoal = (series: { date: string; value: number }[]) => ({
-    ...makeGoal('lose_fat', [
-      makeMetric({
-        measure: 'body_weight',
-        unit: 'lb',
-        direction: 'decrease',
-        target: 200,
-        current: series[series.length - 1]?.value ?? null,
-        baseline: series[0]?.value ?? null,
-        percent: series.length > 0 ? 0.13 : null,
-        series,
-      }),
-    ]),
-    title: 'Get to 200 lb',
-    metrics: [{ measure: 'body_weight', target: 200, unit: 'lb', by: '2027-03-01' }],
-  });
-
-  it('names the one weigh-in and what would make it a line, on a short strip', async () => {
-    serve({
-      goals: { active: [weighInsGoal([{ date: '2026-08-31', value: 212 }])], history: [], no_goal: false },
-    });
+  // The whole point of the rebuild: everything below used to be drawn open, in this order,
+  // several screens deep, and nobody reached the bottom of it.
+  it('opens none of it in place — no figure, no lift cards, no weigh-in rows, no archive', async () => {
+    serve({ goals: { active: [weightGoal()], history: [], no_goal: false } });
     renderProgress();
-    await waitFor(() => expect(screen.getByTestId('goal-pace-goal-1')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('tile-goal')).toBeTruthy());
 
-    const said = screen.getByTestId('goal-pace-goal-1').props.children as string;
-    expect(said).toContain('One weigh-in so far (212.0 lb');
-    expect(said).toContain('Weigh in a few mornings and your trend appears.');
-    expect(said).not.toContain('No movement yet');
-    // No 110 px of empty box under it.
-    expect(screen.getByTestId('goal-chart-goal-1').props.style).toMatchObject({ height: 44 });
-  });
-
-  it('asks for the first reading when there is none, and draws no chart at all', async () => {
-    serve({ goals: { active: [weighInsGoal([])], history: [], no_goal: false } });
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('goal-pace-goal-1')).toBeTruthy());
-    expect(screen.getByTestId('goal-standing-goal-1').props.children).toContain('Nothing measured yet');
-    expect(screen.getByTestId('goal-pace-goal-1').props.children).toBe('Log a weigh-in to start the line.');
+    expect(screen.queryByTestId('figure-front')).toBeNull();
+    expect(screen.queryByTestId('figure-back')).toBeNull();
+    expect(screen.queryByTestId('lifts-board')).toBeNull();
+    expect(screen.queryByTestId('lift-Bench Press')).toBeNull();
+    expect(screen.queryByTestId('cardio-board')).toBeNull();
+    expect(screen.queryByTestId('cardio-breakdown')).toBeNull();
+    expect(screen.queryByTestId('frequency')).toBeNull();
+    // The goal's chart, its readings trio and its controls are all behind the row.
     expect(screen.queryByTestId('goal-chart-goal-1')).toBeNull();
+    expect(screen.queryByTestId('mark-reached-goal-1')).toBeNull();
+    // The days ARCHIVE (components/days-list.tsx draws `day-<date>`); the row draws three.
+    expect(screen.queryByTestId('day-2026-08-30')).toBeNull();
   });
 
-  it('leaves two readings and up exactly as they were', async () => {
-    serve({
-      goals: {
-        active: [weighInsGoal([{ date: '2026-08-03', value: 212 }, { date: '2026-08-31', value: 210.4 }])],
-        history: [],
-        no_goal: false,
-      },
-    });
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('goal-chart-goal-1')).toBeTruthy());
-    expect(screen.getByTestId('goal-chart-goal-1').props.style).toMatchObject({ height: 110 });
-    expect(screen.getByTestId('goal-pace-goal-1').props.children).not.toContain('so far');
-  });
-
-  it('draws no weight section of its own when a weight goal already owns that line', async () => {
+  it('says where the goal stands: the ring, the measure and the last move', async () => {
     serve({ goals: { active: [weightGoal()], history: [], no_goal: false } });
     renderProgress();
-    await waitFor(() => expect(screen.getByText('Get to 200 lb')).toBeTruthy());
-    expect(screen.queryByTestId('body')).toBeNull();
-  });
 
-  it('asks rather than closing a goal the measure thinks is done', async () => {
-    const reached = { ...weightGoal(), reached_candidate_at: '2026-08-30T00:05:00.000Z' };
-    const calls = serve({ goals: { active: [reached], history: [], no_goal: false } });
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('goal-reached-goal-1')).toBeTruthy());
-    expect(calls.some((call) => call.method === 'PATCH')).toBe(false);
-
-    fireEvent.press(screen.getByText('Not yet'));
-    await waitFor(() => expect(screen.queryByTestId('goal-reached-goal-1')).toBeNull());
-    expect(calls.some((call) => call.method === 'PATCH')).toBe(false);
-  });
-
-  it('marks it reached only on the tap', async () => {
-    const calls = serve({ goals: { active: [weightGoal()], history: [], no_goal: false } });
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('mark-reached-goal-1')).toBeTruthy());
-    fireEvent.press(screen.getByTestId('mark-reached-goal-1'));
-    await waitFor(() =>
-      expect(calls).toContainEqual(
-        expect.objectContaining({ path: '/api/goals/goal-1', method: 'PATCH' }),
-      ),
-    );
-  });
-
-  it('invites a goal when there is none, and never judges without one', async () => {
-    serve();
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('goals-empty')).toBeTruthy());
-    fireEvent.press(screen.getByTestId('tell-me'));
-    expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { hint: 'goal' } });
-  });
-
-  it('keeps what has ended, with the outcome, below everything else', async () => {
-    const past = { ...makeGoal('build_strength'), id: 'old', title: 'Bench 185', status: 'reached', active_to: '2026-06-30', outcome: 'reached' };
-    serve({ goals: { active: [], history: [past], no_goal: true } });
-    renderProgress();
-    await waitFor(() => expect(screen.getByText('Bench 185')).toBeTruthy());
-    expect(screen.getByText(/^Reached · /)).toBeTruthy();
-  });
-});
-
-describe('Progress — the lifts board', () => {
-  it('draws a row per lift with the coach’s own next step, goal or no goal', async () => {
-    serve();
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('lifts-board')).toBeTruthy());
-
-    expect(screen.getByText('Bench Press')).toBeTruthy();
-    expect(screen.getByTestId('lift-next-Bench Press').props.children[0]).toBe('Hold 135 lb until 3 × 8 twice');
-    // The eta is the board's own addition to the prescription: a hold with a date on it.
-    expect(screen.getByText(/~1–2 wks/)).toBeTruthy();
-  });
-
-  it('says "of assistance" and draws less help as progress', async () => {
-    serve();
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('lifts-board')).toBeTruthy());
-    expect(screen.getByText(/55 lb of assistance/)).toBeTruthy();
-    expect(screen.getByTestId('lift-delta-Assisted Chin-Up').props.children).toBe('5 lb less help');
-    // Green, because on an assisted machine less help is the good news — the sentiment
-    // the server computed, never the direction the number went.
-    expect(screen.getByTestId('lift-delta-Assisted Chin-Up').props.style).toContainEqual(
+    await waitFor(() => expect(screen.getByTestId('goal-value')).toBeTruthy());
+    expect(screen.getByTestId('goal-eyebrow').props.children).toBe('Goal · Get to 200 lb');
+    expect(screen.getByTestId('goal-percent').props.children).toBe('13%');
+    expect(screen.getByTestId('goal-value').props.children).toBe('210.4');
+    // The weigh-ins behind the average, so the row can be checked against the scale.
+    expect(screen.getByTestId('goal-delta').props.children).toBe('−1.6 lb since Mon, Aug 24');
+    // Green, because that is movement toward a stated target.
+    expect(screen.getByTestId('goal-delta').props.style.flat(2)).toContainEqual(
       expect.objectContaining({ color: '#3DD68C' }),
     );
-    expect(screen.getByTestId('lift-next-Assisted Chin-Up').props.children[0]).toContain('one step less help');
   });
 
-  it('opens the exercise sheet from the name', async () => {
+  it('draws the weight line on the row it summarises', async () => {
     serve();
     renderProgress();
-    await waitFor(() => expect(screen.getByText('Bench Press')).toBeTruthy());
-    fireEvent.press(screen.getByText('Bench Press'));
-    expect(mockPush).toHaveBeenCalledWith({
-      pathname: '/exercise/[id]',
-      params: { id: 'ex-bench', name: 'Bench Press', media: '2' },
-    });
+    await boardReady();
+    expect(screen.getByTestId('body-line').props.children[0]).toContain('210.4 lb');
+    expect(screen.getByTestId('body-spark')).toBeTruthy();
   });
 
-  it('is a quiet one-liner with nothing lifted, and offers no door to an empty room', async () => {
-    serve({ board: EMPTY_BOARD });
-    renderProgress();
-    await waitFor(() => expect(screen.getByText('Nothing lifted in the last four weeks.')).toBeTruthy());
-    expect(screen.getByTestId('lifts-empty')).toBeTruthy();
-    expect(screen.queryByTestId('all-lifts')).toBeNull();
-  });
-
-  // The board is one row per exercise logged in four weeks; on a real account that is
-  // twenty rows above the goals, the cardio and the body (user decision 2026-08-31).
-  it('keeps six and sends the rest to their own screen', async () => {
-    const many = Array.from({ length: 9 }, (_unused, index) => ({
-      ...BENCH,
-      exercise: `Lift ${index}`,
-      exercise_id: `ex-${index}`,
-      days_since: index,
-    }));
-    serve({ board: makeBoard({ lifts: many }) });
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('lifts-board')).toBeTruthy());
-
-    expect(screen.getByText('Lift 0')).toBeTruthy();
-    expect(screen.getByText('Lift 5')).toBeTruthy();
-    // Seven days on and it is not "this week"; it is on the other screen.
-    expect(screen.queryByText('Lift 7')).toBeNull();
-    expect(screen.getByTestId('all-lifts').props.accessibilityLabel).toBe('All lifts, 9');
-    expect(screen.getByText('All lifts (9) · 3 more')).toBeTruthy();
-
-    fireEvent.press(screen.getByTestId('all-lifts'));
-    expect(mockPush).toHaveBeenCalledWith('/lifts');
-  });
-
-  it('still offers the door when everything already fits', async () => {
+  it('says what is new on the board, and names the movers it is new about', async () => {
     serve();
     renderProgress();
-    await waitFor(() => expect(screen.getByTestId('all-lifts')).toBeTruthy());
-    expect(screen.getByText('All lifts (2)')).toBeTruthy();
+    await boardReady();
+
+    expect(screen.getByText('Strength · 2 lifts')).toBeTruthy();
+    expect(screen.getByTestId('strength-news').props.children).toBe('1 ready to step up');
+    // The chin-up is the one with news; the bench is holding and stays behind the door.
+    expect(screen.getByTestId('mover-Assisted Chin-Up')).toBeTruthy();
+    expect(screen.getByTestId('mover-next-Assisted Chin-Up').props.children).toBe(
+      '50 lb of assistance next — one step less help',
+    );
+    expect(screen.queryByTestId('mover-Bench Press')).toBeNull();
+  });
+
+  it('counts the coverage and draws twelve chips, not two figures', async () => {
+    serve();
+    renderProgress();
+    await boardReady();
+
+    expect(screen.getByTestId('coverage-line').props.children).toBe('3 of 12 served · quiet: calves, core');
+    expect(screen.getByTestId('chip-chest')).toBeTruthy();
+    expect(screen.getByTestId('chip-calves')).toBeTruthy();
+    expect(screen.getByTestId('coverage-chips').props.children).toHaveLength(12);
+  });
+
+  it('puts the week against its cardio target, with the next prescription in green', async () => {
+    serve();
+    renderProgress();
+    await boardReady();
+    expect(screen.getByTestId('cardio-line').props.children[0]).toBe('50 of 150 min');
+    expect(screen.getByText(' · 22 min next')).toBeTruthy();
+    expect(screen.getByTestId('cardio-bar')).toBeTruthy();
+  });
+
+  it('keeps the last three days and what each one earned', async () => {
+    serve();
+    renderProgress();
+    await waitFor(() => expect(screen.getByTestId(`day-row-${todayKey()}`)).toBeTruthy());
+
+    expect(screen.getByText('Today · Pull day + walk')).toBeTruthy();
+    expect(screen.getByTestId(`day-right-${todayKey()}`).props.children).toBe('175 earned');
+    expect(screen.getByTestId('day-row-2026-08-30')).toBeTruthy();
+    expect(screen.getByTestId('day-row-2026-08-29')).toBeTruthy();
+    // Three, and the fourth is behind "All days".
+    expect(screen.queryByTestId('day-row-2026-08-28')).toBeNull();
+    expect(screen.getByText('4 of 7 served', { exact: false })).toBeTruthy();
   });
 });
 
-describe('Progress — the snapshot strip', () => {
-  it('answers "where do I stand" in one line, above everything it summarises', async () => {
+describe('Progress — every row is a door', () => {
+  it.each([
+    ['tile-goal', '/progress/goal'],
+    ['tile-body', '/progress/body'],
+    ['tile-strength', '/progress/strength'],
+    ['coverage-head', '/progress/coverage'],
+    ['tile-cardio', '/progress/cardio'],
+    ['days-all', '/days'],
+  ])('%s opens %s', async (testID, route) => {
+    serve({ goals: { active: [weightGoal()], history: [], no_goal: false } });
+    renderProgress();
+    await boardReady();
+    fireEvent.press(screen.getByTestId(testID));
+    expect(mockPush).toHaveBeenCalledWith(route);
+  });
+
+  it('sends a day row to its day, and today to the tab that owns it', async () => {
     serve();
     renderProgress();
-    await waitFor(() => expect(screen.getByTestId('snapshot-strip')).toBeTruthy());
-    expect(screen.getByTestId('snapshot-strip').props.children).toBe(
-      '2 of 4 sessions this week · 50 of 150 cardio min · −0.8 lb/wk',
-    );
-  });
-});
+    await waitFor(() => expect(screen.getByTestId('day-row-2026-08-30')).toBeTruthy());
 
-describe('Progress — coverage, cardio and body', () => {
-  it('counts sessions a week, and no longer draws a bar per muscle group', async () => {
-    serve();
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('frequency')).toBeTruthy());
-    expect(screen.getByText('Sessions a week')).toBeTruthy();
-    expect(screen.getByText('0.8 a week over 3 weeks')).toBeTruthy();
-    // The bars and the text list of absences are both gone: the figure says it once.
-    expect(screen.queryByText('6 this week · 18 in 4')).toBeNull();
-    expect(screen.queryByTestId('muscles-untrained')).toBeNull();
-    expect(screen.queryByTestId('muscles-overdue')).toBeNull();
-    expect(screen.queryByText('Sets per muscle group · 4 weeks')).toBeNull();
+    fireEvent.press(screen.getByTestId('day-row-2026-08-30'));
+    expect(mockPush).toHaveBeenCalledWith('/day/2026-08-30');
+
+    fireEvent.press(screen.getByTestId(`day-row-${todayKey()}`));
+    expect(mockPush).toHaveBeenCalledWith('/train');
   });
 
-  // The body map (user decision 2026-08-31). The ledger is the only input, so the tab and
-  // the coach cannot disagree about what is overdue.
-  it('colours every region from the ledger, front and back, with a legend', async () => {
-    serve();
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('body-map')).toBeTruthy());
-
-    expect(screen.getByTestId('figure-front')).toBeTruthy();
-    expect(screen.getByTestId('figure-back')).toBeTruthy();
-    expect(screen.getByTestId('body-map-legend')).toBeTruthy();
-    expect(screen.getByText('10–20')).toBeTruthy();
-    expect(screen.getByText('Overdue a turn')).toBeTruthy();
-
-    // Chest: twelve sets this week, inside the band, so the middle step of the ramp.
-    expect(screen.getByTestId('part-front-chest').props.accessibilityLabel).toBe(
-      'chest #A4561E #23262D',
-    );
-    // Biceps: three sets, under the band — the faintest step, and no outline.
-    expect(screen.getByTestId('part-front-biceps').props.accessibilityLabel).toBe(
-      'biceps #5C3822 #23262D',
-    );
-    // Calves: never in four weeks, and overdue — grey, with the accent stroke.
-    expect(screen.getByTestId('part-front-calves').props.accessibilityLabel).toBe(
-      'calves #2A2E36 #FF7A1A',
-    );
-    // Core: nothing this week but three sets inside the four, so the faintest step and
-    // NOT the grey — grey means "never seen". It is also overdue, so it is outlined, and
-    // it is two paths on one ledger entry, so both of them are.
-    expect(screen.getByTestId('part-front-abs').props.accessibilityLabel).toBe(
-      'abs #5C3822 #FF7A1A',
-    );
-    expect(screen.getByTestId('part-front-obliques').props.accessibilityLabel).toBe(
-      'obliques #5C3822 #FF7A1A',
-    );
-  });
-
-  it('answers a tap on a region with its week, and closes on a second tap', async () => {
-    serve();
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('body-map-hint')).toBeTruthy());
-
-    fireEvent.press(screen.getByTestId('part-front-biceps'));
-    await waitFor(() => expect(screen.getByTestId('body-map-detail')).toBeTruthy());
-    expect(screen.getByTestId('body-map-detail').props.accessibilityLabel).toBe(
-      'Biceps — 3 sets this week · last trained Wed · target 10+ sets/wk',
-    );
-
-    fireEvent.press(screen.getByTestId('part-front-biceps'));
-    await waitFor(() => expect(screen.queryByTestId('body-map-detail')).toBeNull());
-  });
-
-  it('names the overdue regions under the figure, longest debt first', async () => {
-    serve();
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('body-map-overdue')).toBeTruthy());
-    expect(screen.getByTestId('body-map-overdue').props.children).toBe(
-      'Overdue: Calves · never · Core · 21 days',
-    );
-  });
-
-  it('draws cardio in equivalent minutes, with the last pace', async () => {
-    serve();
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('cardio')).toBeTruthy());
-    // Fifty, not thirty: a hard fifteen minutes counts double (user decision 2026-08-31).
-    expect(screen.getByText('50 of 150 min')).toBeTruthy();
-    expect(screen.getByText('Equivalent minutes a week')).toBeTruthy();
-    expect(screen.getByTestId('cardio-equiv-text').props.children).toBe('20 brisk + 15 run×2');
-    expect(screen.getByTestId('cardio-pace').props.children.join('')).toContain('10.2 min/mi');
-  });
-
-  // The lesson `daily_calorie_target` cost (fix-safearea-target-label): a number nobody
-  // chose must never be reported back as one they did.
-  it('says the 150 is a guideline and not something the user stated', async () => {
-    serve();
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('cardio-provenance')).toBeTruthy());
-    expect(screen.getByTestId('cardio-provenance').props.children).toBe(
-      'Standard guideline — tell me yours',
-    );
-  });
-
-  it('shows what the equivalent minutes are made of, on a tap, and not before', async () => {
-    serve();
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('cardio-equivalent')).toBeTruthy());
-    expect(screen.queryByTestId('cardio-breakdown')).toBeNull();
-
-    fireEvent.press(screen.getByTestId('cardio-equivalent'));
-    await waitFor(() => expect(screen.getByTestId('cardio-breakdown')).toBeTruthy());
-    expect(screen.getByText('Run · vigorous')).toBeTruthy();
-    expect(screen.getByText('15 min → 30')).toBeTruthy();
-    // The same shortfall said two ways, which is what equivalent minutes buy.
-    expect(screen.getByTestId('cardio-alternatives').props.children).toBe(
-      'Still short: 100 moderate min or 50 hard.',
-    );
-  });
-
-  // The field report (2026-08-31): "Incline Treadmill Walk · 20 min next" was a row in the
-  // Lifts section, between two barbell rows.
-  it('gives each cardio activity its own row, in minutes and miles, out of the lifts', async () => {
-    serve();
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('cardio-board')).toBeTruthy());
-
-    expect(screen.getByText('Incline Treadmill Walk')).toBeTruthy();
-    expect(screen.getByTestId('cardio-sub-Incline Treadmill Walk').props.children).toContain(
-      '20 min · 1.2 mi · 16.7 min/mi · 1d ago',
-    );
-    // Minutes, not a repeat of the last session, and never a load.
-    expect(screen.getByTestId('cardio-next-Incline Treadmill Walk').props.children).toBe('22 min next');
-    expect(screen.queryByTestId('lift-Incline Treadmill Walk')).toBeNull();
-  });
-
-  it('never prints a pound on a cardio row', async () => {
-    serve();
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('cardio-board')).toBeTruthy());
-    const row = within(screen.getByTestId('cardio-Incline Treadmill Walk'));
-    expect(row.queryByText(/lb/)).toBeNull();
-    expect(row.getAllByText(/min/).length).toBeGreaterThan(0);
-  });
-
-  it('hides the cardio section entirely when there is none and nobody asked for any', async () => {
-    serve({ board: EMPTY_BOARD });
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('frequency-empty')).toBeTruthy());
-    expect(screen.queryByText('Cardio')).toBeNull();
-    expect(screen.queryByTestId('cardio')).toBeNull();
-    expect(screen.queryByTestId('cardio-empty')).toBeNull();
-  });
-
-  it('says so quietly when a goal asked for cardio and nothing has been logged', async () => {
-    serve({
-      board: makeBoard({
-        cardio: { ...EMPTY_BOARD.cardio, weekly_target_min: 120, target_stated: true },
-      }),
-    });
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('cardio-empty')).toBeTruthy());
-    expect(screen.getByText(/120 min a week is what the goal asks for/)).toBeTruthy();
-  });
-
-  it('shows the weight line when no goal owns it', async () => {
-    serve();
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('body')).toBeTruthy());
-    expect(screen.getByText('210.4')).toBeTruthy();
-  });
-
-  it('says nothing rather than drawing zeroes on an empty account', async () => {
-    serve({ board: EMPTY_BOARD });
-    renderProgress();
-    await waitFor(() => expect(screen.getByTestId('frequency-empty')).toBeTruthy());
-    expect(screen.getByTestId('body-empty')).toBeTruthy();
-  });
-});
-
-describe('Progress — the way out to You', () => {
-  it('opens the plan and the account from the avatar', async () => {
+  it('still opens the plan and the account from the avatar', async () => {
     serve();
     renderProgress();
     await waitFor(() => expect(screen.getByTestId('progress-you')).toBeTruthy());
     fireEvent.press(screen.getByTestId('progress-you'));
     expect(mockPush).toHaveBeenCalledWith('/you');
   });
+
+  it('asks for a goal rather than pretending to keep score without one', async () => {
+    serve();
+    renderProgress();
+    await waitFor(() => expect(screen.getByText('No goal yet')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('tile-goal-empty'));
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { hint: 'goal' } });
+  });
 });
 
-
-// ── the affordance, on the board ─────────────────────────────────────────────────────
-// Field report 2026-09-01: nothing said which of these names had a picture behind it.
-
-describe('the names on the board', () => {
-  it('draws the photo glyph on a lift that has one and not on a cardio row that does not', async () => {
+describe('Progress — the muscle popup', () => {
+  it('opens the figure over the page with that muscle’s week and what fed it', async () => {
     serve();
     renderProgress();
-    await waitFor(() => expect(screen.getByText('Bench Press')).toBeTruthy());
+    await boardReady();
+    expect(screen.queryByTestId('muscle-sheet-headline')).toBeNull();
 
-    expect(screen.getByTestId('lift-name-Bench Press-photo')).toBeTruthy();
-    expect(screen.queryByTestId('cardio-name-Incline Treadmill Walk-photo')).toBeNull();
+    fireEvent.press(screen.getByTestId('chip-chest'));
+    await waitFor(() => expect(screen.getByTestId('muscle-sheet-headline')).toBeTruthy());
+
+    expect(screen.getByTestId('muscle-sheet-eyebrow').props.children).toBe('Coverage · Chest');
+    expect(screen.getByTestId('muscle-sheet-headline').props.children).toBe('12 sets this week');
+    expect(screen.getByTestId('muscle-sheet-band').props.children).toBe('in the band');
+    // The figure, zoomed on the muscle that was tapped and on nothing else.
+    expect(screen.getByTestId('part-front-chest')).toBeTruthy();
+    expect(screen.queryByTestId('part-front-biceps')).toBeNull();
+    // The fact stack: the band, when it was last trained, and what is feeding it.
+    expect(screen.getByTestId('muscle-fact-target').props.children).toBe('10–20 sets/wk');
+    expect(screen.getByTestId('muscle-fact-last-trained').props.children).toContain('Bench Press');
+    expect(screen.getByTestId('muscle-fact-fed-by').props.children).toBe('Bench Press · 3 sets');
   });
 
-  it('opens a cardio row sheet too, with nothing promised', async () => {
+  it('closes on the backdrop', async () => {
     serve();
     renderProgress();
-    await waitFor(() => expect(screen.getByText('Incline Treadmill Walk')).toBeTruthy());
+    await boardReady();
 
-    fireEvent.press(screen.getByText('Incline Treadmill Walk'));
-    expect(mockPush).toHaveBeenCalledWith({
-      pathname: '/exercise/[id]',
-      params: { id: 'ex-walk', name: 'Incline Treadmill Walk', media: '0' },
-    });
+    fireEvent.press(screen.getByTestId('chip-calves'));
+    await waitFor(() => expect(screen.getByTestId('muscle-sheet-headline')).toBeTruthy());
+    expect(screen.getByTestId('muscle-sheet-headline').props.children).toBe('Nothing in four weeks');
+
+    fireEvent.press(screen.getByTestId('muscle-sheet-backdrop'));
+    await waitFor(() => expect(screen.queryByTestId('muscle-sheet-headline')).toBeNull());
+  });
+});
+
+describe('Progress — an account with nothing on it', () => {
+  it('says the quiet true thing on every row, and invents no shortfall', async () => {
+    serve({ board: EMPTY_BOARD, days: [] });
+    renderProgress();
+
+    await waitFor(() => expect(screen.getByTestId('body-empty').props.children).toBe('No weigh-ins yet.'));
+    expect(screen.getByTestId('strength-news').props.children).toBe('Nothing lifted in four weeks');
+    expect(screen.getByTestId('coverage-line').props.children).toBe('0 of 12 served');
+    // Cardio is not a row on the screen of somebody who lifts and does not run.
+    expect(screen.queryByTestId('tile-cardio')).toBeNull();
+    expect(screen.getByTestId('days-empty')).toBeTruthy();
   });
 });
