@@ -185,7 +185,7 @@ it('adjusts the plan through the ONE logger, never through a form of its own', a
 
   fireEvent.press(screen.getByTestId('coach-adjust'));
   // The + sheet, told plainly that it is adjusting rather than logging.
-  expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { adjustPlan: '1' } });
+  expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { framing: 'plan' } });
   // Opening a door writes nothing.
   expect(asks()).toEqual([]);
 });
@@ -539,7 +539,7 @@ it('the adjust door adds; it never replaces', async () => {
   await screen.findByText('Pull day: back and shoulders');
 
   fireEvent.press(screen.getByTestId('coach-adjust'));
-  expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { adjustPlan: '1' } });
+  expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { framing: 'plan' } });
   // Nothing was asked, and nothing was replaced, by opening a door.
   expect(asks()).toEqual([]);
   expect(screen.getByText('Lat Pulldown')).toBeTruthy();

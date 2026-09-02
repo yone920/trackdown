@@ -26,6 +26,7 @@ import {
   type EditKind,
 } from '@/lib/edit-record';
 import { correctionLine } from '@/lib/format';
+import { copyFor, framingOf } from '@/lib/log-framing';
 import { composeMaxHeight, footerLift, keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
 import { MAX_PHOTOS, pickPhotos, takePhoto, type LocalPhoto } from '@/lib/photos';
 import { getSpeech } from '@/lib/ports/speech';
@@ -75,20 +76,23 @@ export default function LogSheet() {
     editDate?: string;
     editId?: string;
     editKind?: string;
-    adjustPlan?: string;
+    framing?: string;
   }>();
   /**
-   * Plan-adjust mode (user decision 2026-09-01). Today's Do section used to carry its own
-   * text box, its own Photo/Type tiles and its own submit button — a second input surface,
-   * which is the one thing concept-v2 §Principles 7 forbids: "there is only one way to
-   * update anything in the app and that is the logger". So the plan is adjusted HERE, in
-   * the same sheet the + opens, with the same say / type / snap affordances.
+   * How this sheet introduces itself, decided by the door that opened it
+   * (lib/log-framing.ts). It changes the WORDS and nothing else — same say / type / snap,
+   * same reader, same routing — because there is exactly one input surface in this app
+   * (concept-v2 §Principles 7) and a second one dressed as a helpful shortcut is still a
+   * second one.
    *
-   * The only difference is where the words go. This is not a record of something that
-   * happened, so nothing is analysed and nothing is confirmed: the sentence goes straight
-   * to the coach's adjust endpoint, appending to today's plan rather than replacing it.
+   * `plan` is the one framing that also changes where the words GO: it is not a record of
+   * something that happened, so nothing is analysed and nothing is confirmed, and the
+   * sentence goes to the coach's adjust endpoint instead. Every other framing is the
+   * ordinary path with different copy on it.
    */
-  const adjustingPlan = params.adjustPlan === '1';
+  const framing = framingOf(params.framing);
+  const copy = copyFor(framing);
+  const adjustingPlan = framing === 'plan';
   const editId = typeof params.editId === 'string' ? params.editId : null;
   const editKind = (typeof params.editKind === 'string' ? params.editKind : null) as EditKind | null;
   const editDate = typeof params.editDate === 'string' ? params.editDate : '';
@@ -417,7 +421,7 @@ export default function LogSheet() {
     step === 'say'
       ? {
           testID: 'log-submit',
-          label: revising ? 'Change it' : adjustingPlan ? 'Adjust the plan' : 'Log',
+          label: revising ? 'Change it' : (copy.submit ?? 'Log'),
           pendingLabel: revising ? 'Changing…' : adjustingPlan ? 'Adjusting…' : 'Reading…',
           pending: analyze.isPending || askCoach.isPending,
           disabled: !canSubmit,
@@ -516,17 +520,15 @@ export default function LogSheet() {
               ? 'What should I change?'
               : editing
                 ? 'Fix what was saved'
-                : adjustingPlan
-                  ? "Adjust today's plan"
-                  : 'What did you do?'}
+                : copy.title}
         </Disp>
 
-        {/* Said plainly, because the sheet looks identical to the one that logs a record
-            and this one does not log anything (user decision 2026-09-01). */}
-        {step === 'say' && adjustingPlan ? (
-          <Sub testID="log-adjust-plan-note" style={{ marginTop: 10, lineHeight: 18 }}>
-            This changes today&apos;s plan — it does not log anything you did. Say what to add
-            or what to work instead, and it is added to the plan rather than replacing it.
+        {/* Said plainly, because every door opens the same sheet and it is not always
+            obvious which act you are in the middle of (user decision 2026-09-01). Null for
+            the + itself, where there is nothing to disambiguate. */}
+        {step === 'say' && !revising && !editing && copy.note ? (
+          <Sub testID="log-framing-note" style={{ marginTop: 10, lineHeight: 18 }}>
+            {copy.note}
           </Sub>
         ) : null}
 
@@ -568,9 +570,7 @@ export default function LogSheet() {
                   ? 'Tell me what to change — “reps were 3, not 4”…'
                   : clarify
                     ? 'Answer the question…'
-                    : adjustingPlan
-                      ? 'Add some core · switch to legs · only 30 minutes…'
-                      : 'Shoulder press, three sets of ten at forty pounds…'
+                    : copy.placeholder
               }
               placeholderTextColor={C.dim}
               style={{
@@ -614,11 +614,7 @@ export default function LogSheet() {
             </View>
 
             <Sub style={{ marginTop: 12, lineHeight: 18 }}>
-              {revising
-                ? 'Say it or type it — the numbers you do not mention stay as they are.'
-                : adjustingPlan
-                  ? 'Say it, snap it, or type it. A photo is saved as context for today instead.'
-                  : 'Say it, snap it, or type it — any mix. Same for food, weight, goals.'}
+              {revising ? 'Say it or type it — the numbers you do not mention stay as they are.' : copy.hint}
               {speech.available ? '' : ' (Speaking needs the dev build; typing and photos work here.)'}
             </Sub>
 

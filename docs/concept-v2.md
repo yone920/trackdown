@@ -40,6 +40,9 @@ becomes tomorrow's log.
    ("reps were 3, not 4"), never typed into a field. There are no editable field grids
    anywhere in the app. The single exception is the sign-in screen (passwords cannot be
    spoken). This is a product law, not a styling preference — user decision 2026-08-31.
+   The one sheet **introduces itself by the door it was opened from** (`lib/log-framing.ts`,
+   2026-09-01): the + asks what you did, the You page asks about you, the plan door says it
+   is changing the plan. Only the words change — same panel, same reader, same routing.
 8. **Log reality only — the app never shows what you were supposed to do.** A day with one
    meal in it shows one meal: no "Dinner — not logged yet" row, no dashed ghost dot on the
    arc, and no reading that says a meal is *due*, *expected* or *missing*. Anything logged

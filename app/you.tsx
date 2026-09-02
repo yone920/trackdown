@@ -42,7 +42,14 @@ export default function You() {
   const you = useYou();
 
   const goBack = () => (router.canGoBack() ? router.back() : router.replace('/'));
-  const tell = () => router.push('/log');
+  /**
+   * The one logger, framed by the door it was opened from (lib/log-framing.ts). It used to
+   * open here saying "What did you do?" over a placeholder about shoulder presses — the
+   * same sheet, introducing itself as if the + had been pressed (field report 2026-09-01).
+   * Nothing about the routing changes: the reader already tells a preference from a
+   * workout. What it could not know is which button was pressed.
+   */
+  const tell = () => router.push({ pathname: '/log', params: { framing: 'about-you' } });
 
   const data = profile.data ?? null;
   const list = (field: 'constraints' | 'preferences'): string[] =>

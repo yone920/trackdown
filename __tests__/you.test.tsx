@@ -165,6 +165,8 @@ describe('You — the plan and the account', () => {
     // One button, not one per card: every fact here is changed the same way.
     expect(screen.getAllByText('Tell me')).toHaveLength(1);
     fireEvent.press(screen.getByTestId('tell-me'));
-    expect(mockPush).toHaveBeenCalledWith('/log');
+    // The one logger, framed by this door (field report 2026-09-01): same sheet, same
+    // routing — it just stops asking what workout you did when you pressed "Tell me".
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { framing: 'about-you' } });
   });
 });

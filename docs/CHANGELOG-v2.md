@@ -87,6 +87,49 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-01 — the one sheet says which door you came through (`fix-log-framing`)
+
+Pressing **"Tell me"** on the You page opened the logger saying **"What did you do?"** over a
+placeholder about shoulder presses.
+
+> shouldn't it be aware of where it's being called from? It should say tell me more about you
+
+It is one sheet on purpose — there is exactly one input surface in this app (concept-v2
+§Principles 7) — but one sheet reached from several doors was introducing itself as though
+the + had been pressed every time.
+
+A door may now pass a **framing**, and `lib/log-framing.ts` is the table of what each one
+opens with: title, placeholder, the line under the title, the hint under the controls. Three
+entries.
+
+- **default** — the + on every tab. Unchanged, down to the shoulder-press placeholder.
+- **about-you** — the You page's "Tell me". *"Tell me about you"*, a placeholder in that
+  register (*"I'm 45, I train four days a week, bad left knee, no dairy…"*), and a line
+  saying what it does: shapes your plan and your profile, and is not a log of something you
+  did.
+- **plan** — exactly as it shipped, generalised out of the `adjustPlan` flag it used to be.
+
+**Only the words change.** No second form, no second endpoint, no kind hint smuggled in
+behind the copy: an about-you sentence goes through `/api/log/analyze` and is classified by
+the same router that already tells a preference from a workout. The framing carries the one
+thing the router cannot know — which button was pressed — and nothing else. The `plan` door
+remains the single exception that also changes where the words go, because it writes no
+record at all.
+
+The submit button is renamed only where the sheet is not logging a record, which is the plan
+door alone. Borrowing a different verb for the same act would be the words drifting from the
+deed.
+
+Doors whose surface implies no register still pass nothing and still get the default — the
+nudge actions, the goal sheet on Progress, every row that opens for a correction. That is
+the right answer for them.
+
+**Verified** — app **349 → 357** across **26 suites**: the table as a pure rule (every
+framing has its copy, an unknown value falls back to default, only the plan door renames its
+button), the You door opening in about-you framing, the + unchanged, the plan door unchanged,
+and an about-you submission taking the identical path with no `kind_hint` and no coach call.
+Backend untouched (715). `tsc` and `expo lint` clean.
+
 ### 2026-09-01 — a day still being lived cannot be judged (`fix-open-day-verdicts`)
 
 A screenshot at 12:59 pm, one meal in. The Eat page's week said:

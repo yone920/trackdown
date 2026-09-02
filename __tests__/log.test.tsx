@@ -526,17 +526,18 @@ describe('a change told to a pending log ends up in the record', () => {
   });
 });
 
-describe('the logger, adjusting the plan', () => {
+describe('the logger, framed by the door it was opened from', () => {
   // User decision 2026-09-01: "there is only one way to update anything in the app and
-  // that is the logger". The plan's own text box is gone; adjusting it opens THIS sheet
-  // with `adjustPlan`, and the words go to the coach instead of through the reader.
+  // that is the logger" — and one sheet reached from several doors has to introduce itself
+  // as the door it was opened from. Same say / type / snap, same reader, same routing;
+  // only the words change (lib/log-framing.ts).
 
   it('says plainly that it is not logging anything, and sends the words to the coach', async () => {
-    mockParams = { adjustPlan: '1' };
+    mockParams = { framing: 'plan' };
     renderSheet();
 
     expect(screen.getByText("Adjust today's plan")).toBeTruthy();
-    expect(screen.getByTestId('log-adjust-plan-note')).toHaveTextContent(/does not log anything you did/);
+    expect(screen.getByTestId('log-framing-note')).toHaveTextContent(/does not log anything you did/);
     // The same three affordances as any other log — one door, one panel.
     expect(screen.getByTestId('control-type')).toBeTruthy();
     expect(screen.getByTestId('log-text')).toBeTruthy();
@@ -559,10 +560,43 @@ describe('the logger, adjusting the plan', () => {
     expect(mockBack).toHaveBeenCalled();
   });
 
-  it('is an ordinary log when nobody asked it to adjust anything', async () => {
+  it('is an ordinary log when the door said nothing — the + is unchanged', async () => {
     mockParams = {};
     renderSheet();
-    expect(screen.queryByTestId('log-adjust-plan-note')).toBeNull();
+    expect(screen.queryByTestId('log-framing-note')).toBeNull();
     expect(screen.getByText('What did you do?')).toBeTruthy();
+    expect(screen.getByTestId('log-text').props.placeholder).toContain('Shoulder press');
+    expect(screen.getByTestId('log-submit')).toHaveTextContent('Log');
+  });
+
+  it('asks about the person when the You page opened it, and logs by the same path', async () => {
+    // Field report 2026-09-01: this door opened on "What did you do?" over a shoulder-press
+    // placeholder. Only the words change — a preference still goes through the reader and
+    // is still classified by the router, exactly as it would from the +.
+    mockParams = { framing: 'about-you' };
+    renderSheet();
+
+    expect(screen.getByText('Tell me about you')).toBeTruthy();
+    expect(screen.getByTestId('log-text').props.placeholder).toMatch(/train four days a week/);
+    expect(screen.getByTestId('log-framing-note')).toHaveTextContent(/shapes your plan and your profile/);
+    // The button is the ordinary one: this door DOES log a record.
+    expect(screen.getByTestId('log-submit')).toHaveTextContent('Log');
+
+    mockUpload.mockResolvedValueOnce(
+      analyzed([{ kind: 'preference', text: 'no dairy', fields: null } as unknown as FusionResult]),
+    );
+    fireEvent.changeText(screen.getByTestId('log-text'), 'no dairy');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+
+    // Straight through /api/log/analyze like anything else — no second endpoint, no kind
+    // hint smuggled in by the framing.
+    await waitFor(() => expect(mockUpload).toHaveBeenCalled());
+    const parts = mockUpload.mock.calls[0]![1] as { name: string; value: string }[];
+    expect(parts.find((part) => part.name === 'text')?.value).toBe('no dairy');
+    expect(parts.find((part) => part.name === 'kind_hint')).toBeUndefined();
+    expect(parts.find((part) => part.name === 'revise')).toBeUndefined();
+    expect(mockApi.mock.calls.find(([path]) => path === '/api/coach/next/regenerate')).toBeUndefined();
   });
 });

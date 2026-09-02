@@ -156,7 +156,7 @@ export function PlanSection() {
    */
   const adjustPlan = () => {
     setReplaceArmed(false);
-    router.push({ pathname: '/log', params: { adjustPlan: '1' } });
+    router.push({ pathname: '/log', params: { framing: 'plan' } });
   };
 
   /** "Replace today's plan": arm, say what it does, and only act on the second tap. */
