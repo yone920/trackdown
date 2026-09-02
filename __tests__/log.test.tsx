@@ -21,9 +21,6 @@ jest.mock('@/lib/api', () => ({
   authHeaders: () => ({}),
   evidenceUrl: (id: string) => `http://test/api/evidence/${id}`,
   API_URL: 'http://test',
-  BUSY_MESSAGE: 'The reader is busy right now — try again in a few seconds.',
-  isBusyError: (error: unknown) =>
-    !!error && typeof error === 'object' && (error as { code?: string }).code === 'provider_overloaded',
   // Plain assignment, not TS parameter properties: babel's scope check rejects those
   // inside a jest.mock factory.
   ApiError: class ApiError extends Error {
@@ -541,124 +538,85 @@ describe('a change told to a pending log ends up in the record', () => {
   });
 });
 
-describe('when the reader is busy', () => {
-  // Field report 2026-09-02: a 529 arrived on screen as the SDK's own JSON — status,
-  // error type and request id — under the input box. Three things were right about that
-  // (the typed text survived, the failure was not silent, and it could be retried) and one
-  // was developer talk on a screen belonging to somebody in a gym.
+describe('when the reader fails', () => {
+  // Field reports 2026-09-02, two days running: a 529 arrived on screen as the SDK's own
+  // JSON — status, error type and request id — under the input box; then, once THAT status
+  // had been humanised by name, a 400 saying "Your credit balance is too low" arrived in
+  // the same place. The app renders by CODE now, from a closed table, and anything it does
+  // not recognise gets the generic line (lib/errors.ts).
 
-  const busy = () => {
-    return new ApiError(
-      503,
-      'The reader is busy right now — try again in a few seconds.',
-      undefined,
-      'provider_overloaded',
-    );
-  };
+  const failure = (status: number, message: string, code?: string) =>
+    new ApiError(status, message, undefined, code);
 
-  it('says one human line, and keeps what was typed', async () => {
+  async function submitAnd(rejection: unknown): Promise<void> {
     mockParams = {};
     renderSheet();
-    mockUpload.mockRejectedValueOnce(busy());
-
+    mockUpload.mockRejectedValueOnce(rejection);
     fireEvent.changeText(screen.getByTestId('log-text'), 'barbell curl 3x10 at 50');
     await act(async () => {
       fireEvent.press(screen.getByTestId('log-submit'));
     });
+  }
 
-    expect(await screen.findByText(/The reader is busy right now/)).toBeTruthy();
-    // Nothing from the wire: no status, no request id, no JSON.
-    expect(screen.queryByText(/529|request_id|overloaded_error|\{/)).toBeNull();
+  it('says the busy line, and keeps what was typed', async () => {
+    await submitAnd(failure(503, 'ignored server prose', 'provider_overloaded'));
+
+    expect(await screen.findByText('The reader is busy right now — try again in a few seconds.')).toBeTruthy();
+    expect(screen.queryByText(/529|request_id|overloaded_error|\{|ignored server prose/)).toBeNull();
     // And the words are still in the box, ready to send again.
     expect(screen.getByTestId('log-text').props.value).toBe('barbell curl 3x10 at 50');
   });
 
-  it('still says what an ordinary failure was, in the server’s own words', async () => {
-    // Only the busy case is reworded. A real error still explains itself.
-    mockParams = {};
-    renderSheet();
-    mockUpload.mockRejectedValueOnce(new ApiError(422, 'Could not understand that.'));
-
-    fireEvent.changeText(screen.getByTestId('log-text'), 'asdf');
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('log-submit'));
-    });
-
-    expect(await screen.findByText('Could not understand that.')).toBeTruthy();
-  });
-});
-
-describe('the logger, framed by the door it was opened from', () => {
-  // User decision 2026-09-01: "there is only one way to update anything in the app and
-  // that is the logger" — and one sheet reached from several doors has to introduce itself
-  // as the door it was opened from. Same say / type / snap, same reader, same routing;
-  // only the words change (lib/log-framing.ts).
-
-  it('says plainly that it is not logging anything, and sends the words to the coach', async () => {
-    mockParams = { framing: 'plan' };
-    renderSheet();
-
-    expect(screen.getByText("Adjust today's plan")).toBeTruthy();
-    expect(screen.getByTestId('log-framing-note')).toHaveTextContent(/does not log anything you did/);
-    // The same three affordances as any other log — one door, one panel.
-    expect(screen.getByTestId('control-type')).toBeTruthy();
-    expect(screen.getByTestId('log-text')).toBeTruthy();
-
-    fireEvent.changeText(screen.getByTestId('log-text'), 'add twenty minutes of core');
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('log-submit'));
-    });
-
-    // Straight to the coach's adjust endpoint, appending — never through /api/log/analyze,
-    // because this is not a record of something that happened.
-    const posted = mockApi.mock.calls.find(([path]) => path === '/api/coach/next/regenerate');
-    expect(posted).toBeTruthy();
-    expect((posted![1] as { body: Record<string, unknown> }).body).toMatchObject({
-      revision: 'add twenty minutes of core',
-      mode: 'append',
-      context: null,
-    });
-    expect(mockUpload).not.toHaveBeenCalled();
-    expect(mockBack).toHaveBeenCalled();
-  });
-
-  it('is an ordinary log when the door said nothing — the + is unchanged', async () => {
-    mockParams = {};
-    renderSheet();
-    expect(screen.queryByTestId('log-framing-note')).toBeNull();
-    expect(screen.getByText('What did you do?')).toBeTruthy();
-    expect(screen.getByTestId('log-text').props.placeholder).toContain('Shoulder press');
-    expect(screen.getByTestId('log-submit')).toHaveTextContent('Log');
-  });
-
-  it('asks about the person when the You page opened it, and logs by the same path', async () => {
-    // Field report 2026-09-01: this door opened on "What did you do?" over a shoulder-press
-    // placeholder. Only the words change — a preference still goes through the reader and
-    // is still classified by the router, exactly as it would from the +.
-    mockParams = { framing: 'about-you' };
-    renderSheet();
-
-    expect(screen.getByText('Tell me about you')).toBeTruthy();
-    expect(screen.getByTestId('log-text').props.placeholder).toMatch(/train four days a week/);
-    expect(screen.getByTestId('log-framing-note')).toHaveTextContent(/shapes your plan and your profile/);
-    // The button is the ordinary one: this door DOES log a record.
-    expect(screen.getByTestId('log-submit')).toHaveTextContent('Log');
-
-    mockUpload.mockResolvedValueOnce(
-      analyzed([{ kind: 'preference', text: 'no dairy', fields: null } as unknown as FusionResult]),
+  // The failure this policy exists for: an exhausted credit balance is not the user's
+  // input, is not going to clear in five seconds, and is none of their business.
+  it('says the reader is down when the provider cannot serve at all', async () => {
+    await submitAnd(
+      failure(503, '400 {"type":"error","error":{"message":"Your credit balance is too low"}}', 'reader_unavailable'),
     );
-    fireEvent.changeText(screen.getByTestId('log-text'), 'no dairy');
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('log-submit'));
-    });
 
-    // Straight through /api/log/analyze like anything else — no second endpoint, no kind
-    // hint smuggled in by the framing.
-    await waitFor(() => expect(mockUpload).toHaveBeenCalled());
-    const parts = mockUpload.mock.calls[0]![1] as { name: string; value: string }[];
-    expect(parts.find((part) => part.name === 'text')?.value).toBe('no dairy');
-    expect(parts.find((part) => part.name === 'kind_hint')).toBeUndefined();
-    expect(parts.find((part) => part.name === 'revise')).toBeUndefined();
-    expect(mockApi.mock.calls.find(([path]) => path === '/api/coach/next/regenerate')).toBeUndefined();
+    expect(
+      await screen.findByText('The reader is down right now. Your words are kept — try again in a bit.'),
+    ).toBeTruthy();
+    expect(screen.queryByText(/credit balance|400|\{|request_id/)).toBeNull();
+    expect(screen.getByTestId('log-text').props.value).toBe('barbell curl 3x10 at 50');
+  });
+
+  it('says an unusable answer plainly', async () => {
+    await submitAnd(failure(502, 'fake-model returned no structured output', 'reader_failed'));
+
+    expect(await screen.findByText("That didn't get read. Nothing was lost — try again.")).toBeTruthy();
+    expect(screen.queryByText(/fake-model|structured output/)).toBeNull();
+  });
+
+  // The whole point of a closed table: the shape nobody planned for is the one most likely
+  // to be developer talk, so it gets the generic line rather than the passthrough.
+  it.each([
+    ['an unknown code', failure(500, 'some new prose nobody wrote copy for', 'brand_new_code')],
+    ['a bare 500 with a stack-ish message', failure(500, 'TypeError: cannot read property x of undefined')],
+    ['a thrown string', 'kaboom'],
+    ['a thrown object', { weird: true }],
+    ['a raw provider error', failure(500, '400 {"type":"error","error":{"type":"invalid_request_error"}}')],
+  ])('renders the generic line for %s, never the raw text', async (_name, rejection) => {
+    await submitAnd(rejection);
+
+    expect(await screen.findByText(/That didn't get read|Could not read that/)).toBeTruthy();
+    expect(screen.queryByText(/TypeError|kaboom|invalid_request_error|\{|brand_new_code|some new prose/)).toBeNull();
+    // Typed input survives every one of them.
+    expect(screen.getByTestId('log-text').props.value).toBe('barbell curl 3x10 at 50');
+  });
+
+  // Our OWN routes write sentences about the request itself, and those are worth showing:
+  // replacing "Could not understand that." with a shrug hides something fixable.
+  // An unknown code on a 503 still means "come back later", so it says that rather than
+  // falling through to the prose the server sent with it.
+  it('reads an unknown code on a 503 as come-back-later, not as text to print', async () => {
+    await submitAnd(failure(503, 'brand new server prose', 'brand_new_code'));
+    expect(await screen.findByText('The reader is busy right now — try again in a few seconds.')).toBeTruthy();
+    expect(screen.queryByText(/brand new server prose|brand_new_code/)).toBeNull();
+  });
+
+  it("keeps our own server's sentence about the request", async () => {
+    await submitAnd(failure(422, 'Could not understand that.'));
+    expect(await screen.findByText('Could not understand that.')).toBeTruthy();
   });
 });

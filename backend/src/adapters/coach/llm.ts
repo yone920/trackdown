@@ -1,5 +1,5 @@
 import type { Brief, BriefRevision, CoachBriefInputs, CoachPort, RevisedBrief } from "../../ports/coach.js";
-import { isOverloadError } from "../../services/providerErrors.js";
+import { isOverloadError } from "../../services/llmErrors.js";
 import type { LlmPort } from "../../ports/llm.js";
 import { buildCoachPrompt } from "../../services/coach/prompt.js";
 import {

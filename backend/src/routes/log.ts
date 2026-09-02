@@ -6,6 +6,7 @@ import type { AuthenticatedRequest } from "../middleware/auth.js";
 import { saveConfirmed } from "../services/fusion/confirm.js";
 import type { FusionResult } from "../services/fusion/schema.js";
 import type { LogParser, ParsedItem } from "../services/parseLog.js";
+import { sendLlmError } from "./llmError.js";
 
 // Free-text logging — v1's endpoints, still the ones the shipped app calls:
 //   POST /api/parse-log { text }  → { items }             parse only
@@ -88,7 +89,16 @@ export function logRouter(pool: pg.Pool, parser: LogParser): Router {
 			res.status(400).json({ error: "Say something first." });
 			return;
 		}
-		const items = await parser.parse(parsed.data.text);
+		// The reader can fail here as surely as it can on the fusion route. Left to itself
+		// the rejection goes to the central handler, which is where the provider's own JSON
+		// used to be turned into a response body (services/llmErrors.ts).
+		let items;
+		try {
+			items = await parser.parse(parsed.data.text);
+		} catch (error) {
+			sendLlmError(res, error, "parse-log");
+			return;
+		}
 		res.json({ items });
 	});
 
@@ -99,7 +109,13 @@ export function logRouter(pool: pg.Pool, parser: LogParser): Router {
 			return;
 		}
 		const text = parsed.data.text;
-		const items = await parser.parse(text);
+		let items;
+		try {
+			items = await parser.parse(text);
+		} catch (error) {
+			sendLlmError(res, error, "log.parse");
+			return;
+		}
 		if (items.length === 0) {
 			res.status(422).json({ error: "Could not understand that." });
 			return;

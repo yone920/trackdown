@@ -2,6 +2,7 @@ import { createLlmCoach } from "./adapters/coach/llm.js";
 import { createSmtpEmailer } from "./adapters/email/smtp.js";
 import { createAnthropicLlm } from "./adapters/llm/anthropic.js";
 import { createOpenAiLlm } from "./adapters/llm/openai.js";
+import { withErrorPolicy } from "./adapters/llm/policy.js";
 import { createUnavailableLlm } from "./adapters/llm/unavailable.js";
 import { createLocalExerciseMediaStore, exerciseMediaRoot } from "./adapters/storage/exerciseMedia.js";
 import { createLocalEvidenceStore } from "./adapters/storage/local.js";
@@ -59,7 +60,16 @@ function createEvidenceStore(provider: EvidenceProvider, root: string): Evidence
 	}
 }
 
+/**
+ * Every LLM in this container leaves through the error policy (adapters/llm/policy.ts):
+ * one wrapper, applied once, so no provider failure can reach a route as an SDK error. The
+ * inner `createProviderLlm` is what changes when a provider is added; this never does.
+ */
 function createLlm(config: Config, provider: LlmProvider, model: string): LlmPort {
+	return withErrorPolicy(createProviderLlm(config, provider, model), provider);
+}
+
+function createProviderLlm(config: Config, provider: LlmProvider, model: string): LlmPort {
 	switch (provider) {
 		case "anthropic":
 			if (!config.anthropic.apiKey) {

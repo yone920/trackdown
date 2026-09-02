@@ -83,6 +83,101 @@ half-lived today.
 
 ---
 
+## Errors stop at the boundary (`wp-error-policy`)
+
+**2026-09-02, user-approved principle: "I don't want errors like this to propagate to the
+users."** A raw Anthropic 400 — `{"type":"error","error":{"type":"invalid_request_error",
+"message":"Your credit balance is too low…"},"request_id":…}` — rendered verbatim in the
+logger. That was the **second** day in a row a provider's JSON reached a screen, and the
+first fix is why: it humanised 529 and 429 *by name*, so the next status walked straight
+through. Naming statuses is a game you lose one at a time.
+
+**The policy.** Every provider failure — known or not — becomes one of three codes, and the
+default is the safe one:
+
+| code | what it means | HTTP | what the user reads |
+|---|---|---|---|
+| `provider_overloaded` | busy (429/529), already retried once | 503 | "The reader is busy right now — try again in a few seconds." |
+| `reader_unavailable` | cannot serve at all, not the user's input: credit exhausted, bad or missing key, workspace, network | 503 | "The reader is down right now. Your words are kept — try again in a bit." |
+| `reader_failed` | asked and got something unusable: malformed answer, no structured output, unexpected 4xx/5xx — **and everything unrecognised** | 502 | "That didn't get read. Nothing was lost — try again." |
+
+**Backend — one line every model call leaves through.**
+
+- `src/services/llmErrors.ts` (new, replaces `providerErrors.ts`) — the closed set, the copy,
+  the statuses, `classifyProviderError` (a total function: any throw in, one code out),
+  `describeProviderError` (status · type · request_id · message, the ONLY place provider text
+  is assembled, and its output goes to `console.error`), and `LlmError`, which keeps the
+  human line and the provider's account as separate fields so a careless `String(error)`
+  cannot print the second.
+- `src/adapters/llm/policy.ts` (new) — `withErrorPolicy(port, provider)`, applied once in
+  `container.ts` around whatever `createLlm` built. Above that wrapper nothing has ever seen
+  an `APIError`. It does not retry: the transport adapter below owns the one retry for a busy
+  provider, the coach adapter above owns the one for an unusable answer.
+- `src/routes/llmError.ts` (new) — `sendLlmError(res, error, where)`: classify, log, and
+  answer `{ error, code }`. Used by `routes/fusion.ts` (which caught *only* overloads before —
+  everything else re-threw into the leak) and `routes/log.ts` (`POST /api/parse-log` and
+  `POST /api/log`, which had no catch at all).
+- `src/app.ts` — **the leak itself.** The central handler answered `{ error: error.message }`,
+  and for an SDK error that message *is* the provider's JSON. Express 5 forwards async
+  rejections here, so every route that did not catch was publishing the provider's internals.
+  Now: an `LlmError` answers by code; anything else answers `Something went wrong on our end.`
+  and puts the real message in the log.
+- `src/routes/coach.ts` — the 503 used to append the first 160 characters of the underlying
+  error (a 529's JSON, truncated mid-object). `CoachUnavailableError` now carries the policy
+  code and the route answers from it.
+
+**App — render by code, never by text.**
+
+- `lib/errors.ts` (new) — the matching table, `readerLine(error, fallback)` and `looksHuman`.
+  Reads the failure by SHAPE (a numeric `status`), not `instanceof`: class identity does not
+  survive a jest module mock or a second copy of a module, and an identity check that
+  silently failed would send every error down the unknown branch.
+- Rewired every raw-message render site the audit found: `app/log.tsx` (five catches, one of
+  which — the Save path — never went through the busy check at all), `components/plan-section.tsx`
+  (the coach note and the query error), `lib/queries.ts` (`useStartWorkout`'s refusal note),
+  `app/(tabs)/train.tsx` and `app/day/[date].tsx` (full-screen failures), plus the speech
+  port's native error string ("recognition_failed" is not a sentence).
+- `lib/auth.ts` — Better Auth's messages are written for people and stay, but they pass the
+  same `looksHuman` guard as everything else.
+- `lib/api.ts` lost `BUSY_MESSAGE` / `isBusyError`: one hard-coded sentence living beside the
+  fetch wrapper was the piecemeal shape this WP removes.
+
+**Decisions**
+
+- **Our own 4xx prose is still shown** (400/409/413/415/422): "At most 6 photos per log." names
+  something the user can fix, and replacing it with a shrug hides it. Everything else — 5xx,
+  unknown codes, non-`ApiError` throws — is rendered from the table. Belt and braces:
+  `looksHuman` refuses JSON, request ids and leading statuses even under those statuses.
+- **An unknown code on a 503 reads as "come back later"**, not as text to print.
+- **Typed input is preserved** on every failure path; a test holds it for each code.
+
+**Tests** — app 456 → 476, backend 796 → 816. New: `backend/src/services/llmErrors.test.ts`
+(14 — classification per class from the real SDK shapes, including the credit-balance 400 and
+five kinds of unrecognised junk), `backend/src/adapters/llm/policy.test.ts` (5 — translation
+at the boundary, and that it never retries), `__tests__/errors.test.ts` (15 — copy per code,
+unknown-shape fallback, `looksHuman`), plus 6 route tests in `app.test.ts` asserting that no
+response body on the log, fusion or coach route contains a provider field, and that a failed
+read writes nothing. The LlmPort fake gained `failNext`, and `app.test.ts` now wraps its fakes
+in the SAME `withErrorPolicy` production uses, so a fake outage is translated exactly as a
+live one is. Updated: `__tests__/log.test.tsx` and `__tests__/coach.test.tsx` no longer assert
+that server prose reaches the screen — that was the behaviour being removed.
+
+**Verified live** — the deployed key had credit again by the time this shipped, so the
+credit-balance 400 was not freely reproducible; the boundary was exercised against a **real
+provider 401** instead (an invalid key, no account touched): the log line carried
+`code=reader_unavailable · status=401 · type=error · message=401 {...}` and the caller received
+503 / `reader_unavailable` / "The reader is down right now." The 400 itself is pinned as a
+fixture taken from the field report.
+
+**Deferred / uncertain**
+
+- The two Anthropic **contract** tests that failed do so on model behaviour, not on this
+  change: a different one fails on each run (a copied kcal number, then a revision length),
+  and the error paths they exercise are not touched by this WP.
+- `adapters/llm/openai.ts` still has no busy-retry of its own (only Anthropic retries once).
+  The policy classifies OpenAI failures correctly either way; the retry asymmetry predates
+  this WP and is left alone.
+
 ## Progress, as a scoreboard (`wp-scoreboard-page`)
 
 **2026-09-02.** User-approved from a reviewed mockup ("go ahead implement"). The Progress

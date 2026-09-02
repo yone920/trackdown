@@ -7,6 +7,8 @@ import type { CoachPort } from "../ports/coach.js";
 import { briefStatus, CoachUnavailableError, coachDate, nextBrief, standingBrief } from "../services/coach/coach.js";
 import { closeDueDays } from "../services/dayClose.js";
 import type { DayReadings } from "../services/readings/readings.js";
+import { llmErrorBody } from "./llmError.js";
+import { LLM_STATUS } from "../services/llmErrors.js";
 
 // The coach (docs/build-plan.md §WP5).
 //
@@ -146,7 +148,13 @@ export function coachRouter(pool: pg.Pool, coach: CoachPort, readings: DayReadin
 			if (error instanceof CoachUnavailableError) {
 				// No brief at all and no way to make one: say so rather than 500. The Coach
 				// screen shows the retry, and every other screen is unaffected.
-				res.status(503).json({ error: `The coach is unavailable right now: ${(error.message.split("\n")[0] ?? error.message).slice(0, 160)}` });
+				//
+				// It used to append the first 160 characters of the underlying error, which
+				// on a bad day was `529 {"type":"error",…,"request_id":…}` — the provider's
+				// JSON, truncated mid-object, on a phone. The code says which of the three
+				// kinds of failure it was; the detail is in the log line above it.
+				console.error(`❌ llm coach.brief: code=${error.code} · ${error.message}`);
+				res.status(LLM_STATUS[error.code]).json(llmErrorBody(error.code));
 				return;
 			}
 			throw error;

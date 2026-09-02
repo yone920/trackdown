@@ -40,9 +40,14 @@ jest.mock('@/lib/api', () => ({
   // imports, not a look-alike.
   ApiError: class ApiError extends Error {
     status: number;
-    constructor(status: number, message: string) {
+    // The server's machine-readable reason. Carried here because the app renders error
+    // lines from the CODE now (lib/errors.ts) — a mock that dropped it would test a
+    // client talking to a server that no longer exists.
+    code: string | undefined;
+    constructor(status: number, message: string, _issues?: unknown, code?: string) {
       super(message);
       this.status = status;
+      this.code = code;
       this.name = 'ApiError';
     }
   },
@@ -204,9 +209,11 @@ it('adjusts the plan through the ONE logger, never through a form of its own', a
 });
 
 it("starts the day's workout with no words, and that is the only generator", async () => {
+  // A failed ask says the app's own line, not the throw's: nothing that arrives from a
+  // server or an SDK is printed on this screen any more (lib/errors.ts).
   mockApi.mockRejectedValueOnce(new Error('The coach is unavailable right now.'));
   renderCoach();
-  await screen.findByText('The coach is unavailable right now.');
+  await screen.findByText('The coach could not answer just now.');
 
   await act(async () => {
     fireEvent.press(screen.getByTestId('coach-regenerate'));
@@ -270,7 +277,10 @@ it('keeps the brief and says so when the ask itself fails', async () => {
     fireEvent.press(screen.getByTestId('coach-replace'));
   });
 
-  expect(await screen.findByText('Request failed (503).')).toBeTruthy();
+  // The brief the user already has is kept, and the note is a sentence — never the
+  // templated status the fetch wrapper made up.
+  expect(await screen.findByText('The coach could not answer just now.')).toBeTruthy();
+  expect(screen.queryByText(/503|Request failed/)).toBeNull();
   expect(screen.getByText('Pull day: back and shoulders')).toBeTruthy();
 });
 
@@ -1191,7 +1201,10 @@ describe('a generation whose answer is lost', () => {
     // A 503 is an answer. Only a LOST answer is worth waiting on.
     mockApi.mockImplementation((path: string, options?: { method?: string }) => {
       if (path === '/api/coach/next/regenerate' && options?.method === 'POST') {
-        return Promise.reject(new ApiError(503, 'The coach is unavailable right now.'));
+        // What the server actually sends now: a code, and prose the app does not print.
+        return Promise.reject(
+          new ApiError(503, 'The reader is down right now.', undefined, 'reader_unavailable'),
+        );
       }
       if (path === '/api/coach/next') return Promise.resolve({ brief: null, stale: false });
       return Promise.resolve(null);
@@ -1203,7 +1216,9 @@ describe('a generation whose answer is lost', () => {
     });
 
     await act(async () => {});
-    expect(screen.getByTestId('coach-note')).toHaveTextContent(/unavailable right now/);
+    expect(screen.getByTestId('coach-note')).toHaveTextContent(
+      'The reader is down right now. Your words are kept — try again in a bit.',
+    );
     expect(screen.queryByTestId('coach-recovering')).toBeNull();
     expect(mockApi.mock.calls.some(([path]) => path === '/api/coach/status')).toBe(false);
   });

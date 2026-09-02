@@ -23,6 +23,7 @@ import { localDateKey, useDay, useDeleteRecord } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, SPACE, TABULAR } from '@/lib/theme';
 import type { DayView, MacroLine, MealSlot, Verdict } from '@/lib/types';
+import { OFFLINE_MESSAGE, readerLine } from '@/lib/errors';
 
 // A closed day (docs/design-system.md §Day; concept-v2 §The two day views: "Day is a
 // reading, not a replay"). The verdict against the goal that was active *that* day, the
@@ -126,7 +127,7 @@ export default function Day() {
 
       {day.error && !view ? (
         <Card style={{ marginTop: 20 }}>
-          <Sub style={{ color: C.accent }}>{(day.error as Error).message}</Sub>
+          <Sub style={{ color: C.accent }}>{readerLine(day.error, OFFLINE_MESSAGE)}</Sub>
         </Card>
       ) : null}
 
