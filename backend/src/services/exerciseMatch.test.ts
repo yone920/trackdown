@@ -192,3 +192,76 @@ describe("the stretches a finisher is made of", () => {
 		}
 	});
 });
+
+// ── the band pack ────────────────────────────────────────────────────────────────────
+// User request, asked twice: the catalogue was nearly bare for rubber bands — two entries,
+// one of them a stretch. free-exercise-db has twenty movements under `equipment: "bands"`,
+// and 2026-09-02 added the eighteen we did not have.
+//
+// What is worth testing about a data change is exactly what a data change can break: that
+// every new row is REACHABLE (an alias claimed by an older row makes the new one dead), and
+// that no older row lost a key to a new one. Both are properties of the whole catalogue, so
+// both are checked over the whole catalogue rather than over a list of examples.
+
+describe("the band pack", () => {
+	const BANDS = CATALOG.filter((entry) => entry.equipment.includes("band"));
+	const index = buildExerciseIndex(CATALOG);
+
+	it("seeds twenty band movements", () => {
+		expect(BANDS).toHaveLength(20);
+		expect(CATALOG.length).toBeGreaterThanOrEqual(166);
+		// Every one of them is a real, loadable catalogue row with muscles on it — the
+		// coverage ledger reads these, and a band exercise with no muscles is a session
+		// that trains nothing (services/coach/features.ts §LEDGER_MUSCLES).
+		for (const entry of BANDS) {
+			expect(entry.primary_muscles.length, entry.name).toBeGreaterThan(0);
+			expect(["strength", "mobility"], entry.name).toContain(entry.category);
+		}
+	});
+
+	it("answers to the way a person says each one", () => {
+		// free-exercise-db has no band curl and no band row, so the pack has neither and
+		// those phrases still resolve to nothing. Logging one is not broken — it saves as
+		// free text — but it feeds no muscle to the ledger, which is noted in the changelog
+		// rather than papered over with a catalogue row nobody can illustrate.
+		expect(index.find("band curl")).toBeNull();
+		expect(index.find("band row")).toBeNull();
+		expect(index.find("banded lateral raise")?.name).toBe("Band Lateral Raise");
+		expect(index.find("band lateral raise")?.name).toBe("Band Lateral Raise");
+		expect(index.find("band pull apart")?.name).toBe("Band Pull-Apart");
+		expect(index.find("banded good morning")?.name).toBe("Band Good Morning");
+		expect(index.find("band skull crusher")?.name).toBe("Band Skull Crusher");
+		expect(index.find("monster walk")?.name).toBe("Monster Walk");
+		expect(index.find("band kickback")?.name).toBe("Band Hip Extension");
+		expect(index.find("banded squat")?.name).toBe("Band Squat");
+		expect(index.find("band external rotation")?.name).toBe("Band External Rotation");
+	});
+
+	// The qualifier guard, on the new rows: "banded" changes the movement, so it may only
+	// resolve to a row that carries it. This is the assisted-chin-up rule, still holding.
+	it("never lets a banded phrase fall through to the unbanded movement", () => {
+		expect(index.find("banded squat")?.name).not.toBe("Back Squat");
+		expect(index.find("banded lateral raise")?.name).not.toBe("Lateral Raise");
+		expect(index.find("banded good morning")?.name).not.toBe("Good Morning");
+		expect(index.find("banded calf raise")?.name).not.toBe("Standing Calf Raise");
+		// And the plain phrases still find the plain movements.
+		expect(index.find("squat")?.name).toBe("Back Squat");
+		expect(index.find("lateral raise")?.name).toBe("Lateral Raise");
+		expect(index.find("good morning")?.name).toBe("Good Morning");
+	});
+
+	it("gives every band row every one of its own names, and takes none from anybody else", () => {
+		for (const entry of BANDS) {
+			for (const phrase of [entry.name, ...entry.aliases]) {
+				expect(index.find(phrase)?.name, `${entry.name} → "${phrase}"`).toBe(entry.name);
+			}
+		}
+		// Nothing that was reachable before is answered by a band row now.
+		for (const entry of CATALOG.filter((e) => !e.equipment.includes("band"))) {
+			for (const phrase of [entry.name, ...entry.aliases]) {
+				const hit = index.find(phrase);
+				if (hit) expect(hit.name, `${entry.name} → "${phrase}"`).toBe(entry.name);
+			}
+		}
+	});
+});

@@ -708,10 +708,13 @@ export function prescribeLoads(
 			why: steppedThisWeek
 				? direction === "assistance"
 					? `The assistance came down ${sinceStep} days ago — never more than one step a week, so hold ${say(current, direction)}.`
-					: `The load went up ${sinceStep} days ago — never more than one step a week, so hold ${current ?? "it"} lb.`
+					: // `say` rather than an inline "lb": a band movement carries no load at all, and
+						// "hold the load lb" is what the template said about one before the band pack
+						// went in (2026-09-02). Null is a real state here — the Plank has always had it.
+						`The load went up ${sinceStep} days ago — never more than one step a week, so hold ${say(current, direction)}.`
 				: direction === "assistance"
 					? `${hits} of ${SESSIONS_AT_TARGET_BEFORE_STEP} sessions at target reps — hold ${say(current, direction)} until it is two.`
-					: `${hits} of ${SESSIONS_AT_TARGET_BEFORE_STEP} sessions at target reps — hold ${current ?? "the load"} lb until it is two.`,
+					: `${hits} of ${SESSIONS_AT_TARGET_BEFORE_STEP} sessions at target reps — hold ${say(current, direction)} until it is two.`,
 		};
 	});
 

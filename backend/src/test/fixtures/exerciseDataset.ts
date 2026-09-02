@@ -19,9 +19,46 @@
 //   * "Bench Press - Powerlifting" — a correct match with the wrong *photographs* (an
 //     empty bar). It is what PREFERRED_SOURCE_NAMES exists to overrule.
 //
-// A sixth, "Pretend Machine Fly", matches nothing at all: the miss list has to be real.
+//   * "Lateral Raise - With Bands" — the band pack (2026-09-02). Its qualifier is not a
+//     grip or a bench, it is the EQUIPMENT, so dropping " - With Bands" would hand a band
+//     movement the dumbbell entry's photographs. Our **Band Lateral Raise** names the
+//     dataset entry in an alias for exactly that reason, and this fixture is what holds
+//     that alias in place — delete the alias and this test goes red.
+//
+//   * "Side Lateral Raise" — the dumbbell one, here so the pair can be told apart. Our
+//     **Lateral Raise** answers to "side lateral raise" and takes this by an EXACT key,
+//     which is what stops it falling through to the band entry's derived key. Both rows
+//     get their own pictures, which is the whole point of adding the band pack.
+//
+// A seventh, "Pretend Machine Fly", matches nothing at all: the miss list has to be real.
 
 export const DATASET_FIXTURE = [
+	{
+		id: "Lateral_Raise_-_With_Bands",
+		name: "Lateral Raise - With Bands",
+		force: "push",
+		level: "beginner",
+		mechanic: "isolation",
+		equipment: "bands",
+		primaryMuscles: ["shoulders"],
+		secondaryMuscles: [],
+		instructions: ["Stand on the middle of the band with both feet.", "Raise the handles out to the sides to shoulder height."],
+		category: "strength",
+		images: ["Lateral_Raise_-_With_Bands/0.jpg", "Lateral_Raise_-_With_Bands/1.jpg"],
+	},
+	{
+		id: "Side_Lateral_Raise",
+		name: "Side Lateral Raise",
+		force: "push",
+		level: "beginner",
+		mechanic: "isolation",
+		equipment: "dumbbell",
+		primaryMuscles: ["shoulders"],
+		secondaryMuscles: [],
+		instructions: ["Hold a dumbbell in each hand at your sides.", "Raise them out to the sides to shoulder height."],
+		category: "strength",
+		images: ["Side_Lateral_Raise/0.jpg", "Side_Lateral_Raise/1.jpg"],
+	},
 	{
 		id: "Barbell_Bench_Press_-_Medium_Grip",
 		name: "Barbell Bench Press - Medium Grip",

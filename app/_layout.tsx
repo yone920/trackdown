@@ -89,6 +89,9 @@ export default function RootLayout() {
             <Stack.Screen name="lifts" />
             {/* Any exercise name, anywhere, opens this. */}
             <Stack.Screen name="exercise/[id]" />
+            {/* Any exercise ROW opens this: every session of that movement, and how the
+                load has moved (app/history/[exercise].tsx). */}
+            <Stack.Screen name="history/[exercise]" />
           </Stack.Protected>
           <Stack.Protected guard={!session}>
             <Stack.Screen name="(auth)" />

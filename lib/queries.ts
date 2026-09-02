@@ -18,6 +18,7 @@ import { readerLine } from './errors';
 import { rememberExercise } from './exercise-cache';
 import type {
   EatingView,
+  ExerciseHistory,
   WeighIn,
   AnalyzeResponse,
   CoachNext,
@@ -348,6 +349,21 @@ export function useTrainingBoard() {
   return useQuery({
     queryKey: ['training', 'board'],
     queryFn: () => api<TrainingBoard>('/api/training/board', { query: { tz: tzOffsetMin() } }),
+  });
+}
+
+/**
+ * GET /api/training/exercise — one movement, every session of it (field report 2026-09-02).
+ *
+ * Keyed by NAME, because that is what a logged row carries: a movement the catalogue has
+ * never heard of still has a history, and it is the one a user is most likely to check.
+ */
+export function useExerciseHistory(name: string | null) {
+  return useQuery({
+    queryKey: ['training', 'exercise', (name ?? '').trim().toLowerCase()],
+    enabled: !!name && name.trim() !== '',
+    queryFn: () =>
+      api<ExerciseHistory>('/api/training/exercise', { query: { tz: tzOffsetMin(), name: name as string } }),
   });
 }
 

@@ -320,3 +320,66 @@ export function Columns({
     </View>
   );
 }
+
+/**
+ * A measure over its own sessions: one dot per session, and a line through them once there
+ * are enough to mean something (field report 2026-09-02: "the historic loads, the progress
+ * of the load … which direction I'm going").
+ *
+ * **The line is the claim and the dots are the evidence**, which is why the dots are always
+ * drawn and the line is conditional. Two points joined up look exactly like a trend and are
+ * not one — the goal card learnt that when a single weigh-in drew a chart with a projection
+ * across it (lib/exercise-history.ts §sparseNote decides; this only draws).
+ *
+ * `values` are oldest first, in whatever unit the caller is plotting. A flat series still
+ * gets a line down the middle rather than at the bottom: nothing changing is a fact about
+ * the load, not a zero.
+ */
+export function SessionTrend({
+  values,
+  height = 120,
+  color = C.accent,
+  line = true,
+}: {
+  values: number[];
+  height?: number;
+  color?: string;
+  /** False under three sessions: dots only, and the screen says why. */
+  line?: boolean;
+}) {
+  const [width, onLayout] = useWidth();
+  const finite = values.filter((value) => Number.isFinite(value));
+  const min = finite.length > 0 ? Math.min(...finite) : 0;
+  const max = finite.length > 0 ? Math.max(...finite) : 1;
+  const span = max - min;
+  const pad = 10;
+  const y = (value: number) =>
+    // A flat series has no span to scale against; drawn down the middle rather than at the
+    // floor, where it would read as "nothing".
+    span === 0 ? height / 2 : pad + (1 - (value - min) / span) * (height - pad * 2);
+  const x = (index: number) =>
+    finite.length <= 1 ? width / 2 : pad + (index / (finite.length - 1)) * (width - pad * 2);
+
+  const d = finite.map((value, index) => `${index === 0 ? 'M' : 'L'}${x(index)},${y(value)}`).join(' ');
+
+  return (
+    <View onLayout={onLayout} style={{ height }}>
+      {width > 0 && finite.length > 0 && (
+        <Svg width={width} height={height}>
+          {line && finite.length > 1 && (
+            <Path d={d} stroke={color} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          )}
+          {finite.map((value, index) => (
+            <Circle
+              key={index}
+              cx={x(index)}
+              cy={y(value)}
+              r={index === finite.length - 1 ? 4.5 : 3}
+              fill={index === finite.length - 1 ? color : C.dim}
+            />
+          ))}
+        </Svg>
+      )}
+    </View>
+  );
+}

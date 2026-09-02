@@ -806,3 +806,39 @@ describe("the revision schema", () => {
 		expect(assertUsableRevision({ ...brief, revision_mode: "append" } as never)).toBeTruthy();
 	});
 });
+
+// ── a movement with no meaningful load ───────────────────────────────────────────────
+// The band pack (2026-09-02) put eighteen movements in the catalogue whose resistance is a
+// rubber band: there is no pound on them, and "add five pounds" is not a thing anybody can
+// do to one. The Plank has always been in that position, so the rules already had to cope —
+// this pins that they do, and that no band-specific progression was invented for them.
+
+describe("prescribeLoads — a strength movement carrying no load", () => {
+	function banded(date: string, options: { sets?: number; reps?: number } = {}) {
+		return activity(date, {
+			exercise: "Band Lateral Raise",
+			category: "strength",
+			muscle_groups: ["shoulders"],
+			sets: options.sets ?? 3,
+			reps: options.reps ?? 15,
+			load_lb: null,
+			confidence: "high",
+		});
+	}
+
+	it("prescribes it without inventing a weight for it", () => {
+		const item = only(prescribeLoads(featuresFor([banded(daysAgo(2)), banded(daysAgo(9))])), "Band Lateral Raise");
+		expect(item.load_lb).toBeNull();
+		// Sets and reps are still real: what progresses on a band is the work, not the iron.
+		expect(item.sets).toBeGreaterThan(0);
+		expect(item.reps).toBeGreaterThan(0);
+		// And the sentence the coach may reuse verbatim never puts a pound on it.
+		expect(item.why).not.toMatch(/\blb\b/);
+	});
+
+	it("says the same about it on a single session as it does about any other new movement", () => {
+		const item = only(prescribeLoads(featuresFor([banded(daysAgo(1))])), "Band Lateral Raise");
+		expect(item.load_lb).toBeNull();
+		expect(item.why).not.toMatch(/\blb\b/);
+	});
+});

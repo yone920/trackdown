@@ -83,6 +83,83 @@ half-lived today.
 
 ---
 
+## Bands, and one exercise at a time (`wp-bands-and-history`)
+
+**2026-09-02.** Two user requests in one deploy: a catalogue that was nearly bare for rubber
+bands (asked twice), and a field report on All lifts — "60 lb · today … doesn't have enough
+detail … the historic loads, the progress of the load … which direction I'm going."
+
+### The band pack
+
+free-exercise-db has exactly twenty movements under `equipment: "bands"`. We had two, one of
+them a stretch. The other **eighteen are seeded**, in the catalogue's own vocabulary
+(`equipment: ["band"]`, muscles in the ledger's tokens, category `strength`).
+
+**19 of the 20 have photographs.** Each new row carries the dataset's own phrasing as an
+alias — "lateral raise with bands", "hip extension with bands" — which is what earns it two
+frames from the importer; the odd one out is the pre-existing **Shoulder Dislocates**, which
+free-exercise-db does not have. Spoken aliases are the way people ask for them: "banded
+lateral raise", "band kickback", "band glute bridge", "monster walk".
+
+Checked, not assumed: a script ran the real matcher over the real dataset before any of this
+was committed — no alias was stolen from an older row, no older row's key moved, and every
+new row resolves to itself. Those two properties are now `exerciseMatch.test.ts` assertions
+over the **whole** catalogue rather than over a list of examples.
+
+The qualifier guard does the rest: "banded squat" cannot fall through to Back Squat, because
+"banded" is a qualifier and only a row that carries it may answer to it — the assisted
+chin-up rule, still holding.
+
+**A wording bug fell out of it.** A band has no meaningful load, and `prescribeLoads` said
+`hold the load lb until it is two` about one: two branches interpolated `${current ?? "the
+load"} lb` instead of using the `say()` helper that has always known what a null load reads
+like. Fixed at those two lines — no progression logic changed, and the Plank has been in
+that position since it was seeded.
+
+**Deferred:** free-exercise-db has no band curl and no band row, so the pack has neither.
+Saying "band curl" still logs fine as free text but feeds no muscle to the coverage ledger.
+That is a catalogue gap with no illustration behind it, and it is noted here rather than
+papered over with a row nobody can picture — a test pins the gap so it cannot rot silently.
+
+### Per-exercise history
+
+Tapping a lift **row** — on the board and on All lifts — now opens every session of that
+movement. The **name still opens the how-to sheet**: React Native gives the touch to the
+innermost responder, which is the same nesting `components/kit.tsx` §Row already relies on,
+and a test asserts both doors from one list.
+
+The screen (`app/history/[exercise].tsx`): the muscle eyebrow and the name, then **the
+coach's own next step** ("65 → 70 lb next" with "Two sessions at target reps." under it),
+then the load over its sessions, then every session, newest first — "Today · 4 × 15 @ 65 lb",
+with per-side plates where the barbell helper applies and the entry count where a day held
+more than one. A row opens the record it came from, in the same review-and-tell sheet every
+log uses; ✕ takes it back.
+
+**Two points are not a trend.** Under three sessions the chart draws its dots and no line,
+and says "First sessions — the line starts when there are three" — the lesson the goal card
+paid for when one weigh-in drew a projection.
+
+Cardio rows open the same screen in their own currency: minutes and pace per session,
+minutes on the chart, "22 min next" as the state line, and never a pound anywhere on it.
+
+**API — additive.** `GET /api/training/exercise?name=&tz=` (`services/training/history.ts`):
+a session per local day over two years, newest first, each with the row id that can correct
+it. A day with two rows of one lift is **one** session carrying the top working set — three
+dots on one date would read as three sessions and be a lie about frequency. The next step is
+**read off the board** rather than recomputed, so this screen and the row that opened it
+cannot drift apart; that costs one extra read of the four-week window per open, which is the
+price of there being exactly one progression engine. 404 for a name this account has never
+logged, and never another account's rows.
+
+**Tests** — app 505 → 519, backend 789 → 796. New: `__tests__/exercise-history.test.tsx`
+(14 — the formatting rules, the screen for a lift, the cardio variant, the one-session sparse
+state, the record door, and the name-versus-row contract on All lifts) and seven endpoint
+tests in `app.test.ts` (session-per-day folding, the shared next step, cardio's pace,
+case-insensitivity, 404s, a missing name). The band pack added six: catalogue counts and
+metadata, the spoken aliases, the qualifier guard, whole-catalogue collision checks, and two
+in `rules.test.ts` for a load-less strength movement. `SessionTrend` joins
+`components/charts.tsx`.
+
 ## History is domain-scoped (`wp-scoped-history`)
 
 **2026-09-02, user feedback on the calendar that shipped an hour earlier** (feature liked,

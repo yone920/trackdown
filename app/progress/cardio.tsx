@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, View } from 'react-native';
 
@@ -143,14 +144,20 @@ export default function CardioDetail() {
 
 /** A lift's row, in cardio's units. Minutes, distance and pace — there is no load here. */
 function CardioRow({ row, last }: { row: BoardCardioRow; last: boolean }) {
+  const router = useRouter();
   const values = row.series
     .map((point) => point.duration_min)
     .filter((minutes): minutes is number => minutes != null);
   const color = row.sentiment === 'good' ? C.good : row.sentiment === 'watch' ? C.accent : C.mute;
 
+  // The same door as a lift's row, in this section's own currency: minutes and pace per
+  // session rather than loads (field report 2026-09-02).
   return (
-    <View
+    <Pressable
       testID={`cardio-${row.exercise}`}
+      accessibilityRole="button"
+      accessibilityLabel={`${row.exercise} — its history`}
+      onPress={() => router.push({ pathname: '/history/[exercise]', params: { exercise: row.exercise } })}
       style={{ paddingVertical: 12, borderBottomWidth: last ? 0 : 1, borderBottomColor: C.line }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
         <View style={{ flex: 1, paddingRight: 12 }}>
@@ -180,6 +187,6 @@ function CardioRow({ row, last }: { row: BoardCardioRow; last: boolean }) {
       <Sub testID={`cardio-next-${row.exercise}`} style={{ marginTop: 6, color: C.ink }}>
         {row.next.text}
       </Sub>
-    </View>
+    </Pressable>
   );
 }
