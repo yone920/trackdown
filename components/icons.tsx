@@ -136,6 +136,18 @@ export function IconChevronLeft(p: IconProps) {
   );
 }
 
+/** A calendar — the door to any day that has already happened. */
+export function IconCalendar(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Rect x="3.5" y="5" width="17" height="15" rx="2.5" {...base(p)} />
+      <Line x1="3.5" y1="9.5" x2="20.5" y2="9.5" {...base(p)} />
+      <Line x1="8" y1="3" x2="8" y2="6" {...base(p)} />
+      <Line x1="16" y1="3" x2="16" y2="6" {...base(p)} />
+    </Frame>
+  );
+}
+
 export function IconCamera(p: IconProps) {
   return (
     <Frame size={p.size}>

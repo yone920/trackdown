@@ -83,6 +83,62 @@ half-lived today.
 
 ---
 
+## A calendar on Train and Eat (`wp-calendar`)
+
+**2026-09-02, user request:** "the train only shows today … there should be some sort of
+calendar so anyone can easily go back and see what they did last week or a specific day.
+Same for the eat."
+
+Both tabs own the *open* day by design (each tab owns one verb, user decision 2026-09-01),
+which left the past reachable only through Progress. Now each header carries a calendar
+button, and it opens a month.
+
+**One component, two doors** — `components/calendar-sheet.tsx`, used by both headers.
+Deliberately not a third copy of the Days list: Progress keeps the archive with verdict
+words and week tallies; this is a month at a glance. A bottom sheet (C.card, radius 20 top)
+with the month title between prev/next, a Mon–Sun grid, a dot under any day that has
+something on it, today ringed, and a tap that opens `/day/<date>` — the archival reading,
+which already covers both training and eating and redirects today's date to Train on its
+own. Days that have not happened are drawn dim and are not buttons; the next-month step
+stops at the month we are living in.
+
+**Dots** are the Days list's own colours (`components/days-list.tsx`): green served, accent
+missed, and a quiet mute dot for a day that was logged but never judged — an open day, or a
+day with no goal to serve. **An empty day gets nothing at all**, which is the point of the
+grid: the marks are the answer to "when did I train".
+
+**No backend.** `before` on `GET /api/days` is exclusive and the list comes back newest
+first, so the first of the NEXT month with `limit=31` covers any month exactly
+(`lib/calendar.ts` §monthWindow). A month with gaps spills a few rows out of the older end
+of the window and the sheet keeps the ones whose date is in the month. `useDaysInMonth`
+(lib/queries.ts) is `enabled` only while the sheet is open, so a header nobody has tapped
+fetches nothing.
+
+**New**
+
+- `lib/calendar.ts` — the month as arithmetic: `monthGrid` (Monday-first, padded to whole
+  weeks), `monthWindow`, `shiftMonth`, `monthTitle`, `daysInMonth`, `dotTone`, `rowsByDate`.
+  Dates are built from local `Date` parts only — `new Date(iso)` parses as UTC and lands a
+  day early west of Greenwich, the trap `lib/format.ts` already documents.
+- `components/calendar-sheet.tsx` — `CalendarButton` (40 pt target around a 20 px glyph) and
+  `CalendarSheet`.
+- `IconCalendar` in `components/icons.tsx`, drawn on the same 24 grid at 1.8 as the rest.
+
+**Tests** — app 476 → 492. `__tests__/calendar.test.tsx` (14): the grid's padding and
+today/future flags, February in a leap year, the month window matching the endpoint's
+exclusive `before`, dot tone per verdict and the empty-day case, and the sheet itself —
+dots drawn from fixture days, a tap that navigates, a future day that refuses, and paging
+back a month (asserting the server was asked for THAT month) then forward to a disabled
+next. Plus one header test in each of `train.test.tsx` and `eat.test.tsx`: the button is
+there and the grid is not, until it is tapped.
+
+**Deferred**
+
+- The sheet lists no summary line per day — a dot is all a month cell can hold honestly.
+  The day page is one tap away and says everything.
+- Anthropic contract tests were not run for this WP (no backend change); the two that fail
+  intermittently do so on model behaviour, as noted in the previous section.
+
 ## Errors stop at the boundary (`wp-error-policy`)
 
 **2026-09-02, user-approved principle: "I don't want errors like this to propagate to the

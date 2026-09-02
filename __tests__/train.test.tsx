@@ -356,6 +356,32 @@ describe('Train — the plan and what was done, on one page', () => {
   });
 });
 
+describe('Train — the calendar in the header', () => {
+  function serveDay(day: unknown) {
+    mockApi.mockImplementation((path: string) => {
+      if (path.startsWith('/api/day/')) return Promise.resolve(day);
+      if (path === '/api/week') return Promise.resolve(makeWeek());
+      if (path === '/api/goals') return Promise.resolve({ active: [], history: [], no_goal: true });
+      if (path === '/api/profile') return Promise.resolve({ id: 'u', targets: {} });
+      return Promise.resolve(null);
+    });
+  }
+
+  // The tab shows today and only today; this is the way back to the rest (user request
+  // 2026-09-02). The same sheet is in the Eat header — one component, two doors.
+  it('offers a way back to any day, and opens the month on a tap', async () => {
+    serveDay(makeDay());
+    renderToday();
+
+    await waitFor(() => expect(screen.getByTestId('train-calendar')).toBeTruthy());
+    expect(screen.queryByTestId('calendar-grid')).toBeNull();
+
+    fireEvent.press(screen.getByTestId('train-calendar'));
+    await waitFor(() => expect(screen.getByTestId('calendar-grid')).toBeTruthy());
+    expect(screen.getByTestId('calendar-title')).toBeTruthy();
+  });
+});
+
 describe('Train — the door, and what is no longer on the page', () => {
   // User decision 2026-09-01, from screenshots of the merged page. Three things came off
   // because they were pushing the day off its own screen, and one because it was a second

@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, View } from 'react-native';
 
 import { Bar } from '@/components/charts';
@@ -13,6 +13,7 @@ import { localDateKey, useDeleteRecord, useEating } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, SPACE, TABULAR } from '@/lib/theme';
 import type { EatingWeek, MacroAverage, MacroLine, MealSlot } from '@/lib/types';
+import { CalendarButton, CalendarSheet } from '@/components/calendar-sheet';
 
 // The Eat tab (user decision 2026-09-01). Four layers, and the order is the argument:
 //
@@ -37,6 +38,8 @@ const SLOT_ORDER: MealSlot[] = ['breakfast', 'lunch', 'dinner', 'snack'];
 export default function Eat() {
   const router = useRouter();
   const insets = useScreenInsets();
+  // The month sheet, opened from the header — the same one Train uses.
+  const [calendar, setCalendar] = useState(false);
   const eating = useEating();
   const remove = useDeleteRecord();
 
@@ -72,6 +75,9 @@ export default function Eat() {
             Eat
           </Disp>
         </View>
+        {/* Any day that has already happened, from the header (user request 2026-09-02).
+            One sheet, shared with the other tab — components/calendar-sheet.tsx. */}
+        <CalendarButton testID="eat-calendar" onPress={() => setCalendar(true)} />
         <Pressable
           testID="eat-you"
           accessibilityLabel="You"
@@ -196,6 +202,8 @@ export default function Eat() {
           </Card>
         )}
       </Section>
+
+      <CalendarSheet visible={calendar} onClose={() => setCalendar(false)} />
     </ScrollView>
   );
 }

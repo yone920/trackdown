@@ -105,6 +105,23 @@ beforeEach(() => {
   mockPush.mockReset();
 });
 
+// User request 2026-09-02: "the train only shows today … there should be some sort of
+// calendar so anyone can easily go back and see what they did last week or a specific day.
+// Same for the eat." One sheet, opened from either header (components/calendar-sheet.tsx).
+describe('the Eat header calendar', () => {
+  it('offers a way back to any day, and opens the month on a tap', async () => {
+    serve(view());
+    renderEat();
+
+    await waitFor(() => expect(screen.getByTestId('eat-calendar')).toBeTruthy());
+    expect(screen.queryByTestId('calendar-grid')).toBeNull();
+
+    fireEvent.press(screen.getByTestId('eat-calendar'));
+    await waitFor(() => expect(screen.getByTestId('calendar-grid')).toBeTruthy());
+    expect(screen.getByTestId('calendar-title')).toBeTruthy();
+  });
+});
+
 describe('the Eat page', () => {
   it('reads the whole page from one request, and generates nothing by opening', async () => {
     serve(view());
