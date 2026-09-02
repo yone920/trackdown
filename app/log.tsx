@@ -17,7 +17,7 @@ import { EvidenceThumbs, LocalThumbs } from '@/components/evidence';
 import { IconCamera, IconClose, IconKeyboard, IconMic } from '@/components/icons';
 import { BigButton, Card, Chip, Chips, Skeleton, SkeletonLines } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
-import { readerLine } from '@/lib/errors';
+import { GENERIC_MESSAGE, readerLine } from '@/lib/errors';
 import {
   recordToResult,
   resultToPatch,
@@ -210,6 +210,15 @@ export default function LogSheet() {
       setDateChoice('proposed');
       // A question stays on the say-it step: there is nothing to review yet.
       if (read.length > 0 && !question) setStep('review');
+      // **Nothing to draw is a failure, not a no-op.** This branch used to be absent, so a
+      // response with no parts and no question left the screen exactly as it was: no card,
+      // no error, no question, the typed words still sitting in the box — which is what
+      // was reported on 2026-09-02 ("I just the same bawl of the lunch I had earlier",
+      // tapped Log, nothing happened). Whatever produced it, the one thing this screen must
+      // never do is answer a tap with silence. The server refuses to send this shape now
+      // (backend routes/fusion.ts); this is the half that does not depend on which server
+      // the phone is talking to.
+      else if (read.length === 0) setError(GENERIC_MESSAGE);
     } catch (caught) {
       setError(readerLine(caught, 'Could not read that.'));
     }

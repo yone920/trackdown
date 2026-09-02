@@ -83,6 +83,87 @@ half-lived today.
 
 ---
 
+## The tap that did nothing (`fix-silent-log`)
+
+**2026-09-02, field bug, high priority.** The user typed — typos theirs — "I just the same
+bawl of the lunch I had earlier" and tapped Log. No review card, no error, no question,
+their words still in the box. The server log had one `fusion.route` cache line and then
+silence.
+
+### What actually happened
+
+**The reader was not the problem, and the sentence was not the problem.** Reproduced twice
+against the live model: once through the analyzer directly, once end-to-end over HTTPS on a
+throwaway account with an earlier lunch seeded. Both times it came back in about two seconds
+as **one meal part carrying the earlier lunch's own numbers** — 620 kcal, 38 g protein,
+"Beef soup bowl with rice". The missing verb and "bawl" derailed nothing.
+
+The user's server log is consistent with exactly that: a meal is routed in ONE call and
+needs no detail call, so a *successful* read of this sentence logs one cache line and
+nothing else. "One call then nothing" was not a stall — **it was the shape of success, and
+nothing in the log could tell the two apart.** That is the first bug, and it is the one the
+coordinator called correctly: the diagnosis gap.
+
+The second bug is a hole on the phone, and it is the reported end state exactly:
+
+```js
+if (read.length > 0 && !question) setStep('review');   // ← and no else
+```
+
+A response the client cannot draw — no parts, no question — fell off the end of the handler:
+no card, no error, nothing cleared, the typed words left sitting in the box. **A tap
+answered with silence.** What produced that response on their attempt cannot be established
+from the evidence that exists, and that is precisely why the instrumentation had to come
+first rather than a guess dressed up as a fix.
+
+### What changed
+
+**Instrumented (backend).** `services/fusion/outcome.ts`: every analyze, revise and parse now
+ends with one `info` line — how many parts, of what kinds, whether a question was asked, how
+many photos, how many milliseconds — and every failure ends with one naming its policy class
+(`services/llmErrors.ts`). **Kinds and counts only; never the user's words.** `Server-Timing`
+now covers the fusion routes (`read;dur=…, total;dur=…`) the way it already covered the
+exercise sheet.
+
+**A 200 with nothing in it is no longer a thing this server can say.** If a reading comes back
+with no parts, that is a failed read: `502` with `reader_failed` and the human line, plus an
+`error` log line. The client has something to draw in every case.
+
+**And the phone holds regardless of the server it is talking to**: a response with no parts
+and no question now shows the generic reader line and keeps the typed text. Silence is not a
+state this screen may end in.
+
+**The product contract is pinned** (`anthropic.fusion.contract.test.ts`, against the real
+model): an earlier lunch in `todayMeals` plus that literal sentence must come back as a meal
+within ±25% of the earlier meal's calories and recognisably that food — never a question,
+never a statement. `todayMeals` is in the context for exactly this, and now something fails
+if it stops working.
+
+### Their account
+
+Checked read-only, metadata only — no content read. **Nothing stray landed at the time of the
+failure**: no row of any kind on that account between 21:30 and 22:02 UTC. One meal row was
+saved cleanly at **22:02:41 UTC (6:02 p.m. ET)**, four minutes after the failed attempt, with
+`logged_at` equal to `created_at` — a normal, complete log, almost certainly their retry. It
+was left exactly as it is. The throwaway account's seeded lunch was deleted after the repro;
+analyze itself writes nothing, so there was nothing else to remove.
+
+**Tests** — app 519 → 520, backend 796 → 797, plus one live contract test. New: the empty
+response renders a line and keeps the text (`log.test.tsx`); a reading with no parts is a
+502 with a code and never a 200 (`app.test.ts`); the earlier-lunch resolution
+(`anthropic.fusion.contract.test.ts`).
+
+**Deferred / uncertain**
+
+- **The exact trigger is not established.** The reader, the route and the response shape are
+  all verified good for this sentence on this server, so the remaining candidates are on the
+  client or the wire — a response that never arrived, or a 200 with an empty list from a
+  moment that is no longer reproducible. Both of those now announce themselves: the server
+  logs every outcome, and the phone can no longer answer a tap with nothing. If it recurs,
+  the log will say which.
+- The throwaway account itself remains (there is no delete-account endpoint); its rows are
+  gone.
+
 ## Bands, and one exercise at a time (`wp-bands-and-history`)
 
 **2026-09-02.** Two user requests in one deploy: a catalogue that was nearly bare for rubber

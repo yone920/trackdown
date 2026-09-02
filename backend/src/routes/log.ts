@@ -7,6 +7,7 @@ import { saveConfirmed } from "../services/fusion/confirm.js";
 import type { FusionResult } from "../services/fusion/schema.js";
 import type { LogParser, ParsedItem } from "../services/parseLog.js";
 import { sendLlmError } from "./llmError.js";
+import { logFailure } from "../services/fusion/outcome.js";
 
 // Free-text logging — v1's endpoints, still the ones the shipped app calls:
 //   POST /api/parse-log { text }  → { items }             parse only
@@ -93,12 +94,15 @@ export function logRouter(pool: pg.Pool, parser: LogParser): Router {
 		// the rejection goes to the central handler, which is where the provider's own JSON
 		// used to be turned into a response body (services/llmErrors.ts).
 		let items;
+		const startedAt = performance.now();
 		try {
 			items = await parser.parse(parsed.data.text);
 		} catch (error) {
+			logFailure("parse-log", error, performance.now() - startedAt);
 			sendLlmError(res, error, "parse-log");
 			return;
 		}
+		console.info(`📖 parse-log: ${items.length} item${items.length === 1 ? "" : "s"} · ${(performance.now() - startedAt).toFixed(0)}ms`);
 		res.json({ items });
 	});
 
@@ -110,12 +114,15 @@ export function logRouter(pool: pg.Pool, parser: LogParser): Router {
 		}
 		const text = parsed.data.text;
 		let items;
+		const startedAt = performance.now();
 		try {
 			items = await parser.parse(text);
 		} catch (error) {
+			logFailure("log.parse", error, performance.now() - startedAt);
 			sendLlmError(res, error, "log.parse");
 			return;
 		}
+		console.info(`📖 log.parse: ${items.length} item${items.length === 1 ? "" : "s"} · ${(performance.now() - startedAt).toFixed(0)}ms`);
 		if (items.length === 0) {
 			res.status(422).json({ error: "Could not understand that." });
 			return;
