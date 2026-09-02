@@ -87,6 +87,68 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-02 — a dropped answer is not a failed plan (`fix-lost-generation`)
+
+The user pressed **"Start today's workout"**, watched **"Thinking…"**, and watched the page
+go back to **"Nothing planned yet"**. The plan had been written: five items, *"Pull day:
+back, biceps and hamstrings"*, sitting finished on the server the whole time. The app had
+simply stopped listening, and then said nothing about it.
+
+**Two bugs, and the second is the one that made it silent.**
+
+1. **There was no explicit timeout on the fetch wrapper** — which does not mean there was
+   none. iOS's `NSURLSession` gives up at **60 seconds**, and a coach brief is a Sonnet call
+   over a phone connection. The platform's number was shorter than the work, so a generation
+   that *succeeded* came back to the app as a network error.
+2. **The error note was rendered only when a brief already existed** (`note && brief`). On
+   the first generation of the day there is no brief by definition — so the one message that
+   would have explained anything had nowhere to go, and the page reverted in silence.
+
+**The fixes.**
+
+- `lib/api.ts` gains an explicit deadline: `DEFAULT_TIMEOUT_MS` 30 s, and
+  `GENERATE_TIMEOUT_MS` **180 s** for the one call that routinely outlives a phone's
+  patience. An abort surfaces as a `TimeoutError`, not a bare network error, because "we
+  stopped waiting" and "the network refused" lead to different recoveries. *A number the app
+  chooses is a number it can reason about; a platform default is one it finds out about in a
+  screenshot.*
+- **A lost answer is recovered, not reported** (`lib/coach-recovery.ts`,
+  `useStartWorkout`). On a dropped or slow generate, the app polls `/api/coach/status` —
+  cheap, and constitutionally unable to generate anything — backing off 2 s → 34 s over
+  about two minutes. The moment it says `has_plan`, the brief is fetched and drawn. On a
+  long call **a dropped response is the expected case, not the exceptional one**, and the
+  server's per-day semantics mean the brief is already there to be found.
+- **A refusal is still a refusal.** An `ApiError` (a 503, say) is said plainly and does not
+  start a poll for a plan nobody is writing. Only a *lost* answer is worth waiting on.
+- **One spinner, one disabled button.** The recovery counts as busy, because from the user's
+  side it is the same wait; a second tap during it does nothing and starts no second
+  generation.
+- **It never ends in silence.** If the window closes with nothing: *"That didn't come back —
+  the plan may still be being written. Check again in a moment."* — with the button back.
+  It never claims the plan failed, because it does not know that. And the note now draws
+  with or without a brief, which was the actual silence.
+
+**On the server: no behaviour change, and one honest admission.** There is no evidence of a
+latency regression — and there could not be. The coach route emitted no timings at all, and
+the logs that would have covered yesterday were destroyed by a container rebuild at 00:17
+followed by a host reboot at 00:46. So the route is **instrumented** now: `Server-Timing`
+with a `generate` phase on the regenerate path and a `brief` phase on the cheap read, using
+the middleware two other routes already use. That writes a response header and changes
+nothing else — it is the difference between diagnosing the next one and guessing at it.
+
+Worth knowing for next time, from the same diagnosis: the coach is `claude-sonnet-4-5` (by
+hardcoded default, not by env), the Anthropic client is constructed with **no timeout or
+retry override**, and `adapters/coach/llm.ts` does one **silent retry** — so a slow call can
+quietly become two, with only a `⚠️` line to show for it. The container is not
+resource-starved.
+
+**Verified** — app **357 → 373** across **28 suites**: the deadline (a hung request aborts
+as a `TimeoutError`, waits its full time, actually cancels the fetch, and leaves a fast
+request alone), the poll (finds the plan, backs off, survives a failed check, gives up after
+~2 min, stops when the screen goes away), and the page (recovers and draws the found plan,
+never ends in silence, guards the double tap, says a refusal plainly without polling).
+Backend **715 → 717** for the timing header. `tsc` and `expo lint` clean.
+
 ### 2026-09-01 — the one sheet says which door you came through (`fix-log-framing`)
 
 Pressing **"Tell me"** on the You page opened the logger saying **"What did you do?"** over a

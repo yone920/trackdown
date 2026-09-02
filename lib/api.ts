@@ -22,6 +22,32 @@ export class ApiError extends Error {
 type Query = Record<string, string | number | boolean | undefined>;
 
 /**
+ * How long a request may take before the app gives up on it.
+ *
+ * There was no explicit timeout here, which does NOT mean there was none: the platform
+ * supplies one, and on iOS `NSURLSession` gives up at **60 seconds**. That is shorter than a
+ * coach brief takes to write on a phone connection, and it is why a generation that
+ * SUCCEEDED on the server came back to the app as a network error (field report
+ * 2026-09-02: "Thinking…" then silently nothing, with the plan sitting on the server).
+ *
+ * So the ceiling is explicit now, and long calls say how long they need. A number the app
+ * chooses is a number the app can reason about; a platform default is a number it finds out
+ * about in a screenshot.
+ */
+export const DEFAULT_TIMEOUT_MS = 30_000;
+
+/** A generation is a model call over a phone connection. It is allowed to take its time. */
+export const GENERATE_TIMEOUT_MS = 180_000;
+
+/** What a timeout throws, so a caller can tell "slow" from "refused". */
+export class TimeoutError extends Error {
+  constructor(public readonly ms: number) {
+    super('That took too long to come back.');
+    this.name = 'TimeoutError';
+  }
+}
+
+/**
  * Minutes to add to UTC for the phone's local time. The backend takes this on every
  * day-shaped route: day boundaries are the user's local midnight, and only the phone
  * knows where that is (docs/agent-brief.md §Engineering rules).
@@ -38,7 +64,13 @@ export function setUnauthorizedHandler(handler: () => void): void {
 
 export async function api<T>(
   path: string,
-  options: { method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'; body?: unknown; query?: Query } = {},
+  options: {
+    method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+    body?: unknown;
+    query?: Query;
+    /** Overrides {@link DEFAULT_TIMEOUT_MS}. A generation passes {@link GENERATE_TIMEOUT_MS}. */
+    timeoutMs?: number;
+  } = {},
 ): Promise<T> {
   const url = new URL(API_URL + path);
   for (const [key, value] of Object.entries(options.query ?? {})) {
@@ -50,11 +82,17 @@ export async function api<T>(
   if (token) headers.Authorization = `Bearer ${token}`;
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
 
-  const res = await fetch(url.toString(), {
-    method: options.method ?? 'GET',
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
+  const ms = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const res = await withTimeout(
+    (signal) =>
+      fetch(url.toString(), {
+        method: options.method ?? 'GET',
+        headers,
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        signal,
+      }),
+    ms,
+  );
 
   if (res.status === 204) return undefined as T;
 
@@ -72,6 +110,25 @@ export async function api<T>(
     throw new ApiError(res.status, payload.error ?? `Request failed (${res.status}).`, payload.issues);
   }
   return data as T;
+}
+
+/**
+ * One fetch, with a deadline the app chose. An abort is reported as {@link TimeoutError}
+ * rather than as the runtime's own `AbortError`, because "we stopped waiting" and "the
+ * network refused" lead to different recoveries and the caller has to be able to tell them
+ * apart.
+ */
+async function withTimeout(run: (signal: AbortSignal) => Promise<Response>, ms: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await run(controller.signal);
+  } catch (error) {
+    if (controller.signal.aborted) throw new TimeoutError(ms);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** The headers an <Image> needs to fetch `/api/evidence/:id`, which is authenticated. */

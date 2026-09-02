@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
+import { ApiError } from '@/lib/api';
+import { RECOVERY_DELAYS_MS } from '@/lib/coach-recovery';
 import { EatGuidance } from '@/components/eat-guidance';
 import { PlanSection as Coach } from '@/components/plan-section';
 import type { CoachBrief, CoachNext } from '@/lib/types';
@@ -32,7 +34,18 @@ jest.mock('@/lib/api', () => ({
   SHEET_PHOTO_WIDTH: 640,
   THUMB_PHOTO_WIDTH: 320,
   API_URL: 'http://test',
-  ApiError: class extends Error {},
+  GENERATE_TIMEOUT_MS: 180_000,
+  // Declared inside the factory, and read back through the module below: the code under
+  // test does `instanceof ApiError`, so the test has to throw the SAME class the code
+  // imports, not a look-alike.
+  ApiError: class ApiError extends Error {
+    status: number;
+    constructor(status: number, message: string) {
+      super(message);
+      this.status = status;
+      this.name = 'ApiError';
+    }
+  },
   setUnauthorizedHandler: () => {},
 }));
 
@@ -924,5 +937,141 @@ describe('the merged training section', () => {
     await screen.findByTestId('coach-truth-0');
     // The completion math is untouched: the tick and the count still read from it.
     expect(screen.getByTestId('coach-truth-0').props.children).toContain('2 of 4 sets');
+  });
+});
+
+// ── the answer that never came back ──────────────────────────────────────────────────
+// Field report 2026-09-02: the user pressed "Start today's workout", watched "Thinking…",
+// and watched the page revert to "Nothing planned yet" — while a five-item brief sat
+// finished on the server. A model call over a phone connection outran the platform's
+// 60-second fetch ceiling, the promise rejected, and the screen said nothing at all.
+
+describe('a generation whose answer is lost', () => {
+  const lost = () => Object.assign(new Error('Network request failed'), { name: 'TypeError' });
+
+  /** No plan yet; the generate call drops; then the server admits it has one. */
+  function serveLostAnswer({ everFinds = true }: { everFinds?: boolean } = {}) {
+    let found = false;
+    mockApi.mockImplementation((path: string, options?: { method?: string }) => {
+      if (path === '/api/coach/next/regenerate' && options?.method === 'POST') {
+        // The generation succeeds server-side; the ANSWER is what is lost.
+        found = everFinds;
+        return Promise.reject(lost());
+      }
+      if (path === '/api/coach/status') {
+        return Promise.resolve({
+          date: '2026-08-30',
+          has_plan: found,
+          headline: found ? 'Pull day: back and shoulders' : null,
+          done_count: 0,
+          total_count: found ? 5 : 0,
+          complete: false,
+        });
+      }
+      if (path === '/api/coach/next') return Promise.resolve(found ? next() : { brief: null, stale: false });
+      return Promise.resolve(null);
+    });
+  }
+
+  // Fake timers go on AFTER the first render has settled: react-query's own scheduling
+  // runs on timers too, and freezing them before the page has loaded leaves the button
+  // disabled and the press a no-op.
+  afterEach(() => jest.useRealTimers());
+
+  async function settleThenFreeze() {
+    renderCoach();
+    await act(async () => {});
+    await waitFor(() => expect(screen.getByTestId('coach-regenerate')).not.toBeDisabled());
+    jest.useFakeTimers();
+  }
+
+  it('goes looking for the plan instead of reverting to nothing, and draws it when it turns up', async () => {
+    serveLostAnswer();
+    await settleThenFreeze();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('coach-regenerate'));
+    });
+
+    // The poll has taken over, and it says so rather than leaving a dead spinner.
+    expect(screen.getByTestId('coach-recovering')).toBeTruthy();
+    // Status is asked — the endpoint that cannot itself generate.
+    await act(async () => {
+      jest.advanceTimersByTime(2_000);
+    });
+    expect(mockApi.mock.calls.some(([path]) => path === '/api/coach/status')).toBe(true);
+
+    // And the plan the server had all along is fetched and drawn.
+    await act(async () => {
+      jest.advanceTimersByTime(1_000);
+    });
+    await act(async () => {});
+    expect(screen.getByText('Pull day: back and shoulders')).toBeTruthy();
+    expect(screen.queryByTestId('coach-recovering')).toBeNull();
+    // Exactly one generation was ever asked for.
+    expect(asks()).toHaveLength(1);
+  });
+
+  it('never ends in silence: it says so in words, with the button back', async () => {
+    serveLostAnswer({ everFinds: false });
+    await settleThenFreeze();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('coach-regenerate'));
+    });
+    // Run the whole recovery window out. Each wait is created only after the previous one
+    // resolves, so the clock has to be advanced with the microtasks flushed between —
+    // one big jump would only ever fire the first sleep.
+    for (const ms of RECOVERY_DELAYS_MS) {
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(ms);
+      });
+    }
+
+    await act(async () => {});
+    const note = screen.getByTestId('coach-note');
+    expect(note).toHaveTextContent(/didn’t come back/);
+    expect(note).toHaveTextContent(/may still be being written/);
+    // It never claims the plan failed, because it does not know that.
+    expect(note).not.toHaveTextContent(/failed/i);
+    // And the button is pressable again.
+    expect(screen.getByTestId('coach-regenerate')).not.toBeDisabled();
+  });
+
+  it('will not let a second tap start a second generation while the first is in flight', async () => {
+    serveLostAnswer();
+    await settleThenFreeze();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('coach-regenerate'));
+    });
+    // Mid-recovery the button is off, and pressing it changes nothing.
+    expect(screen.getByTestId('coach-regenerate')).toBeDisabled();
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('coach-regenerate'));
+      fireEvent.press(screen.getByTestId('coach-regenerate'));
+    });
+    expect(asks()).toHaveLength(1);
+  });
+
+  it('says a refusal plainly rather than polling for a plan nobody is writing', async () => {
+    // A 503 is an answer. Only a LOST answer is worth waiting on.
+    mockApi.mockImplementation((path: string, options?: { method?: string }) => {
+      if (path === '/api/coach/next/regenerate' && options?.method === 'POST') {
+        return Promise.reject(new ApiError(503, 'The coach is unavailable right now.'));
+      }
+      if (path === '/api/coach/next') return Promise.resolve({ brief: null, stale: false });
+      return Promise.resolve(null);
+    });
+    await settleThenFreeze();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('coach-regenerate'));
+    });
+
+    await act(async () => {});
+    expect(screen.getByTestId('coach-note')).toHaveTextContent(/unavailable right now/);
+    expect(screen.queryByTestId('coach-recovering')).toBeNull();
+    expect(mockApi.mock.calls.some(([path]) => path === '/api/coach/status')).toBe(false);
   });
 });

@@ -1,8 +1,18 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { api, authHeaders, exerciseMediaUrl, SHEET_PHOTO_WIDTH, tzOffsetMin, upload } from './api';
+import {
+  api,
+  ApiError,
+  authHeaders,
+  exerciseMediaUrl,
+  GENERATE_TIMEOUT_MS,
+  SHEET_PHOTO_WIDTH,
+  tzOffsetMin,
+  upload,
+} from './api';
+import { LOST_ANSWER_NOTE, pollForPlan } from './coach-recovery';
 import { rememberExercise } from './exercise-cache';
 import type {
   EatingView,
@@ -367,6 +377,10 @@ export function useAskCoach() {
       api<CoachNext>('/api/coach/next/regenerate', {
         method: 'POST',
         body: { tz_offset_min: tzOffsetMin(), context, revision, mode },
+        // A model call over a phone connection. The platform's own 60-second ceiling was
+        // shorter than the work, which is how a brief that WAS written came back to the app
+        // as a network error (field report 2026-09-02).
+        timeoutMs: GENERATE_TIMEOUT_MS,
       }),
     onSuccess: (data) => {
       qc.setQueryData(COACH_NEXT, data);
@@ -374,6 +388,80 @@ export function useAskCoach() {
     },
   });
 }
+
+/**
+ * Ask for today's plan, and do not lose it if the answer goes missing.
+ *
+ * The generation is the one call in the app that routinely outlives a phone's patience, and
+ * a dropped response is not a failed generation — the server finishes writing either way,
+ * and its per-day semantics mean asking again would return the same brief rather than a
+ * second one. So a lost answer is RECOVERED: poll the status endpoint, which cannot itself
+ * generate, until the plan shows up (lib/coach-recovery.ts).
+ *
+ * Three states come back, because the screen has three things to say: `asking` while the
+ * call is out, `recovering` once the answer is late and the poll has taken over, and a
+ * `note` when the window closed with nothing — which is the one thing the old flow never
+ * did. It reverted to "Nothing planned yet" and said nothing at all.
+ */
+export function useStartWorkout() {
+  const qc = useQueryClient();
+  const ask = useAskCoach();
+  const [recovering, setRecovering] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  // A screen that has gone away must not keep polling, and must not setState afterwards.
+  const gone = useRef(false);
+  useEffect(() => {
+    gone.current = false;
+    return () => {
+      gone.current = true;
+    };
+  }, []);
+
+  const start = useCallback(
+    async (input: AskCoachInput = {}) => {
+      setNote(null);
+      try {
+        await ask.mutateAsync(input);
+        return;
+      } catch (error) {
+        // A refusal is a refusal: say it, and do not sit there polling for a plan that was
+        // never going to be written. Only a lost or slow answer is worth waiting on.
+        if (error instanceof ApiError) {
+          if (!gone.current) setNote(error.message);
+          return;
+        }
+      }
+
+      if (gone.current) return;
+      setRecovering(true);
+      const found = await pollForPlan({
+        checkStatus: () => api<CoachStatus>('/api/coach/status', { query: { tz: tzOffsetMin() } }),
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        cancelled: () => gone.current,
+      });
+      if (gone.current) return;
+      setRecovering(false);
+      if (found) {
+        await qc.invalidateQueries({ queryKey: ['coach'] });
+        return;
+      }
+      setNote(LOST_ANSWER_NOTE);
+    },
+    [ask, qc],
+  );
+
+  return {
+    start,
+    /** The call is out, or the poll is waiting on it. Either way: one spinner, button off. */
+    busy: ask.isPending || recovering,
+    asking: ask.isPending,
+    recovering,
+    note,
+    clearNote: useCallback(() => setNote(null), []),
+  };
+}
+
+export type AskCoachInput = { context?: string | null; revision?: string | null; mode?: 'append' | 'rewrite' | null };
 
 // ---------------------------------------------------------------------------
 // The log pipeline

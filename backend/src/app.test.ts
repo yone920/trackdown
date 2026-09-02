@@ -5480,3 +5480,38 @@ describe("the Eat page's safe door", () => {
 		expect(res.body.direction).toBeNull();
 	});
 });
+
+describe("the coach route says how long it took", () => {
+	const tz = tzForLocalHour(9);
+
+	it("stamps Server-Timing on a generation, so the next slow one is measurable", async () => {
+		// Field report 2026-09-02: a generation outran the phone's fetch ceiling and the app
+		// reset. Whether it had been SLOW or merely unlucky was unanswerable — the coach
+		// route emitted no timing at all, so there was nothing to look at afterwards.
+		const token = await signUp("timed-coach@example.com");
+		const headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = SAMPLE_BRIEF;
+
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz });
+
+		expect(res.status).toBe(200);
+		const timing = res.headers["server-timing"];
+		expect(timing).toBeTruthy();
+		// The phase that matters, and the total around it.
+		expect(timing).toMatch(/generate;dur=[\d.]+/);
+		expect(timing).toMatch(/total;dur=[\d.]+/);
+	});
+
+	it("names the cheap read differently, so a cache hit is not mistaken for a generation", async () => {
+		const token = await signUp("timed-coach-read@example.com");
+		const headers = { Authorization: `Bearer ${token}` };
+
+		const res = await request(app).get(`/api/coach/next?tz=${tz}&generate=false`).set(headers);
+		expect(res.status).toBe(200);
+		expect(res.headers["server-timing"]).toMatch(/brief;dur=[\d.]+/);
+		expect(res.headers["server-timing"]).not.toMatch(/generate;dur=/);
+	});
+});

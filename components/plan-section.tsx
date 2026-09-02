@@ -12,6 +12,7 @@ import {
   localDateKey,
   useAskCoach,
   useCoachNext,
+  useStartWorkout,
   useDay,
   useDeleteRecord,
   usePrefetchExercises,
@@ -81,11 +82,17 @@ export function PlanSection() {
   const day = useDay(date);
   const remove = useDeleteRecord();
   const askCoach = useAskCoach();
+  // The first ask of the day goes through here rather than through `askCoach` directly: a
+  // generation is the one call that routinely outlives a phone's patience, and a dropped
+  // answer is recovered rather than reported (lib/queries.ts §useStartWorkout).
+  const startWorkout = useStartWorkout();
   const updateGoal = useUpdateGoal();
 
   const brief: CoachBrief | null = coach.data?.brief ?? null;
-  const asking = askCoach.isPending;
-  const busy = coach.isLoading || coach.isFetching || asking;
+  const asking = askCoach.isPending || startWorkout.asking;
+  // ONE spinner and one disabled button, whichever of the two paths is in flight — and the
+  // recovery poll counts as busy, because from the user's side it is still the same wait.
+  const busy = coach.isLoading || coach.isFetching || asking || startWorkout.recovering;
   const action = brief?.nudge_action ?? coach.data?.nudge_action ?? null;
   /**
    * The server answered, and the answer was that there is no plan for today. Distinct from
@@ -134,8 +141,12 @@ export function PlanSection() {
   // matter: the server kept the old answer and said why; the request never landed; the
   // brief is simply older than the log. None of them replaces the brief.
   const note =
-    (asking ? null : (coach.data?.note ?? null)) ??
-    (askCoach.isError && !asking ? (askCoach.error as Error).message : null);
+    (busy ? null : (coach.data?.note ?? null)) ??
+    (askCoach.isError && !asking ? (askCoach.error as Error).message : null) ??
+    // The one the old flow never had: the generate call that came back as nothing. It used
+    // to leave the page on "Nothing planned yet" with no word of what happened, while the
+    // plan sat finished on the server (field report 2026-09-02).
+    (busy ? null : startWorkout.note);
 
   /**
    * The first ask of the day. It is the only thing in the app that writes a plan, and it
@@ -143,9 +154,9 @@ export function PlanSection() {
    * should know about today is told through the logger, which saves it as context and is
    * read back by every ask.
    */
-  const startWorkout = () => {
+  const askForPlan = () => {
     setReplaceArmed(false);
-    askCoach.mutate({});
+    void startWorkout.start({});
   };
 
   /**
@@ -216,17 +227,19 @@ export function PlanSection() {
       {/* A brief IS on screen and a new one is being written: the old one stays exactly
           where it is and the work says so on one line. Losing the answer you are reading
           in order to ask for a better one is the thing this screen must never do. */}
-      {asking && brief ? (
+      {(asking || startWorkout.recovering) && brief ? (
         <View
           testID="coach-working"
           style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 }}>
           <ActivityIndicator color={C.mute} size="small" />
-          <Sub>Rewriting your brief…</Sub>
+          <Sub>{startWorkout.recovering ? 'Still writing it…' : 'Rewriting your brief…'}</Sub>
         </View>
       ) : null}
 
-      {/* What went wrong, above the brief that was kept. */}
-      {note && brief ? (
+      {/* What went wrong. It is drawn WITH OR WITHOUT a brief: conditioning it on there
+          being one is exactly how a failed first generation ended in silence — the note
+          existed and had nowhere to go (field report 2026-09-02). */}
+      {note ? (
         <Card testID="coach-note" style={{ marginTop: 14, borderLeftWidth: 3, borderLeftColor: C.accent }}>
           <Sub style={{ lineHeight: 18 }}>{note}</Sub>
         </Card>
@@ -242,6 +255,17 @@ export function PlanSection() {
             where you are in the week, and write one.
           </Body>
         </Card>
+      ) : null}
+
+      {/* The answer is late and the app has gone looking for it. Said out loud, because a
+          spinner that has been going for a minute reads as a hang. */}
+      {startWorkout.recovering && !brief ? (
+        <View
+          testID="coach-recovering"
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 }}>
+          <ActivityIndicator color={C.mute} size="small" />
+          <Sub>Still writing it — this can take a minute on a phone connection.</Sub>
+        </View>
       ) : null}
 
       {coach.error && !brief ? (
@@ -523,7 +547,7 @@ export function PlanSection() {
             label={busy ? 'Thinking…' : "Start today's workout"}
             disabled={busy}
             pending={busy}
-            onPress={startWorkout}
+            onPress={askForPlan}
           />
           <Sub style={{ marginTop: 12, lineHeight: 18 }}>
             Anything I should know first — only 30 minutes, knee is sore — goes in through

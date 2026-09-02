@@ -1,7 +1,8 @@
-import { Router, type Response } from "express";
+import { Router, type Request, type Response } from "express";
 import type pg from "pg";
 import { z } from "zod";
 import type { AuthenticatedRequest } from "../middleware/auth.js";
+import { setServerTiming, timePhase } from "../middleware/timing.js";
 import type { CoachPort } from "../ports/coach.js";
 import { briefStatus, CoachUnavailableError, coachDate, nextBrief, standingBrief } from "../services/coach/coach.js";
 import { closeDueDays } from "../services/dayClose.js";
@@ -84,6 +85,7 @@ export function coachRouter(pool: pg.Pool, coach: CoachPort, readings: DayReadin
 	const router = Router();
 
 	async function respond(
+		req: Request,
 		res: Response,
 		userId: string,
 		{
@@ -101,19 +103,27 @@ export function coachRouter(pool: pg.Pool, coach: CoachPort, readings: DayReadin
 		}
 	): Promise<void> {
 		const now = new Date();
-		await closeDueDays(pool, readings, { userId, tzOffsetMin, now });
+		await timePhase(req, "close", () => closeDueDays(pool, readings, { userId, tzOffsetMin, now }));
 
 		const date = coachDate(now, tzOffsetMin);
 		try {
-			const { brief, inputs, stale, note } = await nextBrief(pool, coach, userId, {
-				date,
-				tzOffsetMin,
-				now,
-				context,
-				regenerate,
-				revision,
-				revisionMode,
-			});
+			// Timed, because until now there was NO WAY to say how long a brief takes: the
+			// coach route emitted nothing, and when a generation outran the phone's patience
+			// (field report 2026-09-02) the logs could not say whether it had been slow or
+			// merely unlucky. This changes no behaviour — it writes a response header —
+			// and it is the difference between diagnosing the next one and guessing at it.
+			const { brief, inputs, stale, note } = await timePhase(req, regenerate ? "generate" : "brief", () =>
+				nextBrief(pool, coach, userId, {
+					date,
+					tzOffsetMin,
+					now,
+					context,
+					regenerate,
+					revision,
+					revisionMode,
+				})
+			);
+			setServerTiming(req, res);
 			res.json({
 				brief,
 				stale,
@@ -173,14 +183,20 @@ export function coachRouter(pool: pg.Pool, coach: CoachPort, readings: DayReadin
 		// having the answer written for it by the act of looking (user decision §2).
 		if (!parsed.data.generate) {
 			const now = new Date();
-			await closeDueDays(pool, readings, { userId, tzOffsetMin, now });
+			await timePhase(req, "close", () => closeDueDays(pool, readings, { userId, tzOffsetMin, now }));
 			const date = coachDate(now, tzOffsetMin);
-			const { brief, inputs, stale } = await standingBrief(pool, userId, {
-				date,
-				tzOffsetMin,
-				now,
-				context: parsed.data.context ?? null,
-			});
+			// Named apart from "generate" on purpose: this path cannot write a brief, and a
+			// cache hit that looked like a generation in the timings would be the same
+			// confusion the header exists to end.
+			const { brief, inputs, stale } = await timePhase(req, "brief", () =>
+				standingBrief(pool, userId, {
+					date,
+					tzOffsetMin,
+					now,
+					context: parsed.data.context ?? null,
+				})
+			);
+			setServerTiming(req, res);
 			res.json({
 				brief,
 				stale,
@@ -198,7 +214,7 @@ export function coachRouter(pool: pg.Pool, coach: CoachPort, readings: DayReadin
 			return;
 		}
 
-		await respond(res, userId, {
+		await respond(req, res, userId, {
 			tzOffsetMin,
 			context: parsed.data.context ?? null,
 			regenerate: false,
@@ -208,7 +224,7 @@ export function coachRouter(pool: pg.Pool, coach: CoachPort, readings: DayReadin
 	router.post("/api/coach/next/regenerate", async (req: AuthenticatedRequest, res) => {
 		const parsed = RegenerateBody.safeParse(req.body ?? {});
 		if (!parsed.success) return badRequest(res, "Invalid request.", parsed.error.issues);
-		await respond(res, req.userId as string, {
+		await respond(req, res, req.userId as string, {
 			tzOffsetMin: parsed.data.tz_offset_min,
 			context: parsed.data.context ?? null,
 			regenerate: true,
