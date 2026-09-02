@@ -4,6 +4,7 @@ import type {
   CoverageEntry,
   DayRow,
   DayView,
+  ExerciseHistory,
   GoalKind,
   GoalWithProgress,
   MetricProgress,
@@ -336,3 +337,38 @@ export const EMPTY_BOARD: TrainingBoard = makeBoard({
   },
   body: { latest: null, latest_date: null, avg_7d: null, trend_per_week: null, series: [] },
 });
+
+/**
+ * One exercise's history (GET /api/training/exercise). Three sessions of a lift that has
+ * moved, which is the shape the screen is designed around; the sparse and cardio cases are
+ * made by overriding `sessions`.
+ */
+export function makeHistory(overrides: Partial<ExerciseHistory> = {}): ExerciseHistory {
+  return {
+    exercise: 'Lat Pulldown',
+    exercise_id: 'ex-pulldown',
+    media_count: 2,
+    category: 'strength',
+    muscle_groups: ['lats', 'biceps'],
+    equipment: ['machine'],
+    load_direction: 'resistance',
+    sessions: [
+      { date: '2026-09-01', id: 'a3', logged_at: '2026-09-01T17:00:00.000Z', load_lb: 65, sets: 4, reps: 15, duration_min: null, distance_mi: null, pace_min_mi: null, kcal: 90, entries: 1 },
+      { date: '2026-08-25', id: 'a2', logged_at: '2026-08-25T17:00:00.000Z', load_lb: 60, sets: 4, reps: 15, duration_min: null, distance_mi: null, pace_min_mi: null, kcal: 90, entries: 1 },
+      { date: '2026-08-18', id: 'a1', logged_at: '2026-08-18T17:00:00.000Z', load_lb: 55, sets: 4, reps: 12, duration_min: null, distance_mi: null, pace_min_mi: null, kcal: 90, entries: 1 },
+    ],
+    next: {
+      rule: 'step_up',
+      load_lb: 70,
+      sets: 4,
+      reps: 15,
+      text: '65 → 70 lb next',
+      eta: null,
+      why: 'Two sessions at target reps.',
+    },
+    best_load_lb: 65,
+    first_date: '2026-08-18',
+    sessions_count: 3,
+    ...overrides,
+  };
+}

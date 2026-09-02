@@ -1085,3 +1085,45 @@ export type EatingView = {
   /** The one written layer. Null when there is nothing to steer yet. */
   direction: Reading | null;
 };
+
+// ---------------------------------------------------------------------------
+// One exercise's history (GET /api/training/exercise — backend/src/services/training/history.ts)
+// ---------------------------------------------------------------------------
+//
+// Field report 2026-09-02, on All lifts: "60 lb · today … doesn't have enough detail …
+// the historic loads, the progress of the load … which direction I'm going." The board
+// says where a movement stands in one row; this says how it got there.
+
+export type ExerciseSession = {
+  date: IsoDate;
+  /** The logged row this session's numbers came from — a tap opens it for a correction. */
+  id: string | null;
+  logged_at: string;
+  /** The top working set of that day. */
+  load_lb: number | null;
+  sets: number | null;
+  reps: number | null;
+  duration_min: number | null;
+  distance_mi: number | null;
+  pace_min_mi: number | null;
+  kcal: number;
+  /** How many rows were logged that day; 1 for almost every session. */
+  entries: number;
+};
+
+export type ExerciseHistory = {
+  exercise: string;
+  exercise_id: string | null;
+  media_count: number;
+  category: ActivityCategory | null;
+  muscle_groups: string[];
+  equipment: string[];
+  load_direction: LoadDirection;
+  /** Newest first. */
+  sessions: ExerciseSession[];
+  /** The board's own next step — the same sentence the row that opened this screen shows. */
+  next: BoardNextStep | BoardCardioNext | null;
+  best_load_lb: number | null;
+  first_date: IsoDate | null;
+  sessions_count: number;
+};

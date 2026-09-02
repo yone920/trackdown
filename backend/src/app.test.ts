@@ -5809,3 +5809,121 @@ describe("a provider failure, on the wire", () => {
 		expect(after.status).not.toBe(503);
 	});
 });
+
+// ── one exercise, all of it ──────────────────────────────────────────────────────────
+// Field report 2026-09-02, on All lifts: "60 lb · today … doesn't have enough detail …
+// the historic loads, the progress of the load … which direction I'm going." The board
+// says where a movement stands; this endpoint says how it got there.
+
+describe("GET /api/training/exercise", () => {
+	const tz = tzForLocalHour(17);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+
+	const back = (days: number) => addDays(today, -days);
+
+	async function logLift(date: string, clock: string, exercise: string, load: number | null, sets = 4, reps = 15) {
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({
+				description: `${sets} × ${reps} ${exercise.toLowerCase()}${load == null ? "" : ` at ${load} lb`}`,
+				exercise,
+				sets,
+				reps,
+				...(load == null ? {} : { load_lb: load }),
+				kcal: 90,
+				confidence: "high",
+				logged_at: localInstant(date, clock, tz),
+			});
+	}
+
+	beforeAll(async () => {
+		const token = await signUp("history@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+
+		// Three sessions of a lift that went up, the newest twice in one day.
+		await logLift(back(14), "17:00", "Lat Pulldown", 55);
+		await logLift(back(7), "17:00", "Lat Pulldown", 60);
+		await logLift(back(1), "17:00", "Lat Pulldown", 60);
+		await logLift(back(1), "17:40", "Lat Pulldown", 65, 1, 6);
+
+		// A cardio movement, in its own currency.
+		await request(app)
+			.post("/api/entries/movement")
+			.set(headers)
+			.send({
+				description: "20 minutes on the treadmill, 1.2 miles",
+				exercise: "Incline Treadmill Walk",
+				duration_min: 20,
+				distance_mi: 1.2,
+				kcal: 120,
+				confidence: "high",
+				logged_at: localInstant(back(2), "07:00", tz),
+			});
+	});
+
+	it("returns a session per day, newest first, each with the row that can correct it", async () => {
+		const res = await request(app).get(`/api/training/exercise?name=Lat Pulldown&tz=${tz}`).set(headers);
+
+		expect(res.status).toBe(200);
+		expect(res.body.exercise).toBe("Lat Pulldown");
+		expect(res.body.sessions.map((s: { date: string }) => s.date)).toEqual([back(1), back(7), back(14)]);
+		for (const session of res.body.sessions) expect(typeof session.id).toBe("string");
+	});
+
+	// Two rows of one lift on one day is ONE session: three dots on one date would read as
+	// three sessions and be a lie about frequency.
+	it("folds a day's rows into one session, keeping the top working set", async () => {
+		const res = await request(app).get(`/api/training/exercise?name=Lat Pulldown&tz=${tz}`).set(headers);
+		const newest = res.body.sessions[0];
+		expect(newest).toMatchObject({ date: back(1), load_lb: 65, entries: 2 });
+		// The day's whole cost, not the top set's.
+		expect(newest.kcal).toBe(180);
+		expect(res.body.sessions_count).toBe(3);
+		expect(res.body.best_load_lb).toBe(65);
+		expect(res.body.first_date).toBe(back(14));
+	});
+
+	// The header's state line is the board's own sentence, not a second opinion.
+	it("carries the same next step the board's row carries", async () => {
+		const board = await request(app).get(`/api/training/board?tz=${tz}`).set(headers);
+		const row = board.body.lifts.find((lift: { exercise: string }) => lift.exercise === "Lat Pulldown");
+		const res = await request(app).get(`/api/training/exercise?name=Lat Pulldown&tz=${tz}`).set(headers);
+		expect(res.body.next).toEqual(row.next);
+		expect(res.body.muscle_groups.length).toBeGreaterThan(0);
+	});
+
+	it("answers a cardio movement in minutes, miles and a pace", async () => {
+		const res = await request(app)
+			.get(`/api/training/exercise?name=Incline Treadmill Walk&tz=${tz}`)
+			.set(headers);
+
+		expect(res.status).toBe(200);
+		expect(res.body.category).toBe("cardio");
+		expect(res.body.sessions[0]).toMatchObject({ duration_min: 20, distance_mi: 1.2, pace_min_mi: 16.7 });
+		expect(res.body.next.text).toMatch(/min/);
+	});
+
+	it("is case-insensitive about the name, the way every other lookup is", async () => {
+		const res = await request(app).get(`/api/training/exercise?name=lat pulldown&tz=${tz}`).set(headers);
+		expect(res.status).toBe(200);
+		expect(res.body.exercise).toBe("Lat Pulldown");
+	});
+
+	it("is a 404 for a movement this account has never logged, and never another user's", async () => {
+		const missing = await request(app).get(`/api/training/exercise?name=Zercher Squat&tz=${tz}`).set(headers);
+		expect(missing.status).toBe(404);
+
+		const strangerToken = await signUp("stranger-history@example.com");
+		const stranger = await request(app)
+			.get(`/api/training/exercise?name=Lat Pulldown&tz=${tz}`)
+			.set({ Authorization: `Bearer ${strangerToken}` });
+		expect(stranger.status).toBe(404);
+	});
+
+	it("refuses a request with no name rather than answering about everything", async () => {
+		const res = await request(app).get(`/api/training/exercise?tz=${tz}`).set(headers);
+		expect(res.status).toBe(400);
+	});
+});

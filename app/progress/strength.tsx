@@ -82,12 +82,22 @@ export default function StrengthDetail() {
 }
 
 function LiftRow({ lift, last }: { lift: BoardLift; last: boolean }) {
+  const router = useRouter();
   const values = lift.series.map((point) => point.load_lb).filter((load): load is number => load != null);
   const color = lift.sentiment === 'good' ? C.good : lift.sentiment === 'watch' ? C.accent : C.mute;
 
+  // The ROW opens the history; the NAME still opens the how-to sheet (field report
+  // 2026-09-02: "60 lb · today" was not enough detail). React Native gives the touch to the
+  // innermost responder, which is what keeps the two doors apart — the same nesting
+  // components/kit.tsx §Row already relies on.
   return (
-    <View
+    <Pressable
       testID={`lift-${lift.exercise}`}
+      accessibilityRole="button"
+      accessibilityLabel={`${lift.exercise} — its history`}
+      onPress={() =>
+        router.push({ pathname: '/history/[exercise]', params: { exercise: lift.exercise } })
+      }
       style={{
         paddingVertical: 12,
         borderBottomWidth: last ? 0 : 1,
@@ -126,6 +136,6 @@ function LiftRow({ lift, last }: { lift: BoardLift; last: boolean }) {
         {lift.next.text}
         {lift.next.eta ? <Sub style={{ color: C.mute }}> · {lift.next.eta}</Sub> : null}
       </Sub>
-    </View>
+    </Pressable>
   );
 }

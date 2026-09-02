@@ -101,11 +101,11 @@ describe("importing", () => {
 		const { run, asked, media } = harness();
 		const report = await run();
 
-		// Three of ours are in this five-entry fixture; the other two match nothing.
-		expect(report.matched).toBe(3);
+		// Five of ours are in this seven-entry fixture; the other two match nothing.
+		expect(report.matched).toBe(5);
 		expect(report.total).toBeGreaterThan(100);
-		expect(report.matchRate).toBeCloseTo(3 / report.total, 6);
-		expect(report.downloaded).toBe(6);
+		expect(report.matchRate).toBeCloseTo(5 / report.total, 6);
+		expect(report.downloaded).toBe(10);
 		expect(report.failed).toBe(0);
 		expect(report.unmatched).toContain("Pull-Up");
 
@@ -121,6 +121,15 @@ describe("importing", () => {
 		expect(curl.source_slug).toBe("Concentration_Curls");
 		expect(curl.media_count).toBe(2);
 
+		// The band pack (2026-09-02). "Lateral Raise - With Bands" must land on the BAND
+		// row and not on the dumbbell one: the qualifier here is the equipment, and the
+		// alias that names the dataset entry is what keeps the two apart.
+		const bandRaise = await row("Band Lateral Raise");
+		expect(bandRaise.source_slug).toBe("Lateral_Raise_-_With_Bands");
+		expect(bandRaise.media_count).toBe(2);
+		const dumbbellRaise = await row("Lateral Raise");
+		expect(dumbbellRaise.source_slug).toBe("Side_Lateral_Raise");
+
 		// Only matched images are fetched — never the whole dataset.
 		expect(asked.sort()).toEqual([
 			"Barbell_Bench_Press_-_Medium_Grip/0.jpg",
@@ -129,9 +138,13 @@ describe("importing", () => {
 			"Chest_And_Front_Of_Shoulder_Stretch/1.jpg",
 			"Concentration_Curls/0.jpg",
 			"Concentration_Curls/1.jpg",
+			"Lateral_Raise_-_With_Bands/0.jpg",
+			"Lateral_Raise_-_With_Bands/1.jpg",
+			"Side_Lateral_Raise/0.jpg",
+			"Side_Lateral_Raise/1.jpg",
 		]);
 		expect(media.frames.get(`${bench.id}/0`)).toEqual(fakeFrame("Barbell_Bench_Press_-_Medium_Grip/0.jpg"));
-		expect(media.frames.size).toBe(6);
+		expect(media.frames.size).toBe(10);
 
 		// Every downloaded byte is counted. The workers run concurrently, so a counter
 		// updated across an `await` silently loses most of this.
@@ -187,9 +200,9 @@ describe("importing", () => {
 		// are still pictures of the right thing.
 		const forced = await run({ force: true });
 		expect(forced.skipped).toBe(false);
-		expect(forced.matched).toBe(3);
+		expect(forced.matched).toBe(5);
 		expect(forced.downloaded).toBe(0);
-		expect(forced.alreadyPresent).toBe(6);
+		expect(forced.alreadyPresent).toBe(10);
 		expect(asked).toEqual([]);
 	});
 
@@ -198,7 +211,7 @@ describe("importing", () => {
 		const report = await run();
 
 		expect(report.failed).toBe(1);
-		expect(report.downloaded).toBe(5);
+		expect(report.downloaded).toBe(9);
 		// media_count is what the route serves, so it must never promise a missing frame.
 		expect((await row("Concentration Curl")).media_count).toBe(1);
 		expect((await row("Bench Press")).media_count).toBe(2);

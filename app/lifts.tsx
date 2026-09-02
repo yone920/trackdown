@@ -94,11 +94,18 @@ export default function Lifts() {
 
 /** Name · trend dot, then load · when. No next step: see the note at the top of the file. */
 function CompactLiftRow({ lift, dim, last }: { lift: BoardLift; dim: boolean; last: boolean }) {
+  const router = useRouter();
   const color = lift.sentiment === 'good' ? C.good : lift.sentiment === 'watch' ? C.accent : C.dim;
 
+  // "60 lb · today" was the whole row, and the field report (2026-09-02) was that it does
+  // not say enough: pressing it now opens every session of this movement. The NAME keeps
+  // its own door to the how-to sheet — the glyph contract does not change here.
   return (
-    <View
+    <Pressable
       testID={`all-lift-${lift.exercise}`}
+      accessibilityRole="button"
+      accessibilityLabel={`${lift.exercise} — its history`}
+      onPress={() => router.push({ pathname: '/history/[exercise]', params: { exercise: lift.exercise } })}
       style={{
         paddingVertical: 10,
         borderBottomWidth: last ? 0 : 1,
@@ -125,6 +132,6 @@ function CompactLiftRow({ lift, dim, last }: { lift: BoardLift; dim: boolean; la
           .filter(Boolean)
           .join(' · ')}
       </Sub>
-    </View>
+    </Pressable>
   );
 }
