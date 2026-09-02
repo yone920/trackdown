@@ -203,7 +203,7 @@ export default function Eat() {
         )}
       </Section>
 
-      <CalendarSheet visible={calendar} onClose={() => setCalendar(false)} />
+      <CalendarSheet visible={calendar} onClose={() => setCalendar(false)} scope="eat" />
     </ScrollView>
   );
 }

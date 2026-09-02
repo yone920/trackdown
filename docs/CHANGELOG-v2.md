@@ -83,6 +83,59 @@ half-lived today.
 
 ---
 
+## History is domain-scoped (`wp-scoped-history`)
+
+**2026-09-02, user feedback on the calendar that shipped an hour earlier** (feature liked,
+one correction): picking a day from either header opened the same whole-day page, mixing
+training and food. "In train it should show me only the train … they have their own page —
+the historic data should also have their own page."
+
+The tabs are domain-scoped, so their history is now too. **Three doors, three shapes:**
+
+| door | route | what it is |
+|---|---|---|
+| Progress → Days | `/day/<date>` | the whole-day archive: verdict, In short, training, eating, body, the coach's ask — **unchanged** |
+| Train → calendar | `/day/<date>/train` | the session, and nothing else |
+| Eat → calendar | `/day/<date>/eat` | the meals, and nothing else |
+
+**Not a filtered copy.** The Training and Eating sections came OUT of `app/day/[date].tsx`
+into `components/day-training.tsx` and `components/day-eating.tsx`, and all three screens
+draw the same components — so a workout reads identically through every door, which two
+copies of that JSX would eventually stop doing. The whole-day page lost nothing: same
+sections, same order, same testIDs, and `day.test.tsx` passed unmodified through the
+extraction, which is the evidence that the move was behaviour-neutral.
+
+**The scoped reading** (`components/scoped-day.tsx`, one component, two thin routes) carries
+the date, the domain's own headline — "264 kcal earned · 1:30p–2:05p" for training (the same
+`sessionSpan` the Train tab prints), "480 kcal eaten" for eating — and then its one section,
+with rows still correctable and deletable exactly as on the whole-day page. It carries **no
+verdict and no In short**: a verdict is a judgement about a whole day, and half a day cannot
+be judged. Prev/next stay inside the scope (`/day/<prev>/train`), so browsing backwards
+through sessions never lands the reader in a meal, and a quiet "The whole day" link at the
+bottom is the way across — a scope, not a wall.
+
+**Today** still has exactly one live page per domain: `/day/<today>/train` replaces to the
+Train tab and `/day/<today>/eat` to Eat, so a calendar tap on today lands on the live page
+rather than a second, quieter copy of it. No dead routes: `/day/<date>` and `/days` are
+unchanged, and the calendar's scope is a prop (`scope="train" | "eat" | "full"`, default
+`full`).
+
+**Tests** — app 492 → 505. New `__tests__/day-scoped.test.tsx` (11): the training view shows
+the session and asserts **no meal rows, no macro bars, no Eating section, no Body, no
+verdict, no In short**; the eating view shows meals and macros and asserts **no activity rows
+and no Training section**; the headline lines; a row still opening the review-and-tell sheet;
+the empty-session day; scope-preserving prev/next in both domains; the whole-day link; and
+today redirecting to the owning tab without fetching. Two more in `calendar.test.tsx`: the
+Train header's calendar pushes `/day/<date>/train` and the Eat header's `/day/<date>/eat`.
+`progress.test.tsx` is untouched and still asserts the Days path pushes `/day/<date>`.
+
+**Deferred**
+
+- The scoped views have no export/share button — that belongs to the whole-day reading,
+  which is one tap away.
+- The body/weight section stays on the whole-day page only: it is neither training nor
+  eating, and Progress already owns the weight line.
+
 ## A calendar on Train and Eat (`wp-calendar`)
 
 **2026-09-02, user request:** "the train only shows today … there should be some sort of

@@ -178,7 +178,7 @@ export default function Train() {
         />
       )}
 
-      <CalendarSheet visible={calendar} onClose={() => setCalendar(false)} />
+      <CalendarSheet visible={calendar} onClose={() => setCalendar(false)} scope="train" />
     </ScrollView>
   );
 }
