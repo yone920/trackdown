@@ -136,11 +136,11 @@ describe('the calendar sheet', () => {
     return calls;
   }
 
-  function show() {
+  function show(scope?: 'train' | 'eat' | 'full') {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     return render(
       <QueryClientProvider client={client}>
-        <CalendarSheet visible onClose={jest.fn()} />
+        <CalendarSheet visible onClose={jest.fn()} {...(scope ? { scope } : {})} />
       </QueryClientProvider>,
     );
   }
@@ -180,6 +180,27 @@ describe('the calendar sheet', () => {
 
     fireEvent.press(screen.getByTestId(`calendar-day-${first}`));
     expect(mockPush).toHaveBeenCalledWith(`/day/${first}`);
+  });
+
+  // History is domain-scoped (user decision 2026-09-02): the calendar in a tab's header
+  // opens that tab's reading of the day, never the mixed whole-day page.
+  it('opens the TRAINING reading when it is the Train header’s calendar', async () => {
+    serve([makeDayRow({ date: first, verdict: 'served' })]);
+    show('train');
+    await waitFor(() => expect(screen.getByTestId(`calendar-day-${first}`)).toBeTruthy());
+    expect(screen.getByTestId('calendar-scope').props.children).toBe('Go to a session');
+
+    fireEvent.press(screen.getByTestId(`calendar-day-${first}`));
+    expect(mockPush).toHaveBeenCalledWith(`/day/${first}/train`);
+  });
+
+  it('opens the EATING reading when it is the Eat header’s calendar', async () => {
+    serve([makeDayRow({ date: first, verdict: 'served' })]);
+    show('eat');
+    await waitFor(() => expect(screen.getByTestId(`calendar-day-${first}`)).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId(`calendar-day-${first}`));
+    expect(mockPush).toHaveBeenCalledWith(`/day/${first}/eat`);
   });
 
   it('refuses a day that has not happened yet', async () => {

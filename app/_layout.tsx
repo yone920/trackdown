@@ -72,6 +72,10 @@ export default function RootLayout() {
             {/* A day and, one tap further in, the rows it was built from. */}
             <Stack.Screen name="day/[date]" />
             <Stack.Screen name="day/[date]/log" />
+            {/* The same day read in ONE domain, from the Train and Eat calendars: history
+                is scoped the way the tabs are (components/scoped-day.tsx). */}
+            <Stack.Screen name="day/[date]/train" />
+            <Stack.Screen name="day/[date]/eat" />
             {/* The rooms behind the Progress scoreboard: every row of that page is a door,
                 and this is what each one opens (app/(tabs)/progress.tsx). */}
             <Stack.Screen name="progress/goal" />

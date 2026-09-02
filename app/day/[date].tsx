@@ -2,27 +2,24 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect } from 'react';
 import { Pressable, ScrollView, Share, View } from 'react-native';
 
-import { ActivityRow } from '@/components/activity-row';
-import { Bar } from '@/components/charts';
-import { EvidenceThumbs } from '@/components/evidence';
+import { DayEating } from '@/components/day-eating';
+import { DayTraining } from '@/components/day-training';
 import {
   IconAlertCircle,
   IconCheckCircle,
   IconChevronLeft,
   IconChevronRight,
-  IconHeart,
   IconShare,
 } from '@/components/icons';
-import { Card, Chip, dismissDeletes, GroupHeading, Row, Section, Skeleton, SkeletonLines } from '@/components/kit';
+import { Card, Chip, dismissDeletes, Section, Skeleton, SkeletonLines } from '@/components/kit';
 import { ReadingCard } from '@/components/reading-card';
-import { Body, Disp, Eyebrow, Sub } from '@/components/type';
+import { Disp, Eyebrow, Sub } from '@/components/type';
 import { addDays } from '@/lib/days-weeks';
-import { clock, dateLabel, grams, kcal, nothingEatenYet, slotLabel } from '@/lib/format';
-import { groupTraining, splitBySource } from '@/lib/training-groups';
-import { localDateKey, useDay, useDeleteRecord } from '@/lib/queries';
+import { dateLabel, kcal } from '@/lib/format';
+import { localDateKey, useDay } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
-import { C, FONT, SPACE, TABULAR } from '@/lib/theme';
-import type { DayView, MacroLine, MealSlot, Verdict } from '@/lib/types';
+import { C, SPACE, TABULAR } from '@/lib/theme';
+import type { DayView, Verdict } from '@/lib/types';
 import { OFFLINE_MESSAGE, readerLine } from '@/lib/errors';
 
 // A closed day (docs/design-system.md §Day; concept-v2 §The two day views: "Day is a
@@ -33,8 +30,6 @@ import { OFFLINE_MESSAGE, readerLine } from '@/lib/errors';
 // Nothing here is computed: `GET /api/day/:date` returns the verdict, the reading, the
 // muscle summary, the macros, the pattern line and the brief. The raw rows live one tap
 // further in, behind "See the log as recorded".
-
-const SLOT_ORDER: MealSlot[] = ['breakfast', 'lunch', 'dinner', 'snack'];
 
 const VERDICT_COLOR: Record<Verdict, string> = {
   served: C.good,
@@ -155,28 +150,11 @@ function DayBody({
   onOpenLog: () => void;
   onCorrect: (kind: 'activity' | 'meal', id: string) => void;
 }) {
-  const remove = useDeleteRecord();
   const color = VERDICT_COLOR[view.verdict] ?? C.mute;
   const Mark = view.verdict === 'served' ? IconCheckCircle : IconAlertCircle;
-  // Training draws every activity exactly once, and it is filed the same way here and on
-  // Today — one rule, in lib/training-groups.ts, because the same workout read two ways
-  // depending on which door you came through (user decision 2026-09-01).
-  const { logged, health } = splitBySource(view.items.activities);
-  const { cardio, cardioMinutes, byMuscle, unfiled } = groupTraining(logged, view.muscle_summary);
   // Lifts print no calories, so their block's figure is a MET estimate (concept-v2
-  // §Calories). Said once on the Earned tile and once on the Training line.
+  // §Calories). Said on the Earned tile here, and on the Training line inside DayTraining.
   const earnedEstimated = view.blocks.some((block) => block.kcal_estimated);
-
-  const mealsBySlot = SLOT_ORDER.map((slot) => ({
-    slot,
-    meals: view.items.meals.filter((meal) => meal.slot === slot),
-  })).filter((group) => group.meals.length > 0);
-
-  const macroHintLine = macroHint([
-    { label: 'protein', line: view.macros.protein_g },
-    { label: 'carbs', line: view.macros.carbs_g },
-    { label: 'fat', line: view.macros.fat_g },
-  ]);
 
   const exportDay = () =>
     Share.share({
@@ -228,147 +206,13 @@ function DayBody({
         <Stat label="Allowance" value={view.allowance == null ? '—' : kcal(view.allowance)} />
       </View>
 
-      {/* Training, by muscle group */}
-      <Section
-        title="Training"
-        summary={logged.length === 0 && health.length === 0 ? 'Nothing logged' : `${kcal(view.earned)} kcal earned`}
-        note={earnedEstimated ? 'est.' : null}>
-        {logged.length === 0 && health.length === 0 ? (
-          <Card>
-            <Sub>No exercise on this day.</Sub>
-          </Card>
-        ) : (
-          <Card style={{ paddingVertical: 4 }}>
-            {cardio.length > 0 ? (
-              <View>
-                <GroupHeading label="Cardio" right={cardioMinutes > 0 ? `${cardioMinutes} min` : null} />
-                {cardio.map((activity, index) => (
-                  <ActivityRow
-                    key={activity.id ?? `cardio-${index}`}
-                    activity={activity}
-                    last={index === cardio.length - 1}
-                    onPress={activity.id ? () => onCorrect('activity', activity.id as string) : undefined}
-                    onDelete={
-                      activity.id
-                        ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
-                        : undefined
-                    }
-                  />
-                ))}
-              </View>
-            ) : null}
-            {byMuscle.map((group) => (
-              <View key={group.muscle}>
-                <GroupHeading label={group.muscle} right={`${group.sets} sets`} />
-                {group.members.map((activity, index) => (
-                  <ActivityRow
-                    key={activity.id ?? `${group.muscle}-${index}`}
-                    activity={activity}
-                    last={index === group.members.length - 1}
-                    onPress={activity.id ? () => onCorrect('activity', activity.id as string) : undefined}
-                    onDelete={
-                      activity.id
-                        ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
-                        : undefined
-                    }
-                  />
-                ))}
-              </View>
-            ))}
-            {/* Anything left over — no muscle group of its own, or one the summary
-                does not know: a class, a hike, an unrecognised movement. */}
-            {unfiled.length > 0 ? (
-              <View>
-                <GroupHeading label="Also" />
-                {unfiled.map((activity, index, all) => (
-                    <ActivityRow
-                      key={activity.id ?? `other-${index}`}
-                      activity={activity}
-                      last={index === all.length - 1}
-                      onPress={activity.id ? () => onCorrect('activity', activity.id as string) : undefined}
-                      onDelete={
-                        activity.id
-                          ? () => remove.mutate({ kind: 'activity', id: activity.id as string })
-                          : undefined
-                      }
-                    />
-                  ))}
-              </View>
-            ) : null}
-          </Card>
-        )}
+      {/* Training and Eating are components now, shared with the domain-scoped readings
+          behind the Train and Eat calendars (user decision 2026-09-02). Nothing about
+          either changed in the move; two copies of this JSX is how two doors onto one
+          workout would start disagreeing about it. */}
+      <DayTraining view={view} onCorrect={onCorrect} />
 
-        {/* Health is a source, not a section: one slim card, badged (concept-v2 §Health). */}
-        {health.length > 0 ? (
-          <Card style={{ marginTop: 10, paddingVertical: 12, flexDirection: 'row', alignItems: 'center' }}>
-            <IconHeart size={20} color={C.good} />
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Body>{health.map((activity) => activity.exercise ?? activity.description).join(' · ')}</Body>
-              <Sub style={{ marginTop: 2 }}>
-                {kcal(health.reduce((sum, activity) => sum + activity.kcal, 0))} kcal from Health
-              </Sub>
-            </View>
-            <Eyebrow style={{ color: C.good }}>Health</Eyebrow>
-          </Card>
-        ) : null}
-      </Section>
-
-      {/* Eating: macros against the targets, then the meals. A day with nothing eaten
-          prints one line instead — three zero rows carry no information, and the live
-          day's line can afford a wink (field report 2026-09-01). The macros, the hints
-          and the pattern all come back with the first logged bite. */}
-      <Section
-        title="Eating"
-        summary={view.items.meals.length > 0 ? `${kcal(view.eaten)} kcal` : null}>
-        {view.items.meals.length === 0 ? (
-          <Card>
-            <Sub testID="eating-empty" style={{ lineHeight: 18 }}>
-              {view.is_today ? nothingEatenYet(new Date().getHours()) : 'Nothing eaten was logged.'}
-            </Sub>
-          </Card>
-        ) : (
-        <Card>
-          <MacroBar label="Protein" line={view.macros.protein_g} color={C.good} />
-          <MacroBar label="Carbs" line={view.macros.carbs_g} color={C.accent} />
-          <MacroBar label="Fat" line={view.macros.fat_g} color={C.mute} />
-          {macroHintLine ? (
-            <Sub testID="macro-hint" style={{ marginTop: 12, color: C.dim, lineHeight: 18 }}>
-              {macroHintLine}
-            </Sub>
-          ) : null}
-          {view.eating_pattern ? (
-            <Sub style={{ marginTop: 14, lineHeight: 18 }}>{view.eating_pattern}</Sub>
-          ) : null}
-        </Card>
-        )}
-
-        {view.items.meals.length > 0 && mealsBySlot.length > 0 ? (
-          <Card style={{ marginTop: 10, paddingVertical: 4 }}>
-            {mealsBySlot.map((group) => (
-              <View key={group.slot}>
-                <GroupHeading
-                  label={slotLabel(group.slot)}
-                  right={`${kcal(group.meals.reduce((sum, meal) => sum + meal.kcal, 0))} kcal`}
-                />
-                {group.meals.map((meal, index) => (
-                  <Row
-                    key={meal.id}
-                    testID={`row-meal-${meal.id}`}
-                    time={clock(meal.logged_at)}
-                    title={meal.description}
-                    sub={grams(meal.protein_g) ? `${grams(meal.protein_g)} protein` : null}
-                    right={kcal(meal.kcal)}
-                    onPress={() => onCorrect('meal', meal.id)}
-                    onDelete={() => remove.mutate({ kind: 'meal', id: meal.id })}
-                    divider={index < group.meals.length - 1}>
-                    <EvidenceThumbs photos={meal.evidence} />
-                  </Row>
-                ))}
-              </View>
-            ))}
-          </Card>
-        ) : null}
-      </Section>
+      <DayEating view={view} onCorrect={onCorrect} />
 
       {/* Body */}
       <Section title="Body">
@@ -432,55 +276,4 @@ function Stat({ label, value, unit, color }: { label: string; value: string; uni
       {unit ? <Sub style={{ marginTop: 2 }}>{unit}</Sub> : null}
     </Card>
   );
-}
-
-/**
- * One macro against its target, with the note the server already worked out — and **no
- * track at all** when there is no target (field report 2026-08-31: after the profile was
- * wiped, protein, carbs and fat each drew a full-width empty groove, because grams ÷ null
- * is a zero-width fill. An empty bar is a bar reporting nothing eaten; what was true is
- * that nobody had said what to aim for). The grams are still shown: they are measured.
- */
-function MacroBar({ label, line, color }: { label: string; line: MacroLine; color: string }) {
-  const eaten = line.eaten ?? 0;
-  const target = line.target != null && line.target > 0 ? line.target : null;
-  return (
-    <View testID={`macro-${label}`} style={{ marginTop: 12 }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-        <Eyebrow>{label}</Eyebrow>
-        <Sub style={[{ fontFamily: FONT.medium }, TABULAR]}>
-          {target == null
-            ? `${Math.round(eaten)} g`
-            : `${Math.round(eaten)} of ${Math.round(target)} g${line.note ? ` · ${line.note}` : ''}`}
-        </Sub>
-      </View>
-      {target == null ? null : (
-        <View testID={`macro-track-${label}`} style={{ marginTop: 6 }}>
-          <Bar fraction={eaten / target} color={color} />
-        </View>
-      )}
-    </View>
-  );
-}
-
-/**
- * One quiet line for the whole group, naming what is unset and what to do about it. Once,
- * not once per macro: three copies of the same sentence is the empty-bar problem again in
- * words. Null when every macro has a target, which is the normal case.
- */
-export function macroHint(macros: { label: string; line: MacroLine }[]): string | null {
-  const missing = macros
-    .filter(({ line }) => line.target == null || line.target <= 0)
-    .map(({ label }) => label);
-  if (missing.length === 0) return null;
-  if (missing.length === macros.length) {
-    return 'No targets set — tell me your protein and carb aims and these become bars.';
-  }
-  return `No target for ${listOf(missing)} — tell me what you are aiming for and these become bars.`;
-}
-
-/** "carbs and fat", "protein, carbs and fat". */
-function listOf(words: string[]): string {
-  if (words.length <= 1) return words[0] ?? '';
-  return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 }

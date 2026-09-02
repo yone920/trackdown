@@ -58,7 +58,23 @@ export function CalendarButton({ onPress, testID }: { onPress: () => void; testI
   );
 }
 
-export function CalendarSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+/**
+ * Which reading a tapped day opens (user decision 2026-09-02, on the shipped calendar:
+ * "in train it should show me only the train"). The tabs are domain-scoped, so the history
+ * behind them is: Train's calendar opens the session, Eat's opens the meals, and the
+ * whole-day archive stays where it was, behind Progress → Days.
+ */
+export type CalendarScope = 'train' | 'eat' | 'full';
+
+export function CalendarSheet({
+  visible,
+  onClose,
+  scope = 'full',
+}: {
+  visible: boolean;
+  onClose: () => void;
+  scope?: CalendarScope;
+}) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const today = localDateKey();
@@ -70,13 +86,13 @@ export function CalendarSheet({ visible, onClose }: { visible: boolean; onClose:
   const weeks = useMemo(() => monthGrid(month, today), [month, today]);
 
   /**
-   * Any day opens its own page. `/day/<today>` redirects to Train on its own (user decision
-   * 2026-09-01: the open day has one live page and it is the tab), so this does not special-
-   * case today — one route, one rule about it.
+   * A day opens the reading this calendar is FOR. Today redirects to the owning tab on its
+   * own (the open day has one live page per domain, and it is the tab), so this does not
+   * special-case it — one route, one rule about it.
    */
   const open = (date: string) => {
     onClose();
-    router.push(`/day/${date}`);
+    router.push(scope === 'full' ? `/day/${date}` : `/day/${date}/${scope}`);
   };
 
   if (!visible) return null;
@@ -100,7 +116,9 @@ export function CalendarSheet({ visible, onClose }: { visible: boolean; onClose:
             paddingBottom: insets.bottom + 20,
           }}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Eyebrow style={{ flex: 1 }}>Go to a day</Eyebrow>
+            <Eyebrow testID="calendar-scope" style={{ flex: 1 }}>
+              {scope === 'train' ? 'Go to a session' : scope === 'eat' ? 'Go to a day of eating' : 'Go to a day'}
+            </Eyebrow>
             {days.isLoading ? <ActivityIndicator color={C.dim} size="small" /> : null}
           </View>
 
