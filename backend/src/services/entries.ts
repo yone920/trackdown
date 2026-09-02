@@ -116,6 +116,11 @@ export type SplitEntry = z.infer<typeof SplitEntry>;
 export const NewWeight = z.object({
 	weight_lb: z.number().positive().max(2000),
 	logged_at: isoDate.optional(),
+	/**
+	 * 'low' when the app doubted this reading and the user confirmed it anyway (migration
+	 * 0020). NULL means nobody had reason to ask, which is not the same as "high".
+	 */
+	confidence: z.enum(CONFIDENCE_LEVELS).nullable().optional(),
 });
 export type NewWeight = z.infer<typeof NewWeight>;
 
@@ -506,12 +511,12 @@ export async function insertWeights(db: Queryable, userId: string, weights: NewW
 	if (weights.length === 0) return [];
 	const params: unknown[] = [];
 	const tuples = weights.map((w) => {
-		params.push(userId, w.weight_lb, w.logged_at ?? new Date().toISOString());
+		params.push(userId, w.weight_lb, w.logged_at ?? new Date().toISOString(), w.confidence ?? null);
 		const n = params.length;
-		return `($${n - 2}, $${n - 1}, $${n})`;
+		return `($${n - 3}, $${n - 2}, $${n - 1}, $${n})`;
 	});
 	const { rows } = await db.query(
-		`INSERT INTO weight_logs (user_id, weight_lb, logged_at) VALUES ${tuples.join(", ")} RETURNING *`,
+		`INSERT INTO weight_logs (user_id, weight_lb, logged_at, confidence) VALUES ${tuples.join(", ")} RETURNING *`,
 		params
 	);
 	return rows;

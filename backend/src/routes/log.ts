@@ -74,7 +74,7 @@ function toFusionResult(item: ParsedItem): FusionResult | null {
 		case "weight":
 			// v1 allowed a weight item with no number; there is nothing to save in that.
 			return item.weight_lb
-				? { kind: "weight", weight_lb: item.weight_lb, confidence: item.confidence, sources: null }
+				? { kind: "weight", weight_lb: item.weight_lb, confidence: item.confidence, sources: null, check: null }
 				: null;
 	}
 }

@@ -620,6 +620,18 @@ export type YouView = {
 export type FieldSource = 'photo' | 'text' | null;
 
 /**
+ * The app's doubt about one weigh-in (backend services/weightCheck.ts). Present only when a
+ * reading sits implausibly far from the user's own recent average — normally null.
+ */
+export type WeighInCheck = {
+  delta_lb: number;
+  avg_7d: number;
+  previous_lb: number | null;
+  previous_at: string | null;
+  question: string;
+};
+
+/**
  * "Was it a Chest-Supported Row?" — the one-tap upgrade offered when the reader could only
  * paraphrase the movement. It is an offer and never a question: the record saves without it.
  */
@@ -725,7 +737,14 @@ export type FusionResult =
       /** Null unless the server's arithmetic gate had something to say. */
       consistency?: MealConsistency | null;
     }
-  | { kind: 'weight'; weight_lb: number; confidence: Confidence; sources: Record<string, FieldSource> | null }
+  | {
+      kind: 'weight';
+      weight_lb: number;
+      confidence: Confidence;
+      sources: Record<string, FieldSource> | null;
+      /** Set when the app doubts this reading; the card asks before it counts. */
+      check?: WeighInCheck | null;
+    }
   | { kind: 'goal'; spec: GoalSpec; proposed_timeline: ProposedTimeline | null; facts?: GoalFacts | null }
   | { kind: 'constraint'; text: string; fields: ProfileFields }
   | { kind: 'preference'; text: string; fields: ProfileFields }

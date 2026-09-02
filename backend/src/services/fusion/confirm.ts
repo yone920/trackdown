@@ -536,8 +536,15 @@ async function savePart(
 		}
 
 		case "weight": {
+			// A reading the app doubted and the user confirmed anyway is still saved — the
+			// always-log law holds — but it is saved as what it is (migration 0020).
+			// Everything that could congratulate somebody on it reads this mark.
 			const rows = await insertWeights(client, userId, [
-				{ weight_lb: result.weight_lb, ...(loggedAt ? { logged_at: loggedAt } : {}) },
+				{
+					weight_lb: result.weight_lb,
+					...(loggedAt ? { logged_at: loggedAt } : {}),
+					...(result.check ? { confidence: "low" as const } : {}),
+				},
 			]);
 			const weight = (rows[0] as Row | undefined) ?? null;
 			if (weight) {

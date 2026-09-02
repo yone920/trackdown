@@ -112,7 +112,7 @@ describe("checkMacros", () => {
 	});
 
 	it("has no opinion about anything that is not a meal", () => {
-		expect(checkMeal({ kind: "weight", weight_lb: 181, confidence: "high", sources: null }).checked).toBe(false);
+		expect(checkMeal({ kind: "weight", weight_lb: 181, confidence: "high", sources: null, check: null }).checked).toBe(false);
 		expect(checkMeal({ kind: "unclear", question: "Which machine?" }).checked).toBe(false);
 	});
 });

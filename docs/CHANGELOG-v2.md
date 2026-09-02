@@ -87,6 +87,81 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-02 — a wrong verdict that flatters (`fix-weight-outliers`)
+
+A 110 lb weigh-in from somebody who weighs about 212. Slip or test, the app swallowed it
+whole: the 7-day average fell to 161, the Days header read **"−102.0 lb"**, and the goal card
+announced **"Reached · The measure says you are there."**
+
+This is the no-unearned-verdicts law a third time, and the worst of the three. The Eat page
+merely mis-stated a day; this one **congratulated** — and nothing about a verdict that
+flatters invites a second look.
+
+#### At log time: challenged, never blocked
+
+`services/weightCheck.ts`. A reading further from the recent average than **both** 15 lb and
+a tenth of that average is questioned on the review card — *"That is 102 lb below yesterday.
+Is that right?"* — and logged only on an explicit confirm.
+
+The threshold is a pair on purpose: a flat percentage over-challenges a small body, a flat
+pound figure under-challenges a large one. It is sized to be quiet, because a question that
+fires on ordinary noise teaches people to tap through it, and then the confirmation means
+nothing.
+
+Two things it will not do. It **never blocks** — the always-log law does not bend for a
+number we find surprising, and 110 might be true (a scale in kilograms, a different person,
+months away from the app). And it **says nothing when there is no recent data**: a first
+weigh-in has nothing to be implausible against, and inventing a baseline to doubt it with
+would be the app making up the history it is supposed to be recording.
+
+A confirmed surprise is saved **low-confidence** (migration 0020), and it is excluded from
+the average the *next* reading is judged against — otherwise one bad number quietly becomes
+the trend that makes the next one look ordinary.
+
+#### At verdict time: two separate holes
+
+**The card was not using the gate that already existed.** `reached_candidate_at` has always
+required the average to hold at target for a week — but the card read `percent === 1`, which
+is one 7-day average against the target. So the card said "Reached" the same day. It now
+waits for the server's sustained signal; a measure that is merely at target today says *"At
+target today"* and *"At target — it counts once it holds for a week."*
+
+**And the gate itself could be fooled.** A seven-day mean of ONE reading is that reading
+wearing a statistic's clothes, and every one of the seven windows can contain the same lone
+number — so the "held for a week" run could pass on a single weigh-in. It now also requires
+real evidence: **three weigh-ins, on separate days, spanning at least three days.** Three
+readings taken one morning are one morning.
+
+**The week header** computes its delta client-side from two raw readings, with no guard at
+all. A change beyond 10 lb in a week now prints **nothing** rather than something
+implausible — an absence the reader has already seen, since the tally omits that clause
+whenever there are too few readings to make one. A silence is cheaper than a lie about
+somebody's body.
+
+#### The goal card says what it means
+
+> show where I was at the previous weight vs the new one with dates
+
+It printed `212.0 → 161.0 lb now (7-day avg)`: an arrow between two numbers, one of them an
+average, neither of them dated, with no way to judge whether 161 was believable. It now
+carries a labelled trio — **Latest** `110.0 lb · today`, **Before that** `212.0 lb ·
+yesterday`, **7-day average** `161.0 lb` — with days said the way people say them ("today",
+"yesterday", "Aug 27"). The claim is the line above; these are the evidence.
+
+The weigh-ins come from the training board, which carries one point per weigh-in *day*; the
+goal's own `series` is already smoothed and cannot answer "what did the scale say, and when".
+
+**Verified** — backend **750 → 757**, app **394 → 403**: the threshold at its edges and its
+15 lb floor, both directions, no-recent-data staying silent, the words naming the day; the
+route challenging without blocking, saving low-confidence on confirm, and keeping a doubted
+row out of the next baseline; the sustained gate refusing two readings and refusing three
+taken the same day while still passing a real week; the week delta refusing ±102 and still
+printing a hard but believable −8.0; and the card's labelled trio with its dates.
+
+**The owed contract re-run is delivered: 19/20, and no 529s** — the provider has calmed. The
+single failure is the long-known meal-consistency flake (the model intermittently returns
+`kcal: null`); it passes in isolation, and it was not weakened.
+
 ### 2026-09-02 — a sauna is a thing you did, and a busy provider is weather (`fix-recovery-routing`)
 
 #### The sauna went to the wrong bucket

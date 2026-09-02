@@ -1029,7 +1029,7 @@ describe("revising what was understood", () => {
 
 	it("names the detail call that answers for each kind, and nothing for a question", () => {
 		expect(segmentKindFor(pending)).toBe("activities");
-		expect(segmentKindFor({ kind: "weight", weight_lb: 181, confidence: "high", sources: null })).toBe("weight");
+		expect(segmentKindFor({ kind: "weight", weight_lb: 181, confidence: "high", sources: null, check: null })).toBe("weight");
 		expect(segmentKindFor({ kind: "coach_context", text: "slept badly" })).toBe("statement");
 		expect(segmentKindFor({ kind: "preference", text: "keto", fields: null })).toBe("statement");
 		// A question is not a record; there is nothing in it to change.
@@ -1276,7 +1276,7 @@ describe("revising what was understood", () => {
 		);
 
 		const revised = await createFusionAnalyzer(llm).revise({
-			results: [meal, { kind: "weight", weight_lb: 181, confidence: "high", sources: null }, { kind: "unclear", question: "Which machine?" }],
+			results: [meal, { kind: "weight", weight_lb: 181, confidence: "high", sources: null, check: null }, { kind: "unclear", question: "Which machine?" }],
 			instruction: "that meal was lunch not dinner",
 			context,
 		});

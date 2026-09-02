@@ -28,6 +28,14 @@ import type { GoalRow } from "./verdict.js";
 
 /** Days the 7-day weight average must sit at/past the target (concept-v2: "for a week"). */
 export const WEIGHT_HOLD_DAYS = 7;
+
+/**
+ * What a held weight has to rest on, beyond the average itself: three weigh-ins on separate
+ * days, spanning at least three days. One reading cannot close a goal, and neither can three
+ * taken in the same hour (user decision 2026-09-02).
+ */
+export const MIN_WEIGH_INS = 3;
+export const MIN_WEIGH_IN_SPAN_DAYS = 3;
 /** Separate days a lift must be logged at target ("a lift logged at target twice"). */
 export const LIFT_HITS_REQUIRED = 2;
 /** Consecutive weeks a weekly volume must hit its target. */
@@ -102,13 +110,52 @@ function weightHeld(facts: DayFacts, target: number, direction: string): { reach
 	for (let back = 0; back < WEIGHT_HOLD_DAYS; back += 1) values.push(valueOn(facts, "body_weight", null, back));
 	const today = values[0];
 	if (today == null) return { reached: false, why: "No weigh-in in the last week." };
+
+	// **The average is not evidence on its own.** A seven-day mean of ONE reading is that
+	// reading wearing a statistic's clothes, and every one of the seven windows can contain
+	// the same lone number — so `values.every(...)` passes on a single weigh-in (field
+	// report 2026-09-02: a 110 lb reading took the goal card to "Reached").
+	//
+	// So the run also has to rest on real evidence: several readings, on separate days,
+	// spread across the window. A goal is closed once and it congratulates somebody when it
+	// is; that is worth three weigh-ins.
+	const evidence = weighInEvidence(facts);
+	if (evidence.days < MIN_WEIGH_INS || evidence.spanDays < MIN_WEIGH_IN_SPAN_DAYS) {
+		return {
+			reached: false,
+			why: `Only ${evidence.days} weigh-in${evidence.days === 1 ? "" : "s"} in the last week — not enough to call it held.`,
+		};
+	}
+
 	const held = values.every((value) => value != null && met(value, target, direction));
 	return {
 		reached: held,
 		why: held
-			? `7-day average ${round1(today)} lb, ${wantsDown(direction) ? "at or under" : "at or over"} ${target} for ${WEIGHT_HOLD_DAYS} days.`
+			? `7-day average ${round1(today)} lb, ${wantsDown(direction) ? "at or under" : "at or over"} ${target} for ${WEIGHT_HOLD_DAYS} days across ${evidence.days} weigh-ins.`
 			: `7-day average ${round1(today)} lb against ${target}.`,
 	};
+}
+
+/**
+ * How much the last week's weigh-ins actually amount to: how many separate DAYS carry one,
+ * and how many days the earliest and latest are apart.
+ *
+ * Days rather than readings, because three readings on one morning are one morning — and a
+ * span, because three consecutive days at the end of a fortnight away is a different claim
+ * from three spread across the week.
+ */
+export function weighInEvidence(facts: DayFacts): { days: number; spanDays: number } {
+	const dates = [
+		...new Set(
+			facts.weights
+				.filter((weight) => withinWindow(weight.date, facts.date, WEIGHT_HOLD_DAYS))
+				.map((weight) => weight.date)
+		),
+	].sort();
+	if (dates.length === 0) return { days: 0, spanDays: 0 };
+	const first = Date.parse(`${dates[0]}T00:00:00Z`);
+	const last = Date.parse(`${dates[dates.length - 1]}T00:00:00Z`);
+	return { days: dates.length, spanDays: Math.round((last - first) / 86_400_000) + 1 };
 }
 
 /**

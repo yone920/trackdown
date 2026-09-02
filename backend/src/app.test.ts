@@ -757,7 +757,7 @@ describe("fusion — confirm", () => {
 	});
 
 	it("saves a weight", async () => {
-		const res = await confirm({ kind: "weight", weight_lb: 181.4, confidence: "high", sources: null });
+		const res = await confirm({ kind: "weight", weight_lb: 181.4, confidence: "high", sources: null, check: null });
 		expect(res.status).toBe(201);
 		expect(res.body.weight).toMatchObject({ weight_lb: 181.4 });
 		const list = await request(app).get("/api/weight").set(auth);
@@ -947,7 +947,7 @@ describe("fusion — confirm", () => {
 	});
 
 	it("rejects a body without a client uuid, and evidence that is not the caller's", async () => {
-		const result: FusionResult = { kind: "weight", weight_lb: 180, confidence: "high", sources: null };
+		const result: FusionResult = { kind: "weight", weight_lb: 180, confidence: "high", sources: null, check: null };
 		expect((await request(app).post("/api/log/confirm").set(auth).send({ result })).status).toBe(400);
 		expect(
 			(await request(app).post("/api/log/confirm").set(auth).send({ client_id: "not-a-uuid", result })).status
@@ -1826,7 +1826,7 @@ describe("day — the log as recorded", () => {
 			.set(auth)
 			.send({
 				client_id: randomUUID(),
-				result: { kind: "weight", weight_lb: 181.4, confidence: "high", sources: null },
+				result: { kind: "weight", weight_lb: 181.4, confidence: "high", sources: null, check: null },
 				text: "181.4 on the scale",
 				logged_at: localInstant(today, "07:00", tz),
 			});
@@ -5173,7 +5173,7 @@ describe("the corrections, kept", () => {
 			.send({
 				client_id: randomUUID(),
 				results: [
-					{ kind: "weight", weight_lb: 181.4, confidence: "high", sources: null },
+					{ kind: "weight", weight_lb: 181.4, confidence: "high", sources: null, check: null },
 					{
 						kind: "activities",
 						items: [
@@ -5249,7 +5249,7 @@ describe("the corrections, kept", () => {
 			.set(auth)
 			.send({
 				client_id: randomUUID(),
-				results: [{ kind: "weight", weight_lb: 179.9, confidence: "high", sources: null }],
+				results: [{ kind: "weight", weight_lb: 179.9, confidence: "high", sources: null, check: null }],
 				// Part 1 is not there: the user dropped it with its ✕ before saving.
 				corrections: [
 					{ part: 1, item: null, instruction: "the carbs look wrong", changes: [{ field: "carbs_g", from: 398, to: 89 }] },
@@ -5558,5 +5558,105 @@ describe("the coach route says how long it took", () => {
 		expect(res.status).toBe(200);
 		expect(res.headers["server-timing"]).toMatch(/brief;dur=[\d.]+/);
 		expect(res.headers["server-timing"]).not.toMatch(/generate;dur=/);
+	});
+});
+
+// ── a weigh-in the app does not believe ──────────────────────────────────────────────
+// Field report 2026-09-02: a 110 lb reading from somebody who weighs about 212 was logged
+// in full faith. The 7-day average fell to 161, the week header read "−102.0 lb", and the
+// goal card announced "Reached". A verdict that FLATTERS is the worst kind to get wrong.
+
+describe("the outlier guard on a weigh-in", () => {
+	const tz = tzForLocalHour(9);
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("outlier@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		// Four honest readings around 212, over four days.
+		for (let back = 3; back >= 0; back -= 1) {
+			await request(app)
+				.post("/api/weight")
+				.set(headers)
+				.send({
+					weight_lb: 212 - back * 0.2,
+					logged_at: new Date(Date.now() - back * 86_400_000).toISOString(),
+				});
+		}
+	});
+
+	it("challenges an implausible reading on the review card, without blocking it", async () => {
+		llm.nextOutput = { result: { kind: "weight", weight_lb: 110, confidence: "high" }, more_kinds: [], photo_fields: [] };
+		const res = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("tz_offset_min", String(tz))
+			.field("text", "110 on the scale");
+
+		expect(res.status).toBe(200);
+		const weight = res.body.results.find((part: { kind: string }) => part.kind === "weight");
+		// It came back as a weigh-in — never refused, never rewritten.
+		expect(weight.weight_lb).toBe(110);
+		// And with the question the card asks.
+		expect(weight.check).toBeTruthy();
+		expect(weight.check.delta_lb).toBeGreaterThan(100);
+		expect(weight.check.question).toMatch(/Is that right\?/);
+		expect(weight.check.previous_lb).toBeCloseTo(212, 0);
+	});
+
+	it("says nothing about an ordinary reading", async () => {
+		llm.nextOutput = { result: { kind: "weight", weight_lb: 211, confidence: "high" }, more_kinds: [], photo_fields: [] };
+		const res = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("tz_offset_min", String(tz))
+			.field("text", "211 this morning");
+
+		const weight = res.body.results.find((part: { kind: string }) => part.kind === "weight");
+		expect(weight.check).toBeNull();
+	});
+
+	it("saves a confirmed surprise, and marks it as one to check", async () => {
+		// The always-log law holds: they said yes, so it is theirs to keep. But everything
+		// that could congratulate them on it now knows not to trust it.
+		const res = await request(app)
+			.post("/api/log/confirm")
+			.set(headers)
+			.send({
+				client_id: randomUUID(),
+				results: [
+					{
+						kind: "weight",
+						weight_lb: 110,
+						confidence: "high",
+						sources: null,
+						check: { delta_lb: 102, avg_7d: 212, previous_lb: 212, previous_at: new Date().toISOString(), question: "?" },
+					},
+				],
+			});
+		expect(res.status).toBe(201);
+
+		const stored = await db.pool.query(
+			`SELECT weight_lb, confidence FROM weight_logs WHERE user_id = (SELECT id FROM "user" WHERE email = $1) AND weight_lb = 110`,
+			["outlier@example.com"],
+		);
+		expect(stored.rows).toHaveLength(1);
+		expect(stored.rows[0].confidence).toBe("low");
+	});
+
+	it("keeps a doubted reading out of the baseline the NEXT one is judged against", async () => {
+		// Otherwise one bad number quietly becomes the trend that makes the next surprise
+		// look ordinary.
+		llm.nextOutput = { result: { kind: "weight", weight_lb: 109, confidence: "high" }, more_kinds: [], photo_fields: [] };
+		const res = await request(app)
+			.post("/api/log/analyze")
+			.set(headers)
+			.field("tz_offset_min", String(tz))
+			.field("text", "109");
+
+		const weight = res.body.results.find((part: { kind: string }) => part.kind === "weight");
+		// Still challenged: the average is still ~212, because the 110 was marked low.
+		expect(weight.check).toBeTruthy();
+		expect(weight.check.avg_7d).toBeGreaterThan(200);
 	});
 });

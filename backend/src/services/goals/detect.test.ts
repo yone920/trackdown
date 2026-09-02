@@ -38,6 +38,37 @@ describe("body weight", () => {
 		expect(detection.reached).toBe(false);
 	});
 
+	// Field report 2026-09-02. A seven-day mean of ONE reading is that reading wearing a
+	// statistic's clothes, and every one of the seven windows can contain the same lone
+	// number — so the "held for a week" run could pass on a single weigh-in.
+	it("will not call it held on too few weigh-ins, however good the average looks", () => {
+		// Two readings, both comfortably under target, taken a day apart.
+		const detection = detectReached(
+			downTo170,
+			facts({ weights: [weight(daysAgo(1), 168), weight(TODAY, 168)] }),
+		);
+		expect(detection.metrics[0]?.current).toBeLessThan(170);
+		expect(detection.reached).toBe(false);
+		expect(detection.metrics[0]?.why).toContain("weigh-in");
+	});
+
+	it("will not call it held on several readings taken the same day", () => {
+		// Three readings is three readings only if they are three days. Stepping on the
+		// scale three times one morning is one morning.
+		const detection = detectReached(
+			downTo170,
+			facts({ weights: [weight(TODAY, 168), weight(TODAY, 167.5), weight(TODAY, 168.5)] }),
+		);
+		expect(detection.reached).toBe(false);
+	});
+
+	it("still calls it held on a real week of weigh-ins", () => {
+		// The gate is about evidence, not about making the goal unreachable.
+		const detection = detectReached(downTo170, facts({ weights: weightTrend(14, 169, 0) }));
+		expect(detection.reached).toBe(true);
+		expect(detection.reached_why).toContain("weigh-ins");
+	});
+
 	it("says so when nobody has weighed themselves", () => {
 		const detection = detectReached(downTo170, facts({ weights: weightTrend(3, 169, 0, daysAgo(20)) }));
 		expect(detection.reached).toBe(false);

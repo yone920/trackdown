@@ -303,6 +303,25 @@ export const ProfileFieldsSchema = z
 	.nullable();
 export type ProfileFields = z.infer<typeof ProfileFieldsSchema>;
 
+/**
+ * The app's doubt about one weigh-in (services/weightCheck.ts). Present ONLY when a reading
+ * sits implausibly far from the recent average — a reading nobody had reason to doubt
+ * carries null, which is the normal case.
+ *
+ * Derived, never asked for: it is a fact about the user's own history, not about the words
+ * they said, so no model-facing schema pays a byte for it. Defaulted, so a client written
+ * before this still confirms.
+ */
+export const WeighInCheckSchema = z.object({
+	delta_lb: z.number(),
+	avg_7d: z.number(),
+	previous_lb: z.number().nullable(),
+	previous_at: z.string().nullable(),
+	/** The question the card asks, in words the user can actually check. */
+	question: z.string().trim().min(1).max(200),
+});
+export type WeighInCheck = z.infer<typeof WeighInCheckSchema>;
+
 export const FusionResultSchema = z.discriminatedUnion("kind", [
 	z.object({
 		kind: z.literal("activities"),
@@ -329,6 +348,13 @@ export const FusionResultSchema = z.discriminatedUnion("kind", [
 		weight_lb: z.number().positive().max(2000),
 		confidence: FieldConfidence,
 		sources: WeightSources,
+		/**
+		 * Null unless the app doubts this reading. When it is set the card asks before the
+		 * number counts, and the row is saved low-confidence even after a yes — because a
+		 * confirmed surprise is still a surprise, and everything that could congratulate the
+		 * user on it reads that mark (migration 0020).
+		 */
+		check: WeighInCheckSchema.nullable().default(null),
 	}),
 	z.object({
 		kind: z.literal("goal"),
@@ -739,6 +765,9 @@ export function toFusionResult(route: FusionRoute, detail: FusionDetail = {}): F
 				weight_lb: route.weight_lb,
 				confidence: route.confidence,
 				sources: expandSources(SOURCE_FIELDS.weight, photoFieldNames, route),
+				// Filled in by the route once the user's own recent readings are to hand;
+				// the translation has no database and no business doubting anything.
+				check: null,
 			};
 
 		case "goal": {

@@ -10,6 +10,7 @@ import type { FusionAnalyzer, FusionPhoto } from "../services/fusion/analyze.js"
 import { buildFusionContext } from "../services/fusion/context.js";
 import { diffResults } from "../services/corrections.js";
 import { isOverloadError, OVERLOADED_CODE, OVERLOADED_MESSAGE } from "../services/providerErrors.js";
+import { checkWeighIn, type RecentWeights } from "../services/weightCheck.js";
 import { ConfirmBody, NothingToSaveError, confirmLog } from "../services/fusion/confirm.js";
 import { FusionResultSchema, MAX_PARTS, type FusionResult } from "../services/fusion/schema.js";
 import { proposalForSpec } from "../services/goals/store.js";
@@ -214,6 +215,19 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 		// row that is ALREADY saved is written by that row's own PATCH instead.
 		const corrections = revise ? diffResults(revise.results, results, revise.instruction) : [];
 
+		// A weigh-in that sits implausibly far from the user's own recent readings is
+		// CHALLENGED before it counts (services/weightCheck.ts). Not blocked — the
+		// always-log law does not bend for a number we find surprising — but the card asks,
+		// and a confirmed surprise is saved low-confidence (field report 2026-09-02: a 110 lb
+		// reading from somebody who weighs 212 took the goal card to "Reached").
+		//
+		// Computed here for the same reason the goal's timeline is: it needs the user's own
+		// history, and the analyzer has no database.
+		for (const result of results) {
+			if (result.kind !== "weight") continue;
+			result.check = checkWeighIn(result.weight_lb, await recentWeights(pool, userId), context.tzOffsetMin);
+		}
+
 		// The timeline is arithmetic, not language: whatever the model guessed is replaced
 		// by the projection from the user's own facts at the safe rates in concept-v2
 		// §Goals, so the confirm card shows the date the goal will actually be saved with
@@ -282,4 +296,31 @@ function describe(error: unknown): string {
 	const status = (error as { status?: unknown } | null)?.status ?? "?";
 	const requestId = (error as { request_id?: unknown } | null)?.request_id;
 	return requestId ? `${status} (${String(requestId)})` : String(status);
+}
+
+/**
+ * The recent readings a new weigh-in is judged against: the seven-day average and the last
+ * reading before this one.
+ *
+ * Low-confidence rows are EXCLUDED from the average. A reading the app already doubted must
+ * not become the baseline that makes the next surprise look ordinary — that is how one bad
+ * number quietly becomes a trend.
+ */
+async function recentWeights(pool: pg.Pool, userId: string): Promise<RecentWeights> {
+	const { rows } = await pool.query<{ weight_lb: string; logged_at: string }>(
+		`SELECT weight_lb, logged_at FROM weight_logs
+		  WHERE user_id = $1
+		    AND logged_at >= NOW() - INTERVAL '7 days'
+		    AND (confidence IS NULL OR confidence <> 'low')
+		  ORDER BY logged_at DESC`,
+		[userId]
+	);
+	if (rows.length === 0) return { avg_7d: null, previous: null, count: 0 };
+	const values = rows.map((row) => Number(row.weight_lb));
+	const first = rows[0]!;
+	return {
+		avg_7d: values.reduce((sum, value) => sum + value, 0) / values.length,
+		previous: { weight_lb: Number(first.weight_lb), logged_at: new Date(first.logged_at).toISOString() },
+		count: rows.length,
+	};
 }

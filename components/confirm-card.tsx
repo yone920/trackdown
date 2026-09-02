@@ -318,6 +318,21 @@ export function ConfirmCard({
           <Facts>
             <Fact label="Weight lb" numeric width="46%" value={result.weight_lb} testID="weight-lb" />
           </Facts>
+          {/* A reading that sits implausibly far from their own recent average is asked
+              about before it counts (field report 2026-09-02: a 110 lb slip from somebody
+              who weighs 212 took the goal card to "Reached"). It is never blocked — the
+              always-log law holds, and 110 might be true — but it is never believed in
+              silence either, and it is saved low-confidence even after a yes. */}
+          {result.check ? (
+            <Card
+              testID="weight-check"
+              style={{ marginTop: 12, borderLeftWidth: 3, borderLeftColor: C.accent }}>
+              <Body style={{ lineHeight: 15 * 1.55 }}>{result.check.question}</Body>
+              <Sub style={{ marginTop: 6, lineHeight: 18 }}>
+                Log it if it is right — it will be kept, and marked as one to check.
+              </Sub>
+            </Card>
+          ) : null}
         </View>
       ) : null}
 

@@ -195,6 +195,21 @@ export type GoalCardView = {
   measure: string;
   /** "212 → 210.4 now (7-day avg)" — where it started and where it is. */
   standing: string;
+  /**
+   * The weigh-ins themselves, labelled and dated (user request 2026-09-02: "show where I
+   * was at the previous weight vs the new one with dates").
+   *
+   * The card used to print "212.0 → 161.0 lb now (7-day avg)" — an arrow between two
+   * numbers, one of which was an average and neither of which said when. A reader trying to
+   * work out whether 161 was believable had nothing to check it against. Null for a measure
+   * that has no readings behind it.
+   */
+  readings: {
+    latest: { value: string; when: string } | null;
+    previous: { value: string; when: string } | null;
+    /** Always labelled as an average, because it is one and it is not a weigh-in. */
+    average: string | null;
+  } | null;
   /** "10.4 lb to go", "Reached", or null when there is no finish line. */
   to_go: string | null;
   /** "−0.8 lb/wk" — the rate the projection is made from. */
@@ -287,7 +302,20 @@ export function ratePerWeek(series: { date: IsoDate; value: number }[]): number 
  */
 export function goalCard(
   goal: GoalWithProgress,
-  { week = null, today }: { week?: WeekView | null; today: IsoDate },
+  {
+    week = null,
+    today,
+    weighIns = [],
+  }: {
+    week?: WeekView | null;
+    today: IsoDate;
+    /**
+     * The actual weigh-ins, one per day, oldest first — the EVIDENCE behind the average
+     * (`TrainingBoard.body.series`). The goal's own `series` is already smoothed, so it
+     * cannot answer "what did the scale say, and when".
+     */
+    weighIns?: readonly { date: IsoDate; value: number }[];
+  },
 ): GoalCardView {
   const kind: GoalKind = goal.kind;
   const judge = kind !== 'maintain' && kind !== 'custom';
@@ -310,13 +338,43 @@ export function goalCard(
             smoothed ? ' (7-day avg)' : ''
           }`;
 
-  const met = metric?.percent === 1;
+  // **The measure being met today is not the goal being reached.** `percent === 1` is one
+  // 7-day average against the target, and a 7-day average of a single reading is that
+  // reading wearing a statistic's clothes — which is how a 110 lb slip announced "Reached ·
+  // The measure says you are there" to somebody who weighs 212 (field report 2026-09-02).
+  //
+  // The server already knows the difference: `reached_candidate_at` is set only after the
+  // average has HELD at target for a week, on evidence of several weigh-ins across several
+  // days (backend services/goals/detect.ts). So that is what the word "Reached" waits for,
+  // and a measure that is merely at target today says exactly that instead.
+  const atTarget = metric?.percent === 1;
+  const sustained = !!goal.reached_candidate_at;
   const to_go =
     target == null || current == null
       ? null
-      : met
+      : sustained
         ? 'Reached'
-        : `${pretty(Math.abs(target - current), unit)}${unit ? ` ${unit}` : ''} to go`;
+        : atTarget
+          ? 'At target today'
+          : `${pretty(Math.abs(target - current), unit)}${unit ? ` ${unit}` : ''} to go`;
+  const met = sustained;
+
+  // The labelled trio: what the scale last said, what it said before that, and the average
+  // — each one named, because an unlabelled number next to another unlabelled number is a
+  // puzzle rather than a fact.
+  const dated = [...weighIns].sort((a, b) => a.date.localeCompare(b.date));
+  const last = dated[dated.length - 1] ?? null;
+  const prior = dated.length > 1 ? dated[dated.length - 2]! : null;
+  const readings =
+    smoothed && (last || current != null)
+      ? {
+          latest: last ? { value: `${pretty(last.value, unit)}${unit ? ` ${unit}` : ''}`, when: whenLabel(last.date, today) } : null,
+          previous: prior
+            ? { value: `${pretty(prior.value, unit)}${unit ? ` ${unit}` : ''}`, when: whenLabel(prior.date, today) }
+            : null,
+          average: current == null ? null : `${pretty(current, unit)}${unit ? ` ${unit}` : ''}`,
+        }
+      : null;
 
   const rateValue = ratePerWeek(series);
   const rate = rateValue == null || Math.abs(rateValue) < 0.05 ? null : `${signed(rateValue, unit)}/wk`;
@@ -326,15 +384,16 @@ export function goalCard(
   // user for arithmetic (field report 2026-08-31). A goal the measure already says is
   // reached keeps its own verdict: that one is news even from a single reading.
   const pace =
-    series.length < 2 && !met
+    series.length < 2 && !atTarget
       ? { text: startingLine(measure, series, unit), tone: 'mute' as const }
-      : paceVerdict({ current, target, rateValue, by, today, met, judge });
+      : paceVerdict({ current, target, rateValue, by, today, met, atTarget, judge });
 
   return {
     key: goal.id,
     title: goal.title,
     measure,
     standing,
+    readings,
     to_go,
     rate,
     percent: metric?.percent ?? goal.progress.percent ?? null,
@@ -357,6 +416,7 @@ function paceVerdict({
   by,
   today,
   met,
+  atTarget,
   judge,
 }: {
   current: number | null;
@@ -365,9 +425,16 @@ function paceVerdict({
   by: IsoDate | null;
   today: IsoDate;
   met: boolean;
+  /** At target on today's reading, which is a different claim from having held it. */
+  atTarget: boolean;
   judge: boolean;
 }): { text: string; tone: PaceTone } | null {
   if (met) return { text: 'The measure says you are there', tone: judge ? 'good' : 'mute' };
+  // At target, but not yet held. Said plainly rather than celebrated: one reading is a
+  // reading, and the goal is closed when it keeps being true (user decision 2026-09-02).
+  if (atTarget) {
+    return { text: 'At target — it counts once it holds for a week', tone: 'mute' };
+  }
   if (target == null || current == null) return null;
 
   const needed = target - current;
@@ -675,4 +742,13 @@ export function cardioProvenance(source: 'goal' | 'stated' | 'default' | undefin
   if (source === 'stated') return 'From stated';
   if (source === 'default') return 'Standard guideline — tell me yours';
   return null;
+}
+
+/** "today", "yesterday", "Mon Sep 1" — when a reading was taken, as a person says it. */
+export function whenLabel(date: IsoDate, today: IsoDate): string {
+  if (date === today) return 'today';
+  const days = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 86_400_000);
+  if (days === 1) return 'yesterday';
+  const at = new Date(`${date}T00:00:00Z`);
+  return at.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
 }

@@ -180,6 +180,7 @@ export default function Progress() {
             index={index}
             count={active.length}
             today={today}
+            weighIns={board.data?.body.series ?? []}
             week={week.data ?? null}
             dismissed={dismissed.includes(goal.id)}
             busy={update.isPending || reorder.isPending}
@@ -270,11 +271,14 @@ function GoalBlock({
   onDrop,
   onDismiss,
   onAdjust,
+  weighIns,
 }: {
   goal: GoalWithProgress;
   index: number;
   count: number;
   today: string;
+  /** The actual weigh-ins behind the average, oldest first (TrainingBoard.body.series). */
+  weighIns: readonly { date: string; value: number }[];
   week: ReturnType<typeof useWeek>['data'] | null;
   dismissed: boolean;
   busy: boolean;
@@ -293,7 +297,10 @@ function GoalBlock({
     [goal, metrics],
   );
 
-  const card = useMemo(() => goalCard(withSeries, { week: week ?? null, today }), [withSeries, week, today]);
+  const card = useMemo(
+    () => goalCard(withSeries, { week: week ?? null, today, weighIns }),
+    [withSeries, week, today, weighIns],
+  );
   // Anything the goal measures beyond its headline number, drawn the way Progress always
   // drew a metric (lib/progress-sections.ts §goalSections).
   const extras = useMemo(() => goalSections(withSeries).slice(1), [withSeries]);
@@ -338,6 +345,21 @@ function GoalBlock({
       <Sub testID={`goal-standing-${goal.id}`} style={[{ marginTop: 8, lineHeight: 18 }, TABULAR]}>
         {[card.standing, card.to_go, card.rate].filter(Boolean).join(' · ')}
       </Sub>
+
+      {/* The weigh-ins themselves, labelled and dated (user request 2026-09-02: "show where
+          I was at the previous weight vs the new one with dates"). The line above is the
+          claim; these are the evidence, and an average says out loud that it is one. */}
+      {card.readings ? (
+        <View testID={`goal-readings-${goal.id}`} style={{ marginTop: 10, gap: 3 }}>
+          {card.readings.latest ? (
+            <Reading label="Latest" value={card.readings.latest.value} when={card.readings.latest.when} />
+          ) : null}
+          {card.readings.previous ? (
+            <Reading label="Before that" value={card.readings.previous.value} when={card.readings.previous.when} />
+          ) : null}
+          {card.readings.average ? <Reading label="7-day average" value={card.readings.average} /> : null}
+        </View>
+      ) : null}
 
       {card.chart ? (
         <View
@@ -813,4 +835,21 @@ function outcomeWords(goal: GoalRecord & { outcome: string }): string {
   if (goal.outcome === 'dropped') return 'Dropped';
   if (goal.outcome === 'expired') return 'Expired';
   return goal.outcome;
+}
+
+/**
+ * One labelled fact on the goal card: what it is, what it says, and when it was taken.
+ *
+ * Labelled because the card used to print "212.0 → 161.0 lb now (7-day avg)" — an arrow
+ * between two numbers, one of them an average, neither of them dated — and a reader trying
+ * to judge whether 161 was believable had nothing to check it against.
+ */
+function Reading({ label, value, when }: { label: string; value: string; when?: string }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
+      <Eyebrow style={{ minWidth: 96 }}>{label}</Eyebrow>
+      <Sub style={[{ fontFamily: FONT.medium, color: C.ink }, TABULAR]}>{value}</Sub>
+      {when ? <Sub style={{ color: C.dim }}>{when}</Sub> : null}
+    </View>
+  );
 }

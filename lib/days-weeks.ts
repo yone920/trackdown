@@ -69,6 +69,17 @@ function deficitWords(total: number): string {
   return `${total >= 0 ? '−' : '+'}${kcal(total)}`;
 }
 
+/**
+ * How much a real week can move, in pounds, before the number is more likely to be a bad
+ * reading than a fact about a body.
+ *
+ * Water, a heavy meal, a different scale and a genuinely hard week together come to a few
+ * pounds. Ten is generous. Beyond it, printing the figure states something the app has no
+ * business being confident about — which is how a header came to read "−102.0 lb" off one
+ * mistyped weigh-in (field report 2026-09-02).
+ */
+export const IMPLAUSIBLE_WEEK_CHANGE_LB = 10;
+
 function weightWords(days: DayRow[]): string | null {
   // Oldest first, so "the change across the week" is last minus first.
   const weighed = [...days].sort((a, b) => a.date.localeCompare(b.date)).filter((day) => day.weight_lb != null);
@@ -76,6 +87,10 @@ function weightWords(days: DayRow[]): string | null {
   const last = weighed[weighed.length - 1]?.weight_lb;
   if (first == null || last == null || weighed.length < 2) return null;
   const change = last - first;
+  // Say NOTHING rather than something implausible. The tally already omits this clause when
+  // there are too few readings to make one, so an absence here is a shape the reader has
+  // seen before — and a silence is cheaper than a lie about their own body.
+  if (Math.abs(change) > IMPLAUSIBLE_WEEK_CHANGE_LB) return null;
   if (Math.abs(change) < 0.05) return 'no change';
   return `${change > 0 ? '+' : '−'}${Math.abs(change).toFixed(1)} lb`;
 }

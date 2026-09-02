@@ -154,10 +154,29 @@ describe('the goal card — where I stand, and whether the rate gets me there', 
     expect(card.chart?.projection.every((value) => value == null)).toBe(true);
   });
 
-  it('says so plainly when the measure says it is there', () => {
+  // Field report 2026-09-02: a 110 lb slip from somebody who weighs 212 made the card say
+  // "Reached · The measure says you are there" the same day. A verdict that FLATTERS is
+  // worse than one that scolds, because nothing about it invites a second look.
+  it('does not call a goal reached off one reading at target', () => {
     const goal = makeGoal('lose_fat', [makeMetric({ percent: 1, current: 170, target: 170 })]);
     const card = goalCard(goal, { today: TODAY });
+    expect(card.to_go).toBe('At target today');
+    expect(card.to_go).not.toBe('Reached');
+    // And it says what would make it count, rather than celebrating.
+    expect(card.pace?.text).toMatch(/once it holds/);
+    expect(card.pace?.tone).toBe('mute');
+  });
+
+  it('says Reached once the server says the average HELD', () => {
+    // `reached_candidate_at` is set only after a week at target on several weigh-ins across
+    // several days (backend services/goals/detect.ts). That is the signal the word waits for.
+    const goal = {
+      ...makeGoal('lose_fat', [makeMetric({ percent: 1, current: 170, target: 170 })]),
+      reached_candidate_at: '2026-09-01T00:00:00.000Z',
+    };
+    const card = goalCard(goal, { today: TODAY });
     expect(card.to_go).toBe('Reached');
+    expect(card.pace?.text).toBe('The measure says you are there');
     expect(card.pace?.tone).toBe('good');
   });
 
@@ -383,5 +402,66 @@ describe('the cardio target, and where it came from', () => {
     expect(cardioProvenance('stated')).toBe('From stated');
     expect(cardioProvenance('goal')).toBe('From your goal');
     expect(cardioProvenance(undefined)).toBeNull();
+  });
+});
+
+describe('the goal card shows the weigh-ins, labelled and dated', () => {
+  // `TODAY` above is scoped to its own describe; this block names its own.
+  const TODAY = '2026-09-02';
+  // User request 2026-09-02: "show where I was at the previous weight vs the new one with
+  // dates". The card printed "212.0 → 161.0 lb now (7-day avg)" — an arrow between two
+  // numbers, one of them an average, neither of them dated, so a reader had no way to judge
+  // whether 161 was believable.
+
+  const goal = () => makeGoal('lose_fat', [makeMetric({ measure: 'body_weight', unit: 'lb', current: 161, target: 170, baseline: 212 })]);
+
+  it('names the latest reading and when it was taken', () => {
+    const card = goalCard(goal(), {
+      today: TODAY,
+      weighIns: [
+        { date: '2026-09-01', value: 212 },
+        { date: TODAY, value: 110 },
+      ],
+    });
+    expect(card.readings?.latest).toEqual({ value: '110.0 lb', when: 'today' });
+  });
+
+  it('names the one before it, with its own date', () => {
+    const card = goalCard(goal(), {
+      today: TODAY,
+      weighIns: [
+        { date: '2026-08-25', value: 213 },
+        { date: '2026-09-01', value: 212 },
+        { date: TODAY, value: 110 },
+      ],
+    });
+    // A day a person would say, not an ISO string and not an arrow.
+    expect(card.readings?.previous?.value).toBe('212.0 lb');
+    expect(card.readings?.previous?.when).toBe('yesterday');
+  });
+
+  it('falls back to a weekday and a date for anything older', () => {
+    const card = goalCard(goal(), {
+      today: TODAY,
+      weighIns: [
+        { date: '2026-08-25', value: 213 },
+        { date: '2026-08-27', value: 212 },
+        { date: TODAY, value: 110 },
+      ],
+    });
+    expect(card.readings?.previous?.when).toMatch(/Aug 27/);
+  });
+
+  it('labels the average as an average, because it is one and it is not a weigh-in', () => {
+    const card = goalCard(goal(), { today: TODAY, weighIns: [{ date: TODAY, value: 110 }] });
+    expect(card.readings?.average).toBe('161.0 lb');
+  });
+
+  it('says nothing at all when there are no weigh-ins behind the number', () => {
+    const card = goalCard(makeGoal('build_strength', [makeMetric({ measure: 'exercise_load' })]), {
+      today: TODAY,
+      weighIns: [],
+    });
+    expect(card.readings).toBeNull();
   });
 });

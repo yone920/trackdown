@@ -75,3 +75,35 @@ describe('tallyFor', () => {
     expect(tally).toBeNull();
   });
 });
+
+describe("the week's weight delta refuses the implausible", () => {
+  // Field report 2026-09-02: a 110 lb slip made the week header read "−102.0 lb". A real
+  // week does not move that much, so printing the figure states something the app has no
+  // business being confident about.
+
+  const day = (date: string, weight_lb: number | null) =>
+    makeDayRow({ date, weight_lb, verdict: 'served' as const });
+
+  it('prints an ordinary week', () => {
+    const [group] = groupByWeek([day('2026-08-31', 212.4), day('2026-09-02', 211.2)], null);
+    expect(group!.tally).toMatch(/−1\.2 lb/);
+  });
+
+  it('says NOTHING rather than "−102.0 lb"', () => {
+    const [group] = groupByWeek([day('2026-08-31', 212), day('2026-09-02', 110)], null);
+    // The clause is simply absent, which is a shape the reader has already seen — the
+    // tally omits it whenever there are too few readings to make one.
+    expect(group!.tally).not.toMatch(/lb/);
+    expect(group!.tally).not.toMatch(/102/);
+  });
+
+  it('refuses an implausible GAIN the same way', () => {
+    const [group] = groupByWeek([day('2026-08-31', 212), day('2026-09-02', 260)], null);
+    expect(group!.tally).not.toMatch(/lb/);
+  });
+
+  it('still prints a hard but believable week', () => {
+    const [group] = groupByWeek([day('2026-08-31', 212), day('2026-09-02', 204)], null);
+    expect(group!.tally).toMatch(/−8\.0 lb/);
+  });
+});
