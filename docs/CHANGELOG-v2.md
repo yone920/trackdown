@@ -87,6 +87,50 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-02 — the total is what we store, the plates are what you load (`feat-per-side-loads`)
+
+> coach says 115… minus the 45 bar… 70… 35 a side
+
+A barbell load is stored and prescribed as a **total**, and that is right: progression works
+on totals, and a history that recorded "35" for a 115 lb lift would be a history that lies.
+But nobody loads a total. They load plates, per side — and the subtraction in between was
+being done by the user, in a gym, mid-session.
+
+So the app says both. The total leads, because it is what the plan, the history and the
+progression are all keyed on; the plates follow, because they are what the hands do:
+
+    115 lb · 35/side + bar
+
+**Where it is drawn:** plan rows (the prescription), the lifts board's `load_text`, and the
+receipt under a done lift — `2 × 10 @ 115 (35/side + bar)`. The confirm card is unchanged on
+purpose: the fusion rules already show their working there ("45/side + 45 lb bar = 135 lb"),
+which is the same fact arriving from the other direction.
+
+**Only for a bar, and every exclusion is its own small truth.** A dumbbell figure is
+*already* per hand — the fusion load rules make it so. A machine's number is the stack. An
+**assisted** load is help, not plates. And a total at or below 45 is just the bar, where
+"0/side" is arithmetic nobody asked for. `perSideLb` also refuses to round: a load that
+cannot be made from a matching pair is left unannotated rather than turned into a number the
+user would have to un-round at the rack.
+
+**The catalogue decides, never the name.** "Bench Press" is a barbell and does not say so,
+so `equipment` now rides out of `lookupExercises` with the ids and `withExerciseIds` puts a
+`barbell` flag on each Do-list line. The finisher does not get one — stretching prescribes no
+load for a per-side note to be about.
+
+**The prompt too**, so a prescription reads the way it is racked: a barbell load's `note`
+may say "35 a side plus the bar" when it has room, while `load_lb` stays the total it must
+be. The instruction is explicit that the total is what gets copied and the plates are only
+how it is *said*.
+
+**Verified** — app **374 → 389**: the helper as a pure rule (bar taken off and halved, sub-bar
+totals and empty bars silent, half plates printed as halves and never as "37.50", every
+non-barbell excluded, no load at all handled), and the row rendering (plates beside the
+prescribed total, a half plate on screen, silence for a non-barbell and for an empty bar, and
+the plates carried onto a done lift's receipt). Backend **728**, with the board's own
+expectation updated to the truth it now tells: 135 on the bar is 45 a side. `tsc` and both
+lints clean.
+
 ### 2026-09-02 — an append that added the plan to itself (`fix-append-duplicates`)
 
 Five movements planned — Lat Pulldown, Seated Cable Row, Barbell Curl, Hammer Curl, Good

@@ -412,6 +412,14 @@ export type BriefExercise = {
   name: string;
   /** Resolved server-side when the brief is returned, so the app never name-matches. */
   exercise_id?: string | null;
+  /**
+   * The catalogue says this movement is loaded with plates on a bar, so the row draws the
+   * per-side breakdown beside the prescribed total (lib/plates.ts). Resolved server-side —
+   * never inferred from the name, because "Bench Press" is a barbell and does not say so.
+   * Optional for one release: an older server sends no answer, and "unknown" prints the
+   * total alone rather than a guess.
+   */
+  barbell?: boolean;
   /** Illustrations behind the name; drives the glyph and the sheet's skeleton count. */
   media_count?: number;
   load_lb: number | null;

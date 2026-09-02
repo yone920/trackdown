@@ -70,6 +70,14 @@ export type BriefExercise = Brief["workout"]["exercises"][number] & {
 	 */
 	media_count: number;
 	/**
+	 * True when the catalogue says this movement is loaded with plates on a bar. The app
+	 * draws the per-side breakdown beside the prescribed total from it (lib/plates.ts) —
+	 * a barbell total is the right thing to store and the wrong thing to load by (field
+	 * report 2026-09-02). Never inferred from the name: "Bench Press" is a barbell and does
+	 * not say so.
+	 */
+	barbell: boolean;
+	/**
 	 * The local clock an appended item was added at ("2:05p"), null for the plan's original
 	 * lines. It is what the app's "added 2:05p" divider is drawn from — stored on the brief
 	 * because it is a fact about the ANSWER (when the coach said it), unlike `completion`,
@@ -188,6 +196,8 @@ function toWorkout(workout: StoredWorkout | null): BriefWorkout {
 			added_at: exercise.added_at ?? null,
 			exercise_id: null,
 			media_count: 0,
+			// Resolved by withExerciseIds on the way out; false until the catalogue says.
+			barbell: false,
 		})),
 	};
 }
@@ -217,11 +227,20 @@ export async function withExerciseIds(db: Queryable, brief: CoachBriefRecord): P
 		const match = matches.get(name.trim().toLowerCase());
 		return { exercise_id: match?.id ?? null, media_count: match?.media_count ?? 0 };
 	};
+	// Only the Do list carries it: a finisher is stretching and mobility, and it never
+	// prescribes a load for a per-side breakdown to be about.
+	const resolveLoaded = (name: string) => {
+		const match = matches.get(name.trim().toLowerCase());
+		return {
+			...resolve(name),
+			barbell: (match?.equipment ?? []).some((item) => item.trim().toLowerCase() === "barbell"),
+		};
+	};
 	return {
 		...brief,
 		workout: {
 			...brief.workout,
-			exercises: exercises.map((exercise) => ({ ...exercise, ...resolve(exercise.name) })),
+			exercises: exercises.map((exercise) => ({ ...exercise, ...resolveLoaded(exercise.name) })),
 			finisher: finisher.map((item) => ({ ...item, ...resolve(item.name) })),
 		},
 	};

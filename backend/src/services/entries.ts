@@ -205,6 +205,16 @@ export interface CatalogMatch {
 	/** Which way its load points (migration 0013). See db/exercises.ts. */
 	load_direction: LoadDirection;
 	/**
+	 * What the movement is loaded with — "barbell", "dumbbell", "machine", "bench"…
+	 *
+	 * Carried on the match so a screen drawing a resolved load can say what the plates are
+	 * per side (field report 2026-09-02: a barbell total is stored and prescribed correctly,
+	 * but nobody loads a total — they load plates, and the arithmetic was being left to the
+	 * user in a gym). Only the catalogue may answer this; the name cannot, because "Bench
+	 * Press" is a barbell and does not say so.
+	 */
+	equipment: string[];
+	/**
 	 * How many illustrations the catalogue holds for it; 0 for the rows the import never
 	 * matched. Carried on the match so every screen that draws a resolved name can say,
 	 * *before* the tap, whether there is a picture behind it (field report 2026-09-01:
@@ -243,7 +253,7 @@ export async function lookupExercises(
 	if (wanted.length === 0) return matches;
 
 	const { rows } = await db.query<CatalogMatch>(
-		`SELECT id, name, category, primary_muscles, secondary_muscles, aliases, load_direction, media_count
+		`SELECT id, name, category, primary_muscles, secondary_muscles, aliases, load_direction, equipment, media_count
 		   FROM exercise_catalog ORDER BY name`
 	);
 	const index = buildExerciseIndex(rows);

@@ -7,6 +7,7 @@ import { BigButton, Card, Chip, Chips, GroupHeading, Row, Section, SkeletonLines
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { openExercise } from '@/lib/exercise';
 import { clock, kcal } from '@/lib/format';
+import { perSideNote } from '@/lib/plates';
 import { matchedRecordIds, truthLine } from '@/lib/plan-truth';
 import {
   localDateKey,
@@ -355,7 +356,17 @@ export function PlanSection() {
                       exercise.completion?.done
                         ? null
                         : [
-                            exercise.load_lb != null ? `${exercise.load_lb} lb` : null,
+                            // The total leads — it is what the plan, the history and the
+                            // progression are keyed on — and the plates follow, because
+                            // that is the number the hands do (field report 2026-09-02).
+                            exercise.load_lb != null
+                              ? [
+                                  `${exercise.load_lb} lb`,
+                                  perSideNote(exercise.load_lb, exercise.barbell ? ['barbell'] : null),
+                                ]
+                                  .filter(Boolean)
+                                  .join(' · ')
+                              : null,
                             exercise.sets != null && exercise.reps != null
                               ? `${exercise.sets} × ${exercise.reps}`
                               : exercise.sets != null
@@ -374,14 +385,14 @@ export function PlanSection() {
                         point of the merge: the ask and the answer on one row, so a load
                         that dropped partway through reads without holding two lists in
                         your head. */}
-                    {truthLine(exercise.completion) ? (
+                    {truthLine(exercise.completion, exercise.barbell) ? (
                       <Sub
                         testID={`coach-truth-${index}`}
                         style={[
                           { marginTop: 2, color: exercise.completion?.done ? C.ink : C.good },
                           TABULAR,
                         ]}>
-                        {truthLine(exercise.completion)}
+                        {truthLine(exercise.completion, exercise.barbell)}
                       </Sub>
                     ) : null}
                     {exercise.is_new ? (

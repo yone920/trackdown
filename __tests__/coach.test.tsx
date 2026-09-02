@@ -955,6 +955,92 @@ it('says which movements were already on the plan, when an add was deduplicated'
   expect(screen.getByText('Lat Pulldown')).toBeTruthy();
 });
 
+describe('a barbell row says what to put on the bar', () => {
+  // Field report 2026-09-02. The total is what the plan and the progression are keyed on;
+  // the plates are what the hands do. The row shows both rather than making the user
+  // subtract the bar at the rack.
+
+  function barbellPlan(load: number, barbell: boolean, completion?: unknown) {
+    const answer = next();
+    answer.brief.workout = {
+      type: 'strength',
+      targets: ['chest'],
+      exercises: [
+        {
+          name: 'Bench Press',
+          exercise_id: null,
+          media_count: 0,
+          barbell,
+          load_lb: load,
+          sets: 3,
+          reps: 8,
+          minutes: null,
+          note: null,
+          ...(completion ? { completion } : {}),
+        },
+      ],
+      finisher: [],
+    } as never;
+    return answer;
+  }
+
+  it('draws the plates beside the prescribed total', async () => {
+    mockApi.mockResolvedValue(barbellPlan(115, true));
+    renderCoach();
+    await screen.findByText('Bench Press');
+    // 115 − the 45 lb bar, halved.
+    expect(screen.getByText(/115 lb · 35\/side \+ bar/)).toBeTruthy();
+  });
+
+  it('prints a half plate as a half, not as a rounded lie', async () => {
+    mockApi.mockResolvedValue(barbellPlan(120, true));
+    renderCoach();
+    await screen.findByText('Bench Press');
+    expect(screen.getByText(/37\.5\/side/)).toBeTruthy();
+  });
+
+  it('says nothing about sides when the movement is not a barbell', async () => {
+    // A dumbbell load is already per hand; a machine's number is the stack.
+    mockApi.mockResolvedValue(barbellPlan(115, false));
+    renderCoach();
+    await screen.findByText('Bench Press');
+    expect(screen.getByText(/115 lb/)).toBeTruthy();
+    expect(screen.queryByText(/\/side/)).toBeNull();
+  });
+
+  it('says nothing about sides for a bar with nothing on it', async () => {
+    mockApi.mockResolvedValue(barbellPlan(45, true));
+    renderCoach();
+    await screen.findByText('Bench Press');
+    expect(screen.queryByText(/\/side/)).toBeNull();
+  });
+
+  it('carries the plates onto the receipt of a lift that is done', async () => {
+    mockApi.mockResolvedValue(
+      barbellPlan(115, true, {
+        done: true,
+        sets_done: 3,
+        sets_prescribed: 3,
+        partial: false,
+        records: [
+          {
+            id: 'a1',
+            logged_at: '2026-08-30T12:02:00.000Z',
+            sets: 3,
+            reps: 8,
+            load_lb: 115,
+            duration_min: null,
+            kcal: 200,
+          },
+        ],
+      }),
+    );
+    renderCoach();
+    await screen.findByText('Bench Press');
+    expect(screen.getByTestId('coach-truth-0').props.children).toContain('35/side + bar');
+  });
+});
+
 // ── the answer that never came back ──────────────────────────────────────────────────
 // Field report 2026-09-02: the user pressed "Start today's workout", watched "Thinking…",
 // and watched the page revert to "Nothing planned yet" — while a five-item brief sat

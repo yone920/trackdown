@@ -1,4 +1,5 @@
 import { clock } from '@/lib/format';
+import { perSideNote } from '@/lib/plates';
 import type { CompletionRecord, ExerciseCompletion } from '@/lib/types';
 
 // The line under a prescription that says what actually happened (user decision
@@ -16,12 +17,18 @@ import type { CompletionRecord, ExerciseCompletion } from '@/lib/types';
 // about the same row (backend services/coach/completion.ts).
 
 /** The numbers of one logged record, compactly: "2 × 10 @ 85", "17 min", "3 sets". */
-export function recordFacts(record: CompletionRecord): string {
+export function recordFacts(record: CompletionRecord, barbell = false): string {
   const parts: string[] = [];
   if (record.sets != null && record.reps != null) parts.push(`${record.sets} × ${record.reps}`);
   else if (record.sets != null) parts.push(`${record.sets} ${record.sets === 1 ? 'set' : 'sets'}`);
   else if (record.reps != null) parts.push(`${record.reps} reps`);
-  if (record.load_lb != null) parts.push(`@ ${round(record.load_lb)}`);
+  if (record.load_lb != null) {
+    // The plates, beside the total, on a receipt for a barbell lift (field report
+    // 2026-09-02). The total is still what the line leads with: it is what the history and
+    // the progression are keyed on.
+    const perSide = barbell ? perSideNote(record.load_lb, ['barbell']) : null;
+    parts.push(perSide ? `@ ${round(record.load_lb)} (${perSide})` : `@ ${round(record.load_lb)}`);
+  }
   if (record.duration_min != null) parts.push(`${Math.round(record.duration_min)} min`);
   return parts.join(' ');
 }
@@ -36,11 +43,14 @@ export function recordFacts(record: CompletionRecord): string {
  * Null when nothing has been logged against it — an untouched line says nothing, because
  * a plan is not a list of things you are behind on (concept-v2 §Principles 8).
  */
-export function truthLine(completion: ExerciseCompletion | undefined): string | null {
+export function truthLine(completion: ExerciseCompletion | undefined, barbell = false): string | null {
   const records = completion?.records ?? [];
   if (!completion || records.length === 0) return null;
   const when = records.find((record) => record.logged_at)?.logged_at ?? null;
-  const facts = records.map(recordFacts).filter(Boolean).join(' + ');
+  const facts = records
+    .map((record) => recordFacts(record, barbell))
+    .filter(Boolean)
+    .join(' + ');
   // A DONE row already carries a ✓, so the line leads with the receipt itself — the time
   // and the weight, which is what the user came back to look at (user decision 2026-09-01:
   // "it's already done… it should say what weight did I use, when did I do it"). A PARTIAL

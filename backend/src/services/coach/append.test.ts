@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { appendToBrief, skippedNote } from "./coach.js";
 import type { CoachBriefRecord } from "./coach.js";
-import type { RevisedBrief } from "./schema.js";
+import type { RevisedBrief } from "../../ports/coach.js";
 
 // The append gate (field report 2026-09-02).
 //

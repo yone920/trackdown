@@ -4931,7 +4931,9 @@ describe("the training board", () => {
 		expect(res.body.date).toBe(today);
 
 		const bench = res.body.lifts.find((lift: { exercise: string }) => lift.exercise === "Bench Press");
-		expect(bench).toMatchObject({ load_lb: 135, load_text: "135 lb", sessions: 3, sentiment: "good" });
+		// The total leads and the plates follow: 135 on the bar is 45 a side (field report
+	// 2026-09-02 — the user was doing this subtraction in their head at the rack).
+	expect(bench).toMatchObject({ load_lb: 135, load_text: "135 lb · 45/side + bar", sessions: 3, sentiment: "good" });
 		// The catalogue resolved the name, so the row can open the same sheet Today opens.
 		expect(bench.exercise_id).toEqual(expect.any(String));
 		expect(bench.next).toMatchObject({ rule: "step_up", load_lb: 140, text: "Up to 140 lb next" });

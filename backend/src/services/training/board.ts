@@ -286,11 +286,41 @@ export function sayLoad(load: number | null, direction: LoadDirection): string {
 }
 
 /** The working figure for a row: a load if it has one, else minutes, else nothing to say. */
-function loadText(feature: ExerciseFeature, direction: LoadDirection): string {
-	if (feature.last.load_lb != null) return sayLoad(feature.last.load_lb, direction);
+function loadText(feature: ExerciseFeature, direction: LoadDirection, equipment: readonly string[] = []): string {
+	if (feature.last.load_lb != null) {
+		// The total leads — it is what the history and the progression are keyed on — and
+		// the plates follow, because that is the number the hands do (field report
+		// 2026-09-02). Only for a bar: a dumbbell figure is already per hand and a stack is
+		// a stack.
+		const total = sayLoad(feature.last.load_lb, direction);
+		const perSide = perSideNote(feature.last.load_lb, equipment, direction);
+		return perSide ? `${total} · ${perSide}` : total;
+	}
 	if (feature.last.duration_min != null) return `${Math.round(feature.last.duration_min)} min`;
 	if (feature.last.sets != null && feature.last.reps != null) return `${feature.last.sets} × ${feature.last.reps}`;
 	return "—";
+}
+
+/** The bar itself. The standard Olympic bar, which is what the fusion load rules assume. */
+const BAR_LB = 45;
+
+/**
+ * "35/side + bar" — the plates on one side, when there are plates and a bar to put them on.
+ *
+ * Null for anything else, and each exclusion is its own small truth: a dumbbell load is
+ * already per hand, a machine's number is the stack, an ASSISTED load is help rather than
+ * plates, and a total at or below the bar is just the bar. `perSide` never rounds — a load
+ * that cannot be made from a matching pair is left unannotated rather than turned into a
+ * number the user would have to un-round on the rack.
+ */
+function perSideNote(totalLb: number, equipment: readonly string[], direction: LoadDirection): string | null {
+	if (direction !== "resistance") return null;
+	if (!equipment.some((item) => item.trim().toLowerCase() === "barbell")) return null;
+	if (totalLb <= BAR_LB) return null;
+	const perSide = (totalLb - BAR_LB) / 2;
+	if (perSide <= 0) return null;
+	const rounded = Math.round(perSide * 10) / 10;
+	return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}/side + bar`;
 }
 
 /** "3 × 10" when both halves are known; one of them alone otherwise; null with neither. */
@@ -653,7 +683,7 @@ export function buildBoard({
 			load_lb: feature.last.load_lb,
 			sets: feature.last.sets,
 			reps: feature.last.reps,
-			load_text: loadText(feature, direction),
+			load_text: loadText(feature, direction, catalog.equipment[key] ?? []),
 			last_date: feature.last.date,
 			days_since: feature.days_since,
 			sessions: feature.sessions.length,
