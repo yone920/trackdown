@@ -595,6 +595,42 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 		if (!checkMeal(meal).ok) expect(meal.confidence).toBe("low");
 	}, 120_000);
 
+	// ── "the same bowl of the lunch I had earlier" ───────────────────────────────────
+	// Field bug 2026-09-02, the user's own sentence, typos and all: "I just the same bawl
+	// of the lunch I had earlier" — no eating verb ("ate" missing), "bawl" for bowl. Their
+	// log attempt ended in silence, and the first thing to establish was whether the READER
+	// was the reason. It was not, and this is what holds that.
+	//
+	// The contract is the whole point of `todayMeals` being in the context at all: a
+	// reference to an earlier meal resolves to that meal's own numbers. Always-log applies
+	// — something was plainly eaten — so this may never come back as a question or as a
+	// statement about the day, whatever the spelling.
+	it("copies the earlier lunch when the user says they had the same again", async () => {
+		const { results } = await analyzer().analyze({
+			text: "I just the same bawl of the lunch I had earlier",
+			context: {
+				...context,
+				localTime: "17:58",
+				todayMeals: [
+					{ description: "beef soup bowl with rice", kcal: 620, protein_g: 38, logged_at: "2026-08-29T15:05:00.000Z" },
+				],
+			},
+		});
+
+		expect(results).toHaveLength(1);
+		const meal = results[0]!;
+		expect(meal.kind).toBe("meal");
+		if (meal.kind !== "meal") return;
+
+		// The earlier meal's own numbers, not a guess about a generic bowl of soup: within
+		// a quarter of what was logged at lunch is "the same thing again".
+		expect(meal.kcal).toBeGreaterThan(620 * 0.75);
+		expect(meal.kcal).toBeLessThan(620 * 1.25);
+		expect(meal.protein_g ?? 0).toBeGreaterThan(38 * 0.6);
+		// And it is recognisably that meal rather than an invention.
+		expect(meal.description.toLowerCase()).toMatch(/soup|bowl|beef|rice/);
+	}, 90_000);
+
 	// The clarify round: the question is remembered, so "yes" resolves instead of looping.
 	it("resolves a bare answer against the question it was asked", async () => {
 		const { results } = await analyzer().analyze({

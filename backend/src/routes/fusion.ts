@@ -9,7 +9,9 @@ import { isAcceptedUploadMime, ACCEPTED_UPLOAD_MIMES } from "../services/images.
 import type { FusionAnalyzer, FusionPhoto } from "../services/fusion/analyze.js";
 import { buildFusionContext } from "../services/fusion/context.js";
 import { diffResults } from "../services/corrections.js";
-import { sendLlmError } from "./llmError.js";
+import { llmErrorBody, sendLlmError } from "./llmError.js";
+import { logFailure, logOutcome } from "../services/fusion/outcome.js";
+import { setServerTiming, timePhase } from "../middleware/timing.js";
 import { checkWeighIn, type RecentWeights } from "../services/weightCheck.js";
 import { ConfirmBody, NothingToSaveError, confirmLog } from "../services/fusion/confirm.js";
 import { FusionResultSchema, MAX_PARTS, type FusionResult } from "../services/fusion/schema.js";
@@ -190,20 +192,42 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 		// balance is too low" was printed under the input box the day after the 529 was
 		// humanised (field reports 2026-09-02, services/llmErrors.ts). A code and a human
 		// line, whatever went wrong; the provider's account of it goes to the log.
+		const where = revise ? "fusion.revise" : "fusion.analyze";
+		const startedAt = performance.now();
 		let results: FusionResult[];
 		let photoParts: number[];
 		try {
-			const answer = revise
-				? { results: await analyzer.revise({ ...revise, context }), photoParts: [] as number[] }
-				: await analyzer.analyze({
-						...(fields.text ? { text: fields.text } : {}),
-						photos: llmPhotos,
-						context,
-					});
+			const answer = await timePhase(req, "read", async () =>
+				revise
+					? { results: await analyzer.revise({ ...revise, context }), photoParts: [] as number[] }
+					: analyzer.analyze({
+							...(fields.text ? { text: fields.text } : {}),
+							photos: llmPhotos,
+							context,
+						})
+			);
 			results = answer.results;
 			photoParts = answer.photoParts;
 		} catch (error) {
-			sendLlmError(res, error, revise ? "fusion.revise" : "fusion.analyze");
+			logFailure(where, error, performance.now() - startedAt);
+			sendLlmError(res, error, where);
+			return;
+		}
+
+		// What came back, in one line: how many parts and of what kinds. The field bug this
+		// exists for (2026-09-02) left a log with a routing call in it and nothing after —
+		// no way to tell a reading that succeeded and was not drawn from one that never
+		// finished (services/fusion/outcome.ts).
+		logOutcome({ where, results, ms: performance.now() - startedAt, photos: llmPhotos.length });
+
+		// **A 200 with nothing in it is not an answer.** The client has no card to draw, no
+		// question to ask and no error to show, so the user sees their own words sitting in
+		// the box and nothing else — which is exactly what was reported. If a reading comes
+		// back empty, that is a failed read and it says so, in the same shape every other
+		// reader failure uses.
+		if (results.length === 0) {
+			console.error(`❌ ${where}: the reader returned no parts at all.`);
+			res.status(502).json(llmErrorBody("reader_failed"));
 			return;
 		}
 
@@ -247,6 +271,7 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 			proposal ??= projected;
 		}
 
+		setServerTiming(req, res);
 		res.json({
 			results,
 			/** Empty for a fresh log; one entry per record a revision moved. */

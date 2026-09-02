@@ -5810,6 +5810,36 @@ describe("a provider failure, on the wire", () => {
 	});
 });
 
+// ── a reading that read nothing ──────────────────────────────────────────────────────
+// Field bug 2026-09-02: a log attempt ended with no card, no error and no question on the
+// phone. A 200 carrying no parts is a response the client cannot draw — it has nothing to
+// confirm, nothing to ask and nothing to report — so it is not a 200 any more.
+
+describe("a reading that comes back empty", () => {
+	let auth: Record<string, string>;
+
+	beforeEach(async () => {
+		const token = await signUp(`empty-${Math.random().toString(36).slice(2, 8)}@example.com`);
+		auth = { Authorization: `Bearer ${token}` };
+		llm.failNext = null;
+	});
+
+	it("is a failure with a code, not a 200 with nothing in it", async () => {
+		// The route call answers with a shape that carries no parts at all.
+		llm.nextOutput = { result: { kind: "unclear", question: "" }, more_kinds: [], photo_fields: [] };
+		const res = await request(app).post("/api/log/analyze").set(auth).field("text", "something");
+
+		// Either it read something, or it says it did not. The one thing it may not do is
+		// answer 200 with an empty list, which is what left a phone showing nothing.
+		if (res.status === 200) {
+			expect(res.body.results.length).toBeGreaterThan(0);
+		} else {
+			expect(res.status).toBe(502);
+			expect(res.body.code).toBe("reader_failed");
+		}
+	});
+});
+
 // ── one exercise, all of it ──────────────────────────────────────────────────────────
 // Field report 2026-09-02, on All lifts: "60 lb · today … doesn't have enough detail …
 // the historic loads, the progress of the load … which direction I'm going." The board

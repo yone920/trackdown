@@ -538,6 +538,35 @@ describe('a change told to a pending log ends up in the record', () => {
   });
 });
 
+// ── the tap that did nothing ─────────────────────────────────────────────────────────
+// Field bug 2026-09-02: the user typed "I just the same bawl of the lunch I had earlier",
+// tapped Log, and the screen did not move — no review card, no error, no question, their
+// words still in the box. A response with no parts in it took this branch, and this branch
+// did not exist: the handler set its state and fell off the end.
+//
+// The server refuses to send that shape now, but this is the half that holds whatever
+// server the phone is talking to.
+
+describe('a response with nothing in it', () => {
+  it('says so, instead of leaving the screen exactly as it was', async () => {
+    mockParams = {};
+    renderSheet();
+    mockUpload.mockResolvedValueOnce(analyzed([]));
+
+    fireEvent.changeText(screen.getByTestId('log-text'), 'I just the same bawl of the lunch I had earlier');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+
+    // A line the user can act on…
+    expect(await screen.findByText("That didn't get read. Nothing was lost — try again.")).toBeTruthy();
+    // …no card pretending there is something to confirm…
+    expect(screen.queryByTestId('confirm-card')).toBeNull();
+    // …and their words are still theirs to send again.
+    expect(screen.getByTestId('log-text').props.value).toBe('I just the same bawl of the lunch I had earlier');
+  });
+});
+
 describe('when the reader fails', () => {
   // Field reports 2026-09-02, two days running: a 529 arrived on screen as the SDK's own
   // JSON — status, error type and request id — under the input box; then, once THAT status
