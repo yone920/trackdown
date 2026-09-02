@@ -13,11 +13,31 @@ export class ApiError extends Error {
     public status: number,
     message: string,
     public issues?: unknown,
+    /** The server's machine-readable reason, when it named one ("provider_overloaded"). */
+    public code?: string,
   ) {
     super(message);
     this.name = 'ApiError';
   }
 }
+
+/**
+ * The model provider is busy — a 529 or a 429 that survived its one retry on the server.
+ *
+ * Read from the CODE, not from the prose: the message is for a person and may be reworded
+ * any time, and matching on English is how a fix stops working in a language nobody
+ * planned for. The status is the fallback for a server that has not learned the code yet.
+ */
+export function isBusyError(error: unknown): boolean {
+  return error instanceof ApiError && (error.code === 'provider_overloaded' || error.status === 503);
+}
+
+/**
+ * The one line the user sees when the reader is busy. It never carries a status, a request
+ * id or a line of JSON — the user saw all three under their input box on 2026-09-02, and
+ * none of them was theirs to read.
+ */
+export const BUSY_MESSAGE = 'The reader is busy right now — try again in a few seconds.';
 
 type Query = Record<string, string | number | boolean | undefined>;
 
@@ -106,8 +126,13 @@ export async function api<T>(
 
   if (!res.ok) {
     if (res.status === 401) onUnauthorized?.();
-    const payload = (data ?? {}) as { error?: string; issues?: unknown };
-    throw new ApiError(res.status, payload.error ?? `Request failed (${res.status}).`, payload.issues);
+    const payload = (data ?? {}) as { error?: string; issues?: unknown; code?: string };
+    throw new ApiError(
+      res.status,
+      payload.error ?? `Request failed (${res.status}).`,
+      payload.issues,
+      payload.code,
+    );
   }
   return data as T;
 }
@@ -208,8 +233,13 @@ export async function upload<T>(path: string, parts: UploadPart[]): Promise<T> {
   }
   if (!res.ok) {
     if (res.status === 401) onUnauthorized?.();
-    const payload = (data ?? {}) as { error?: string; issues?: unknown };
-    throw new ApiError(res.status, payload.error ?? `Upload failed (${res.status}).`, payload.issues);
+    const payload = (data ?? {}) as { error?: string; issues?: unknown; code?: string };
+    throw new ApiError(
+      res.status,
+      payload.error ?? `Upload failed (${res.status}).`,
+      payload.issues,
+      payload.code,
+    );
   }
   return data as T;
 }

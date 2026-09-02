@@ -87,6 +87,72 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-02 — a sauna is a thing you did, and a busy provider is weather (`fix-recovery-routing`)
+
+#### The sauna went to the wrong bucket
+
+"15 minutes sauna at 190 degrees" was routed to **statement / coach_context** — *"used the
+next time you ask, then gone"*. So nothing would have been logged at all. The user meant to
+keep it.
+
+It is past tense with a length on it: a thing their body did. Passive recovery already
+done — sauna, steam room, hot tub, ice bath, cold plunge, massage, foam rolling, stretching
+— is an **activity**, and the always-log rule covers it exactly as it covers a set of
+squats: category `other` (or `mobility` for rolling and stretching), the duration from
+their words, muscle groups empty, kcal 0 or a small honest estimate, and the details they
+gave — a temperature, which bath — kept in the description.
+
+**The tell is tense and duration**, and the prompt now says so where the mistake was made:
+a completed act with a length is a LOG however passive it was; a condition that shapes the
+next answer, with nothing done in it, is context. *"If you can ask 'how long did it last?'
+and the words answer, it happened: log it."* The cost of getting this wrong is asymmetric
+and the rule says that too — a coach context is read once and gone, so mis-filing a record
+there throws it away.
+
+A contract test drives the literal input: 15 minutes, sauna in the name, no sets, no reps,
+no load — and **190 never becomes a weight**, which is the other way this sentence could
+have gone wrong. The Train view needed no change: a muscle-less `other` activity already
+falls to "Also", where it now also draws as done.
+
+#### And the 529 that reached the phone
+
+While testing the above, the provider went down under load and the app showed what the SDK
+had said:
+
+    529 {"type":"error","error":{"type":"overloaded_error",...,"request_id":"req_011Ce..."}}
+
+Three things were right about that — the typed text survived, the failure was not silent,
+and it could be retried — and one was wrong: it is developer talk on a screen belonging to
+somebody in a gym.
+
+- **One retry, at one layer.** `adapters/llm/anthropic.ts` retries a 429/529 once after
+  1.5 s. **Only** an overload: a 400 is a bug and a 401 is a configuration problem, and
+  asking either twice is waiting longer to find out. Crucially, `adapters/coach/llm.ts`
+  already retried *any* error once — so a brief would have made **four** calls to a provider
+  that was already struggling. Retry policy is now single-layer and explicit: transport owns
+  transient provider failures, the coach adapter owns malformed answers, and neither reaches
+  into the other's job.
+- **One human line.** `POST /api/log/analyze` catches a surviving overload and answers 503
+  with *"The reader is busy right now — try again in a few seconds."* plus a
+  `provider_overloaded` code. The status and request id go to the server log, where somebody
+  who wants them can find them. The app maps on the **code**, not the prose — matching on
+  English is how a fix stops working in a language nobody planned for — and every other
+  failure still explains itself in the server's own words.
+
+**Verified** — backend **728 → 739**: the overload predicate (both statuses, the message
+shape the user actually saw, and *not* the 4xx that must fail fast), the copy carrying no
+status or JSON, and the adapter retrying exactly once with a real backoff, giving up after
+one so an outage still fails fast, and never retrying an unusable answer. App **391 → 393**:
+the busy line on screen with the typed text intact and nothing from the wire, and an
+ordinary error still speaking plainly.
+
+**One honest note on the contract suite.** Both new cases — the sauna and yesterday's
+equipment fix — pass individually against the real model. A full 20-case run could not be
+got to green this session: the provider is intermittently returning 529 under load, and
+twenty concurrent real calls provoke exactly the condition the second half of this entry is
+about. Nothing in those failures is an assertion; every one is `overloaded_error`. Worth a
+re-run when the weather clears.
+
 ### 2026-09-02 — the implement is a fact, and finished work looks finished (`fix-equipment-and-also`)
 
 #### The reader overruled what the user typed

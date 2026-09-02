@@ -17,7 +17,7 @@ import { EvidenceThumbs, LocalThumbs } from '@/components/evidence';
 import { IconCamera, IconClose, IconKeyboard, IconMic } from '@/components/icons';
 import { BigButton, Card, Chip, Chips, Skeleton, SkeletonLines } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
-import { ApiError } from '@/lib/api';
+import { ApiError, BUSY_MESSAGE, isBusyError } from '@/lib/api';
 import {
   recordToResult,
   resultToPatch,
@@ -211,7 +211,7 @@ export default function LogSheet() {
       // A question stays on the say-it step: there is nothing to review yet.
       if (read.length > 0 && !question) setStep('review');
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not read that.');
+      setError(readerError(caught, 'Could not read that.'));
     }
   };
 
@@ -241,7 +241,7 @@ export default function LogSheet() {
       setChanged(true);
       setStep('review');
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not make that change.');
+      setError(readerError(caught, 'Could not make that change.'));
     }
   };
 
@@ -263,7 +263,7 @@ export default function LogSheet() {
       await askCoach.mutateAsync({ revision: line, mode: 'append' });
       router.back();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not adjust the plan.');
+      setError(readerError(caught, 'Could not adjust the plan.'));
     }
   };
 
@@ -317,7 +317,7 @@ export default function LogSheet() {
       await patch.mutateAsync({ kind: editKind, id: editId!, patch: body, instruction: told });
       router.back();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not save that change.');
+      setError(readerError(caught, 'Could not save that change.'));
     }
   };
 
@@ -757,4 +757,17 @@ export default function LogSheet() {
       </View>
     </KeyboardAvoidingView>
   );
+}
+
+/**
+ * What went wrong, in the user's language.
+ *
+ * A busy provider is the one failure this app hits that is nobody's fault and fixes itself,
+ * so it gets its own sentence — and never the SDK's, which arrived on screen once as
+ * `529 {"type":"error",...,"request_id":...}` under the input box (field report
+ * 2026-09-02). The typed text is kept either way; it always was.
+ */
+function readerError(caught: unknown, fallback: string): string {
+  if (isBusyError(caught)) return BUSY_MESSAGE;
+  return caught instanceof ApiError ? caught.message : fallback;
 }

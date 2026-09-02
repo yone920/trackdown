@@ -247,6 +247,33 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 		expect(item.description).not.toMatch(/per dumbbell|\/side|each hand/i);
 	}, 90_000);
 
+	// Field report 2026-09-02: "15 minutes sauna at 190 degrees" was routed to
+	// statement/coach_context — "used the next time you ask, then gone" — so nothing would
+	// have been logged at all. It is past tense with a length on it: a thing their body did.
+	it("logs passive recovery that has already happened, rather than filing it as context", async () => {
+		const { results } = await analyzer().analyze({ text: "15 minutes sauna at 190 degrees", context });
+
+		// The bucket is the bug: a coach context is read once and gone, and they meant to
+		// keep this.
+		expect(results.map((part) => part.kind)).not.toContain("coach_context");
+		expect(results.map((part) => part.kind)).not.toContain("preference");
+		const activities = results.find((part) => part.kind === "activities");
+		expect(activities).toBeTruthy();
+		if (activities?.kind !== "activities") return;
+
+		const item = activities.items[0]!;
+		expect(item.duration_min).toBe(15);
+		expect((item.exercise ?? item.description).toLowerCase()).toContain("sauna");
+		// No muscle was worked and no set was done; the temperature is a detail, not a load.
+		expect(item.sets).toBeNull();
+		expect(item.reps).toBeNull();
+		expect(item.load_lb).toBeNull();
+		// 190 is degrees. It must never become a weight.
+		expect(item.load_lb ?? 0).not.toBeCloseTo(190, 0);
+		// And the detail they gave is kept where a person would look for it.
+		expect(`${item.description} ${item.equipment ?? ""}`).toMatch(/190/);
+	}, 90_000);
+
 	// The training-background fix, against the real model. The extended plan-fields schema
 	// (964 → 1570 bytes) has to compile, and the model has to tell a load the user lifts
 	// NOW apart from a load they want to reach — which is a goal, not a reference.

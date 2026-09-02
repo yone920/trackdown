@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-
 import React from 'react';
 
 import LogSheet from '@/app/log';
+import { ApiError } from '@/lib/api';
 import { keyboardPadding } from '@/lib/keyboard';
 import type { ActivityItem, FusionResult } from '@/lib/types';
 
@@ -20,7 +21,21 @@ jest.mock('@/lib/api', () => ({
   authHeaders: () => ({}),
   evidenceUrl: (id: string) => `http://test/api/evidence/${id}`,
   API_URL: 'http://test',
-  ApiError: class extends Error {},
+  BUSY_MESSAGE: 'The reader is busy right now — try again in a few seconds.',
+  isBusyError: (error: unknown) =>
+    !!error && typeof error === 'object' && (error as { code?: string }).code === 'provider_overloaded',
+  // Plain assignment, not TS parameter properties: babel's scope check rejects those
+  // inside a jest.mock factory.
+  ApiError: class ApiError extends Error {
+    status: number;
+    code: string | undefined;
+    constructor(status: number, message: string, _issues?: unknown, code?: string) {
+      super(message);
+      this.name = 'ApiError';
+      this.status = status;
+      this.code = code;
+    }
+  },
   setUnauthorizedHandler: () => {},
 }));
 
@@ -523,6 +538,53 @@ describe('a change told to a pending log ends up in the record', () => {
     await waitFor(() => expect(mockApi).toHaveBeenCalled());
     const [, options] = mockApi.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(options.body.corrections).toEqual([]);
+  });
+});
+
+describe('when the reader is busy', () => {
+  // Field report 2026-09-02: a 529 arrived on screen as the SDK's own JSON — status,
+  // error type and request id — under the input box. Three things were right about that
+  // (the typed text survived, the failure was not silent, and it could be retried) and one
+  // was developer talk on a screen belonging to somebody in a gym.
+
+  const busy = () => {
+    return new ApiError(
+      503,
+      'The reader is busy right now — try again in a few seconds.',
+      undefined,
+      'provider_overloaded',
+    );
+  };
+
+  it('says one human line, and keeps what was typed', async () => {
+    mockParams = {};
+    renderSheet();
+    mockUpload.mockRejectedValueOnce(busy());
+
+    fireEvent.changeText(screen.getByTestId('log-text'), 'barbell curl 3x10 at 50');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+
+    expect(await screen.findByText(/The reader is busy right now/)).toBeTruthy();
+    // Nothing from the wire: no status, no request id, no JSON.
+    expect(screen.queryByText(/529|request_id|overloaded_error|\{/)).toBeNull();
+    // And the words are still in the box, ready to send again.
+    expect(screen.getByTestId('log-text').props.value).toBe('barbell curl 3x10 at 50');
+  });
+
+  it('still says what an ordinary failure was, in the server’s own words', async () => {
+    // Only the busy case is reworded. A real error still explains itself.
+    mockParams = {};
+    renderSheet();
+    mockUpload.mockRejectedValueOnce(new ApiError(422, 'Could not understand that.'));
+
+    fireEvent.changeText(screen.getByTestId('log-text'), 'asdf');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+
+    expect(await screen.findByText('Could not understand that.')).toBeTruthy();
   });
 });
 

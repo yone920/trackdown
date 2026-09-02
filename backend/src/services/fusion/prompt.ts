@@ -20,6 +20,12 @@ order the user said them. Most of the time that list has exactly one entry.
 FIRST decide what kind each thing is, then fill in that kind and nothing else:
 
 - "activities" — physical activity they did: exercises, a walk, a run, a machine display.
+  This includes PASSIVE RECOVERY they have already done — sauna, steam room, hot tub, ice
+  bath, cold plunge, massage, foam rolling, stretching. It happened to their body, for a
+  length of time, and the always-log rule applies to it exactly as it does to a set of
+  squats: category "other" (or "mobility" for foam rolling and stretching), the duration
+  from their words, muscle_groups empty, kcal 0 or a small honest estimate, and the details
+  they gave — a temperature, a bath, which sauna — kept in the description.
 - "meal" — anything eaten or drunk.
 - "weight" — a body-weight reading (a scale photo, "182 this morning").
 - "goal" — a target or a standing intention. Return the title only; you will be asked for the
@@ -33,9 +39,16 @@ FIRST decide what kind each thing is, then fill in that kind and nothing else:
       training background ("switching to keto", "mornings only", "I hate burpees", "my gym
       is New Millennium", "I've been lifting three years and I bench 165 for 3x5"). A load
       they say they lift NOW is a preference, not a workout they did today and not a goal.
-    * "coach_context": a passing state that should shape today's advice but is not a rule —
-      "only 30 minutes today", "slept badly", "feel like cardio". Naming the gym they train
-      at is a standing fact and therefore a preference, not one of these.
+    * "coach_context": a passing state that should shape the NEXT answer but is not a rule
+      and is not a thing that happened — "only 30 minutes today", "slept badly", "feel like
+      cardio", "knee is sore". Naming the gym they train at is a standing fact and therefore
+      a preference, not one of these.
+      **THE TELL IS TENSE AND DURATION.** A completed act with a length is a LOG, however
+      passive it was: "15 minutes sauna at 190 degrees" is an activity, not context, and
+      routing it here would throw the record away — a coach context is read once and gone,
+      and the user meant to keep this. A condition that shapes what to do next, with nothing
+      done in it, is the only thing that belongs in this bucket. If you can ask "how long did
+      it last?" and the words answer, it happened: log it.
 - "unclear" — LAST RESORT. Reserved for input that cannot be interpreted at all: a stray
   word, a photo of nothing, a sentence with no activity, food, weight, goal or statement in
   it. It is NOT for input you can only partly read. If you can tell that something physical

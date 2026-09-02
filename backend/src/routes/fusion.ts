@@ -9,6 +9,7 @@ import { isAcceptedUploadMime, ACCEPTED_UPLOAD_MIMES } from "../services/images.
 import type { FusionAnalyzer, FusionPhoto } from "../services/fusion/analyze.js";
 import { buildFusionContext } from "../services/fusion/context.js";
 import { diffResults } from "../services/corrections.js";
+import { isOverloadError, OVERLOADED_CODE, OVERLOADED_MESSAGE } from "../services/providerErrors.js";
 import { ConfirmBody, NothingToSaveError, confirmLog } from "../services/fusion/confirm.js";
 import { FusionResultSchema, MAX_PARTS, type FusionResult } from "../services/fusion/schema.js";
 import { proposalForSpec } from "../services/goals/store.js";
@@ -182,13 +183,28 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 			base64: s.image.data.toString("base64"),
 		}));
 
-		const { results, photoParts } = revise
-			? { results: await analyzer.revise({ ...revise, context }), photoParts: [] as number[] }
-			: await analyzer.analyze({
-					...(fields.text ? { text: fields.text } : {}),
-					photos: llmPhotos,
-					context,
-				});
+		// A provider that is merely busy is weather, not a fault, and it must not reach the
+		// phone as the SDK's own JSON (field report 2026-09-02: a 529 with its request id
+		// was printed under the input box). It is already retried once at the transport
+		// layer; if it is still busy, it is one human line and a status the app can map.
+		let results: FusionResult[];
+		let photoParts: number[];
+		try {
+			const answer = revise
+				? { results: await analyzer.revise({ ...revise, context }), photoParts: [] as number[] }
+				: await analyzer.analyze({
+						...(fields.text ? { text: fields.text } : {}),
+						photos: llmPhotos,
+						context,
+					});
+			results = answer.results;
+			photoParts = answer.photoParts;
+		} catch (error) {
+			if (!isOverloadError(error)) throw error;
+			console.warn("⚠️  Reader busy, asking the user to try again:", describe(error));
+			res.status(503).json({ error: OVERLOADED_MESSAGE, code: OVERLOADED_CODE });
+			return;
+		}
 
 		// What the told change actually moved, field by field (migration 0015). Computed
 		// here because here is where both sides are — the parts as they went in and the
@@ -259,4 +275,11 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 	});
 
 	return router;
+}
+
+/** The status and request id for the log; never for the user. */
+function describe(error: unknown): string {
+	const status = (error as { status?: unknown } | null)?.status ?? "?";
+	const requestId = (error as { request_id?: unknown } | null)?.request_id;
+	return requestId ? `${status} (${String(requestId)})` : String(status);
 }

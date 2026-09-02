@@ -1,4 +1,5 @@
 import type { Brief, BriefRevision, CoachBriefInputs, CoachPort, RevisedBrief } from "../../ports/coach.js";
+import { isOverloadError } from "../../services/providerErrors.js";
 import type { LlmPort } from "../../ports/llm.js";
 import { buildCoachPrompt } from "../../services/coach/prompt.js";
 import {
@@ -24,11 +25,21 @@ import {
  */
 const MAX_TOKENS = 1200;
 
-/** One structured call, retried once — a malformed sample is usually a one-off. */
+/**
+ * One structured call, retried once — a malformed sample is usually a one-off.
+ *
+ * **Retry policy is single-layer.** A provider that is merely BUSY (429/529) is retried by
+ * the transport adapter beneath this one and is deliberately NOT retried again here: two
+ * layers each retrying the same overload would make four calls to a provider that was
+ * already struggling, and turn a spike into a longer spike (field report 2026-09-02).
+ * What this layer owns is a malformed or unusable ANSWER, which is a different failure with
+ * a different cure.
+ */
 async function once<T extends Parameters<typeof clampBrief>[0]>(ask: () => Promise<T>): Promise<T> {
 	try {
 		return clampBrief(await ask());
 	} catch (error) {
+		if (isOverloadError(error)) throw error;
 		// A brief that parses but says nothing to do is retried a level up, in
 		// services/coach/coach.ts, so that guard holds for every CoachPort and not only
 		// for this one.
