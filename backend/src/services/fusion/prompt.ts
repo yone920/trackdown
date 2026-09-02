@@ -55,15 +55,31 @@ you fill in every field with your best guess:
 - The numbers they gave — sets, reps, load — are facts and go in as stated, even when the
   movement is a guess. "Three sets of 12 at 45 pounds" is 3, 12 and 45 whatever the machine
   turns out to be called.
+- **THE IMPLEMENT THEY NAMED IS A FACT, EXACTLY LIKE THE NUMBERS.** If they say barbell,
+  dumbbell, machine, cable, kettlebell, band or smith, that is what it was. NEVER move a log
+  from one of those classes to another — not because the load looks unusual for it, not
+  because the movement is more commonly done another way, not because another name is more
+  familiar. A weight you find surprising is a weight they lifted.
+  * Read through the typo, keep the class: "barbel", "barble", "bar bell" and "burble curl"
+    are a BARBELL curl. "dumbell", "dumbell" and "db" are dumbbells. Correct the spelling,
+    never the equipment.
+  * A named implement outranks the catalogue's most common spelling of the movement. If the
+    catalogue's nearest entry is a different class from the one they said, keep THEIR class:
+    use the catalogue entry that matches it, or their own words if there is none.
 - The one number you may compute: a PER-SIDE load, and what it means depends on the kit:
   * Barbell: total = plates + the 45 lb bar ("45 on each side" is 135).
-  * Dumbbells ("in each hand", "two 45s", or the movement is a dumbbell one): load_lb is
-    ONE dumbbell — 45, not 90 — because that is how dumbbell work is tracked and progressed.
+  * Dumbbells: load_lb is ONE dumbbell — 45, not 90 — because that is how dumbbell work is
+    tracked and progressed. This applies ONLY when they actually indicated dumbbells: they
+    said so ("dumbbell", "db"), or they described a pair ("in each hand", "two 45s"), or the
+    exercise name they used names dumbbells. **Do not reach for it because a movement is
+    often done with dumbbells** — if they named a different implement, that one wins, and a
+    plain load with no pair described is one number and stays one number.
   * Plate-loaded machine, or they named a machine: the plates alone (90). No bar.
   Show the working in the description ("45/side + 45 lb bar = 135 lb"; "45 lb per
-  dumbbell") so they can see how the number was made. "Each side" with no kit named is
-  ambiguous three ways: follow any equipment words they used, else mark confidence
-  "medium" — never a confident guess.
+  dumbbell") — and ONLY when you actually computed something. A load given as one plain
+  number was not computed and its description says nothing about sides or per-dumbbell.
+  "Each side" with no kit named is ambiguous three ways: follow any equipment words they
+  used, else mark confidence "medium" — never a confident guess.
 - "confidence": "low" or "medium" when the identification was a guess. That is what the low
   confidence is FOR. It is not a reason to return "unclear".
 The user can correct a name in one tap. They cannot correct a workout that was never saved.
@@ -201,6 +217,9 @@ function describeVocabulary(context: FusionContext): string {
 	}
 	// The qualifier rule, where the catalogue is (services/exerciseMatch.ts enforces the
 	// same thing on the way in). A field report: "assisted chin up" came back as "Chin-Up".
+	sections.push(
+		"KEEP THE IMPLEMENT THEY NAMED. A catalogue entry from a different equipment class is a DIFFERENT exercise, however close the name looks: 'barbel curl' is Barbell Curl and never Dumbbell Curl, 'db press' is a dumbbell press and never a barbell one. If no catalogue entry matches the class they said, keep their own phrase rather than crossing the class to reach a familiar name."
+	);
 	sections.push(
 		"KEEP THE USER'S QUALIFIERS. Assisted, incline, decline, close-grip, wide-grip, single-arm, single-leg, seated, standing, smith, deficit, paused, banded and the like name a DIFFERENT movement — never drop one to reach a catalogue name, and never rename a variation to the plain version or to another variation. If the exact variation is not in the list above, keep the user's own phrase."
 	);

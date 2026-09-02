@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import React from 'react';
 
 import { ApiError } from '@/lib/api';
@@ -883,6 +883,38 @@ describe('the merged training section', () => {
     renderCoach();
     await screen.findByText('Chest Press Machine');
     expect(screen.queryByTestId('coach-truth-0')).toBeNull();
+  });
+
+  it('draws off-plan work as DONE — it is a logged fact, not a pending one', async () => {
+    // Field report 2026-09-02: "the way it is listing under also don't show that it is
+    // done". Beside plan lines nobody has started, finished work was reading as pending.
+    serveBoth(planned([record()]), [
+      activity(),
+      activity({ id: 'a9', exercise: 'Incline Treadmill Walk', category: 'cardio', kcal: 146 }),
+    ]);
+    renderCoach();
+
+    await screen.findByTestId('coach-also');
+    // The same ✓ a finished plan line carries.
+    const row = screen.getByTestId('row-activity-a9');
+    expect(within(row).getByText('✓')).toBeTruthy();
+    // And the calories are not lost to the tick — they move onto the line.
+    expect(within(row).getByText(/146 kcal/)).toBeTruthy();
+  });
+
+  it('keeps Also its own group, and out of the N-of-M count', async () => {
+    // Done-looking is not the same as planned: freelanced work stays distinguishable, and
+    // it never inflates how much of the PLAN has been finished.
+    serveBoth(planned([record()]), [
+      activity(),
+      activity({ id: 'a9', exercise: 'Incline Treadmill Walk', category: 'cardio' }),
+    ]);
+    renderCoach();
+
+    await screen.findByTestId('coach-also');
+    expect(screen.getByText('Also')).toBeTruthy();
+    // One prescribed line, one done: the count is about the plan alone.
+    expect(screen.getByText('1 of 1 done')).toBeTruthy();
   });
 
   it('puts off-plan work in the SAME card, under Also', async () => {

@@ -87,6 +87,65 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-02 — the implement is a fact, and finished work looks finished (`fix-equipment-and-also`)
+
+#### The reader overruled what the user typed
+
+Typed, not spoken: **"barbel curl 3x10 at 50"**. Saved as **Dumbbell Curl**, described as
+*"3 sets of 10 at 50 lb per dumbbell"*. The reader crossed the equipment class the user had
+stated, and then invented per-dumbbell phrasing to justify the crossing.
+
+Two things let it:
+
+- The catalogue's `Dumbbell Curl` is aliased to the bare **"bicep curl"**, so a typo'd
+  "barbel" drops to the plain movement and lands there — while `Barbell Curl` sits right
+  beside it, aliased only to spellings that include the word.
+- Yesterday's per-side rule read *"Dumbbells ("in each hand", "two 45s", **or the movement is
+  a dumbbell one**)"*. That last clause is a licence to decide the class from the movement's
+  usual form, which is exactly what happened, and the "per dumbbell" description followed
+  from it.
+
+**The implement somebody names is a fact, exactly like the numbers are.** The prompt now says
+so outright: never move a log between barbell, dumbbell, machine, cable, kettlebell, band or
+smith against what they said — not because the load looks unusual, not because the movement
+is more commonly done another way. *A weight you find surprising is a weight they lifted.*
+Read through the typo and keep the class: "barbel", "barble", "bar bell" and "burble curl"
+are a barbell curl; correct the spelling, never the equipment. A named implement outranks
+the catalogue's most familiar spelling — use the entry that matches their class, or their own
+words if there is none. The same rule sits in the vocabulary block beside the qualifier rule
+it is a sibling of, because a class is a qualifier: `barbel curl` is Barbell Curl and never
+Dumbbell Curl.
+
+The dumbbell clause is tightened to what it was for: it applies when they **said** dumbbells,
+**described a pair**, or used a name that names them — never as an inference from the
+movement. And the working is only shown when working was actually done: *"a load given as one
+plain number was not computed, and its description says nothing about sides or per-dumbbell."*
+
+A contract test now drives the literal input against the real model: `barbel curl 3x10 at 50`
+→ a barbell curl, 3 × 10 at 50, no dumbbell anywhere in the name, equipment or description,
+and no per-side arithmetic invented for a number nobody said was per side.
+
+#### "Also" looked pending
+
+Off-plan work sat under **Also** in the plan's own card with no done styling, next to plan
+lines carrying a green ✓ — so finished work looked like work still owed. *"the way it is
+listing under also don't show that it is done."*
+
+Those rows are logged facts; they are done by definition. They now carry the same treatment a
+finished plan line does — dimmed, with the green ✓ — and the calories move onto the line so
+nothing is lost to the tick.
+
+**It stays its own group.** Freelanced work is not the plan, it is still not in the N-of-M
+count, and the heading still says how much of it there is. The treatment is deliberately NOT
+applied to the full training log, where every row is done and a column of identical ticks
+would say nothing at all — it earns its meaning here only by sitting beside lines that are
+not.
+
+**Verified** — app **389 → 391** (an Also row draws the ✓ and keeps its calories; Also stays a
+separate group and the plan's count stays about the plan). Backend **728**, and the **fusion
+contract suite 19/19 against the real API** — the new equipment case plus every existing one,
+including the meal-consistency case that has historically flaked. `tsc` and both lints clean.
+
 ### 2026-09-02 — the total is what we store, the plates are what you load (`feat-per-side-loads`)
 
 > coach says 115… minus the 45 bar… 70… 35 a side

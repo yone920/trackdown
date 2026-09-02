@@ -219,6 +219,34 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 		expect(loads[1]).toBeCloseTo(85, 0);
 	}, 90_000);
 
+	// Field report 2026-09-02, TYPED not spoken: "barbel curl 3x10 at 50" was saved as a
+	// **Dumbbell Curl** at "50 lb per dumbbell" — the reader crossed the equipment class the
+	// user had stated, and then invented per-dumbbell phrasing to justify it. The implement
+	// somebody names is a fact exactly like the numbers are.
+	it("keeps the equipment class the user typed, through the typo", async () => {
+		const { results } = await analyzer().analyze({ text: "barbel curl 3x10 at 50", context });
+
+		const activities = results.find((part) => part.kind === "activities");
+		expect(activities).toBeTruthy();
+		if (activities?.kind !== "activities") return;
+		expect(activities.items).toHaveLength(1);
+		const item = activities.items[0]!;
+
+		// A barbell curl, spelled correctly — never moved to the dumbbell it is more often
+		// done with.
+		expect(item.exercise ?? "").toMatch(/barbell/i);
+		expect(item.exercise ?? "").not.toMatch(/dumbbell/i);
+		expect(`${item.equipment ?? ""} ${item.description}`).not.toMatch(/dumbbell/i);
+
+		// The numbers are the numbers. 50 is a plain stated load: no bar added, because
+		// nothing was said per side, and nothing halved either.
+		expect(item.sets).toBe(3);
+		expect(item.reps).toBe(10);
+		expect(item.load_lb).toBeCloseTo(50, 0);
+		// And no working is shown for arithmetic that never happened.
+		expect(item.description).not.toMatch(/per dumbbell|\/side|each hand/i);
+	}, 90_000);
+
 	// The training-background fix, against the real model. The extended plan-fields schema
 	// (964 → 1570 bytes) has to compile, and the model has to tell a load the user lifts
 	// NOW apart from a load they want to reach — which is a goal, not a reference.

@@ -1,4 +1,5 @@
 import { useRouter } from 'expo-router';
+import { View } from 'react-native';
 
 import { EvidenceThumbs } from '@/components/evidence';
 import { Row } from '@/components/kit';
@@ -22,6 +23,7 @@ export function ActivityRow({
   onPress,
   onDelete,
   showDelta = true,
+  done = false,
 }: {
   activity: DayActivity;
   /** The last row under a heading draws no divider. */
@@ -37,9 +39,20 @@ export function ActivityRow({
    * against, so it stays.
    */
   showDelta?: boolean;
+  /**
+   * Draw it as accomplished — dimmed, with the green ✓ a finished plan line carries.
+   *
+   * Used where a logged row sits BESIDE unfinished ones (the "Also" group inside the
+   * training card): off-plan work is done by definition, and rendering it in the same
+   * upright ink as a plan line nobody has started made finished work look pending (field
+   * report 2026-09-02). It is deliberately NOT used on the full training log, where every
+   * row is done and a column of identical ticks would say nothing at all.
+   */
+  done?: boolean;
 }) {
   const router = useRouter();
   return (
+    <View style={{ opacity: done ? 0.45 : 1 }}>
     <Row
       testID={activity.id ? `row-activity-${activity.id}` : undefined}
       time={clock(activity.logged_at)}
@@ -57,8 +70,13 @@ export function ActivityRow({
       // The machine belongs on this line and not in the title: the movement is what the
       // week is compared on, and the kit is what the row is recognised by. Structured
       // facts only — never the raw sentence the title already says (lib/row-facts.ts).
-      sub={activitySubLine(activity)}
-      right={activity.kcal > 0 ? kcal(activity.kcal) : null}
+      // The calories move into the line when the ✓ takes the right-hand slot, so nothing
+      // is lost to the done treatment.
+      sub={[activitySubLine(activity), done && activity.kcal > 0 ? `${kcal(activity.kcal)} kcal` : null]
+        .filter(Boolean)
+        .join(' · ')}
+      right={done ? '✓' : activity.kcal > 0 ? kcal(activity.kcal) : null}
+      rightColor={done ? C.good : undefined}
       onPress={onPress}
       onDelete={onDelete}
       deleteLabel={activity.exercise ?? activity.description}
@@ -70,6 +88,7 @@ export function ActivityRow({
       ) : null}
       <EvidenceThumbs photos={activity.evidence} />
     </Row>
+    </View>
   );
 }
 

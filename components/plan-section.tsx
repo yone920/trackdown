@@ -427,6 +427,12 @@ export function PlanSection() {
                     activity={activity}
                     last={position === all.length - 1}
                     showDelta={false}
+                    // Off-plan work is DONE by definition — it is a logged fact. Beside
+                    // plan lines nobody has started yet it was reading as pending (field
+                    // report 2026-09-02: "the way it is listing under also don't show that
+                    // it is done"). It stays its own group: freelanced work is not the
+                    // plan, and it is still not in the N-of-M count.
+                    done
                     onPress={activity.id ? () => correct(activity.id as string) : undefined}
                     onDelete={
                       activity.id ? () => remove.mutate({ kind: 'activity', id: activity.id as string }) : undefined
