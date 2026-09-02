@@ -72,7 +72,16 @@ export default function RootLayout() {
             {/* A day and, one tap further in, the rows it was built from. */}
             <Stack.Screen name="day/[date]" />
             <Stack.Screen name="day/[date]/log" />
-            {/* The rest of the lifts board, from Progress's "All lifts". */}
+            {/* The rooms behind the Progress scoreboard: every row of that page is a door,
+                and this is what each one opens (app/(tabs)/progress.tsx). */}
+            <Stack.Screen name="progress/goal" />
+            <Stack.Screen name="progress/body" />
+            <Stack.Screen name="progress/strength" />
+            <Stack.Screen name="progress/coverage" />
+            <Stack.Screen name="progress/cardio" />
+            {/* Every day ever logged, from the Days row's "All days". */}
+            <Stack.Screen name="days" />
+            {/* The rest of the lifts board, from Strength's "All lifts". */}
             <Stack.Screen name="lifts" />
             {/* Any exercise name, anywhere, opens this. */}
             <Stack.Screen name="exercise/[id]" />
