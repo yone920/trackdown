@@ -3525,7 +3525,50 @@ describe("append and replace, chosen by the user rather than the model", () => {
 		// And the model was told, rather than asked.
 		const revision = coach.revisions.at(-1);
 		expect(revision?.mode).toBe("append");
-		expect(buildCoachPrompt(coach.inputs.at(-1)!, revision)).toContain("THIS IS AN APPEND");
+		const appendPrompt = buildCoachPrompt(coach.inputs.at(-1)!, revision);
+		expect(appendPrompt).toContain("THIS IS AN APPEND");
+		// And told, in as many words, that it is EXTENDING a plan it has just been shown —
+		// because "regenerate based on that" inside an append is what produced a second copy
+		// of the whole session (field report 2026-09-02).
+		expect(appendPrompt).toContain("YOU ARE EXTENDING A PLAN YOU HAVE JUST BEEN SHOWN");
+		expect(appendPrompt).toMatch(/writes each one onto the day TWICE/);
+		// A stated session length covers the plan above too, so the addition is sized to
+		// what is LEFT of the hour rather than to the whole of it.
+		expect(appendPrompt).toContain("WHEN THE ASK IS ABOUT TOTAL SESSION LENGTH");
+		expect(appendPrompt).toMatch(/An hour with five movements already\s+planned has room for one or two more/);
+	});
+
+	it("refuses to add a movement the plan already has, and says which", async () => {
+		// The field report itself: the user asked for a one-hour session through *Add*, and
+		// the model returned the five movements that were already on the plan.
+		const before = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		const planned = before.body.brief.workout.exercises.map((e: { name: string }) => e.name) as string[];
+		const same = {
+			...claimsRewrite,
+			revision_mode: "append",
+			workout: {
+				...claimsRewrite.workout,
+				exercises: [
+					...planned.map((name) => ({ ...claimsRewrite.workout.exercises[0], name })),
+					{ ...claimsRewrite.workout.exercises[0], name: "Face Pull" },
+				],
+			},
+		};
+		coach.revisedBriefs.push(same);
+
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "I'll have a one hour session, regenerate based on that", mode: "append" });
+
+		expect(res.status).toBe(200);
+		// Every movement appears exactly once, and only the genuinely new one was added.
+		const after = res.body.brief.workout.exercises.map((e: { name: string }) => e.name) as string[];
+		expect(after).toEqual([...planned, "Face Pull"]);
+		expect(new Set(after).size).toBe(after.length);
+		// And the drop is NAMED rather than silent: they asked for more and got fewer.
+		expect(res.body.note).toMatch(/already on the plan/);
+		for (const name of planned) expect(res.body.note).toContain(name);
 	});
 
 	it("refuses an Add that adds nothing, even when the model called it a rewrite", async () => {

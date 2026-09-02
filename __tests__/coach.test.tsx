@@ -940,6 +940,21 @@ describe('the merged training section', () => {
   });
 });
 
+it('says which movements were already on the plan, when an add was deduplicated', async () => {
+  // Field report 2026-09-02: an append returned the five movements already on the plan and
+  // stored them all again. The server refuses them now — and the refusal is NAMED, because
+  // the user asked for more and got fewer than the model offered.
+  mockApi.mockResolvedValue(
+    next({ note: 'Lat Pulldown and Barbell Curl are already on the plan, so they were not added again.' }),
+  );
+  renderCoach();
+
+  await screen.findByText('Pull day: back and shoulders');
+  expect(screen.getByTestId('coach-note')).toHaveTextContent(/already on the plan/);
+  // It sits above the plan, which is still entirely there.
+  expect(screen.getByText('Lat Pulldown')).toBeTruthy();
+});
+
 // ── the answer that never came back ──────────────────────────────────────────────────
 // Field report 2026-09-02: the user pressed "Start today's workout", watched "Thinking…",
 // and watched the page revert to "Nothing planned yet" — while a five-item brief sat

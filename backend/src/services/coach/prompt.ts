@@ -267,6 +267,12 @@ ${modeBlock(revision.mode)}
   * At least one item. An append that adds nothing is not an answer.
   * Size the addition to what they asked for: half an hour is three or four movements, "add
     core" is two or three. SESSION LENGTH's ceiling applies to the WHOLE plan, so leave room.
+  * WHEN THE ASK IS ABOUT TOTAL SESSION LENGTH — "I'll have an hour", "make it ninety
+    minutes" — that length covers the plan ABOVE as well. Work out what is left after the
+    movements already on it, and add only that much. An hour with five movements already
+    planned has room for one or two more, not for six. Complement what is there rather than
+    duplicating its muscle groups, and keep the recovery rules: a group the plan already
+    works hard is not the one to load again.
   * workout.targets are the targets the ADDITION is for; they are merged with the plan's.
   * "why" is one or two sentences about the addition. The plan's own reasoning is kept above
     it, so do not restate it.
@@ -309,7 +315,14 @@ function modeBlock(mode: BriefRevision["mode"]): string {
 		return `THE USER PRESSED "Add to today's plan". THIS IS AN APPEND and the decision is already
 made: set "revision_mode" to "append" and answer as an append below. The plan above is not
 yours to change, reorder or reissue, whatever the instruction seems to ask for — if it
-cannot be honoured by adding, add the nearest thing that can be and say so in "why".`;
+cannot be honoured by adding, add the nearest thing that can be and say so in "why".
+
+YOU ARE EXTENDING A PLAN YOU HAVE JUST BEEN SHOWN. Words like "regenerate", "rebuild",
+"redo it" or "make it an hour" inside an append DO NOT license you to return that plan
+again: the movements above are already the user's, they are already on their screen, and
+handing them back writes each one onto the day TWICE. Return the movements that are NOT up
+there yet, and nothing else. If you believe the right answer is the plan they already have,
+the honest append is the one or two movements that complete it — never a copy of it.`;
 	}
 	if (mode === "rewrite") {
 		return `THE USER PRESSED "Replace today's plan" and confirmed it. THIS IS A REWRITE: set

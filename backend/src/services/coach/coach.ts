@@ -17,7 +17,7 @@ import { formatClock, localDay, localMinutesOf, type IsoDate } from "../localTim
 import { currentPlace, placeEquipment } from "../places.js";
 import { loadTargets } from "../profile.js";
 import { catalogFactsFor, introductionCandidates } from "./catalog.js";
-import { completionOf, planIsComplete, type ExerciseCompletion } from "./completion.js";
+import { completionOf, planIsComplete, sameMovement, type ExerciseCompletion } from "./completion.js";
 import { computeFeatures } from "./features.js";
 import {
 	assertUsableBrief,
@@ -802,11 +802,12 @@ async function chooseBrief(
 			: undefined;
 
 	try {
-		const answer = capBrief(await askUsable(coach, inputs, revision, current), inputs, {
-			revised: revision !== undefined,
-		});
+		const { brief: asked, skipped } = await askUsable(coach, inputs, revision, current);
+		const answer = capBrief(asked, inputs, { revised: revision !== undefined });
 		const stored = await storeBrief(db, userId, inputs, hash, answer, coach.model);
-		return { brief: stored, inputs, stale: false, note: null };
+		// Not a failure, so not an error — but the user asked for more and got fewer items
+		// than the model offered, and is owed the reason (field report 2026-09-02).
+		return { brief: stored, inputs, stale: false, note: skippedNote(skipped) };
 	} catch (error) {
 		// A brief the user has already read beats an error page; nothing at all is a 503,
 		// because unlike a day reading the brief *is* the answer they asked for.
@@ -835,13 +836,16 @@ async function askUsable(
 	inputs: CoachBriefInputs,
 	revision: BriefRevision | undefined,
 	current: CoachBriefRecord | null
-): Promise<StorableBrief> {
+): Promise<AppendResult> {
 	// Anything logged today makes a rest verdict a verdict on work already done, which is
 	// never an answer to "what should I do today" (schema.ts §resolveRestAfterTraining).
 	const trainedToday = inputs.today.logged.length > 0;
-	const ask = async (): Promise<StorableBrief> => {
+	const ask = async (): Promise<AppendResult> => {
 		if (!revision) {
-			return assertUsableBrief(resolveRestAfterTraining(await coach.brief(inputs), { trainedToday }));
+			return {
+				brief: assertUsableBrief(resolveRestAfterTraining(await coach.brief(inputs), { trainedToday })),
+				skipped: [],
+			};
 		}
 		const raw = resolveRestAfterTraining(await coach.revise(inputs, revision), { trainedToday });
 		// The user's own tap outranks the model's reading of the sentence. *Add to today's
@@ -852,7 +856,7 @@ async function askUsable(
 		const answer = assertUsableRevision(raw, mode);
 		return mode === "append" && current
 			? appendToBrief(current, answer, inputs.local_time)
-			: assertUsableBrief(stripMode(answer));
+			: { brief: assertUsableBrief(stripMode(answer)), skipped: [] };
 	};
 
 	try {
@@ -912,8 +916,40 @@ function stripMode({ revision_mode: _mode, ...brief }: RevisedBrief): Brief {
 }
 
 /**
+ * What an append actually added, and what it refused to.
+ *
+ * `skipped` is the movements the model handed back that were already on the plan. They are
+ * NAMED rather than dropped in silence: a user who asked for more and got fewer items than
+ * the model offered is owed the reason (field report 2026-09-02).
+ */
+export interface AppendResult {
+	brief: StorableBrief;
+	/** The repeated movements, by the name the model used for them. */
+	skipped: string[];
+}
+
+/**
+ * Is this movement already on the plan? The log's own matcher, so the qualifiers hold:
+ * an **Assisted** Chin-Up is not a Chin-Up, an Incline Bench is not a Bench, and neither
+ * is silently swallowed as a duplicate of the other. A plain repeat is a repeat.
+ */
+function alreadyOnPlan(name: string, planned: readonly { name: string }[]): boolean {
+	return planned.some((item) => sameMovement(item.name, name));
+}
+
+/**
  * "Give me another half hour", "add core" — the plan stays and the new items go under it
  * (user decision 2026-08-31 §A3).
+ *
+ * **An append never re-adds what is already there** (field report 2026-09-02). The user
+ * said "I'll have a one hour session — regenerate based on that", and the model did what it
+ * was asked in the most literal way available: it returned a whole one-hour session, which
+ * was the same five movements it had just been shown. The append stored them wholesale and
+ * every exercise appeared twice.
+ *
+ * The prompt now says extend rather than restate — but a prompt is a request, and this is a
+ * data rule, so it is enforced here as well. Two movements that are the same movement do
+ * not both belong on one day's plan, whatever the model believed it was doing.
  *
  * What is kept and what is taken, and why each way round:
  *
@@ -930,12 +966,22 @@ function stripMode({ revision_mode: _mode, ...brief }: RevisedBrief): Brief {
  *   * **The type is the plan's**, unless the plan was a rest day and something has now been
  *     added to it — at which point it is whatever the model called the addition.
  */
-export function appendToBrief(current: CoachBriefRecord, answer: RevisedBrief, clock: string): StorableBrief {
-	const added = answer.workout.exercises.map((exercise) => ({ ...exercise, added_at: clock }));
+export function appendToBrief(current: CoachBriefRecord, answer: RevisedBrief, clock: string): AppendResult {
+	const skipped: string[] = [];
+	const added: (RevisedBrief["workout"]["exercises"][number] & { added_at: string })[] = [];
+	for (const exercise of answer.workout.exercises) {
+		// Against the plan AND against what this same append has already taken: a model that
+		// repeats itself inside one answer is the same bug arriving twice as fast.
+		if (alreadyOnPlan(exercise.name, current.workout.exercises) || alreadyOnPlan(exercise.name, added)) {
+			skipped.push(exercise.name);
+			continue;
+		}
+		added.push({ ...exercise, added_at: clock });
+	}
 	const targets = [...new Set([...current.workout.targets, ...answer.workout.targets])].slice(0, 4);
 	const why = [current.why, answer.why].filter((part) => part.trim() !== "").join(" ");
 
-	return {
+	const brief: StorableBrief = {
 		headline: current.headline,
 		why,
 		workout: {
@@ -957,6 +1003,20 @@ export function appendToBrief(current: CoachBriefRecord, answer: RevisedBrief, c
 		nutrition: current.nutrition,
 		nudge: current.nudge,
 	};
+	return { brief, skipped };
+}
+
+/** "Lat Pulldown and Barbell Curl are already on the plan." Null when nothing was dropped. */
+export function skippedNote(skipped: readonly string[]): string | null {
+	if (skipped.length === 0) return null;
+	const names = [...new Set(skipped)];
+	const list =
+		names.length === 1
+			? names[0]
+			: `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+	return `${list} ${names.length === 1 ? "is" : "are"} already on the plan, so ${
+		names.length === 1 ? "it was" : "they were"
+	} not added again.`;
 }
 
 /** The stored record, back in the shape the model wrote — what a revision is handed. */

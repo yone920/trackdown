@@ -87,6 +87,75 @@ half-lived today.
 
 Real logs, from the phone, that the build plan had not imagined.
 
+### 2026-09-02 — an append that added the plan to itself (`fix-append-duplicates`)
+
+Five movements planned — Lat Pulldown, Seated Cable Row, Barbell Curl, Hammer Curl, Good
+Morning. Through *Add to today's plan* the user said, in effect, **"I'll have a one hour
+session — regenerate based on that."**
+
+Back came an **ADDED 7:09 AM** block containing the same five movements. Every exercise was
+on the day twice.
+
+The model did the most literal thing available to it: asked to regenerate for an hour, it
+returned a whole one-hour session — which was the session it had just been shown. The append
+path concatenated it wholesale.
+
+**The gate, which is the actual fix.** `appendToBrief` now refuses any movement already on
+today's plan, using the log's own qualifier-aware matcher: an **Assisted** Chin-Up is not a
+Chin-Up and an **Incline** Bench is not a Bench, so a real variation still gets added, while
+"Bench Press with Dumbbells" against a planned "Dumbbell Bench Press" is caught — word order
+and plurals are not facts about an exercise. It also dedupes *within* one answer, since a
+model that repeats itself inside a single append is the same bug arriving twice as fast.
+
+**The drops are named, never silent.** The response carries "Lat Pulldown and Barbell Curl
+are already on the plan, so they were not added again," and the Train page prints it above
+the plan. A user who asked for more and got fewer items than the model offered is owed the
+reason.
+
+This lives in the append service and is unit-tested independently of any prompt, because it
+is a data rule: two movements that are the same movement do not both belong on one day's
+plan, whatever the model believed it was doing.
+
+**The prompt, second.** The append block now says outright that it is **extending a plan it
+has just been shown**, and that "regenerate", "rebuild" or "make it an hour" inside an
+append do not license returning that plan again — *"handing them back writes each one onto
+the day TWICE."* And when the ask is about total session length, that length covers the plan
+above: an hour with five movements already on it has room for one or two more, not six,
+complementing what is there rather than reloading the same muscle groups.
+
+#### The sizing question: nothing is broken, and here is the arithmetic
+
+The user asked why an hour produced only five movements. Traced end to end, **the default
+flows correctly**:
+
+- `profiles.session_minutes` is deliberately NULL-able with **no SQL default** — "NULL is the
+  honest *nobody has told me*" — and `DEFAULT_SESSION_MINUTES = 60` is applied in TypeScript
+  (`services/coach/rules.ts`).
+- It reaches the model explicitly. For a user who has never stated a length the prompt reads:
+  *"SESSION LENGTH: 60 minutes (nobody has said, so this is the standing hour). That is room
+  for about 6 exercises — never more than 7 — plus 4 short stretch or mobility items to
+  close."* The provenance is flagged, so the model is never told the user asked for sixty.
+- The arithmetic: 8 working minutes per exercise, 5 for warm-up, the finisher off the end —
+  60 − 5 − 4 = 51, ⌊51/8⌋ = **6 target**, cap 7, finisher 4.
+- `capBrief` re-applies the ceiling in code on a fresh brief (never on a revision — "make it
+  8 exercises" is the user overruling the size, and trimming their answer back would be the
+  app arguing with them).
+
+So the plumbing asked for about six and allowed seven; the model returned five. That is one
+below a target the prompt states as approximate, and the same rules block ends *"fewer,
+harder movements beat a list nobody can finish"* — which actively licenses the low end.
+**No code change**, on the standing rule that sizing changes need evidence: there is none of
+a fault here, only of a model exercising discretion the prompt gives it. Worth noting that
+the user's "I'll have an hour" matched what the system already assumed, so their statement
+changed nothing — which is why it read as being ignored.
+
+**Verified** — backend **717 → 728**: the gate as a unit (the whole session dropped and every
+name reported, genuinely new movements kept, qualified variations kept, word order and
+plurals caught, a self-repeating answer refused, an ordinary append untouched), the note's
+wording, and the route end to end reproducing the field report — five planned, five returned
+plus one new, one added, drop named. App **373 → 374**: the note drawn above a plan that is
+still entirely there. `tsc` and both lints clean.
+
 ### 2026-09-02 — a dropped answer is not a failed plan (`fix-lost-generation`)
 
 The user pressed **"Start today's workout"**, watched **"Thinking…"**, and watched the page
