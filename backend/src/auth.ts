@@ -21,9 +21,18 @@ export interface AuthDeps {
 	secret: string;
 	baseUrl: string;
 	trustedOrigins: string[];
+	/**
+	 * Force the origin/CSRF check ON even under NODE_ENV=test.
+	 *
+	 * Better Auth turns that check **off in test environments** by default
+	 * (`skipOriginCheck: … isTest() ? true : false` in its create-context). That is why an
+	 * origin bug could ship past a green suite: every auth test in this repo runs with the
+	 * gate open. The origin matrix test sets this so it measures what production does.
+	 */
+	productionOriginSemantics?: boolean;
 }
 
-export function createAuth({ pool, secret, baseUrl, trustedOrigins }: AuthDeps) {
+export function createAuth({ pool, secret, baseUrl, trustedOrigins, productionOriginSemantics }: AuthDeps) {
 	return betterAuth({
 		database: pool,
 		secret,
@@ -55,6 +64,14 @@ export function createAuth({ pool, secret, baseUrl, trustedOrigins }: AuthDeps) 
 				},
 			},
 		},
+
+		// Nothing is disabled here: the origin gate keeps every default it ships with. What
+		// changes is one header at our own edge, for requests that provably cannot be a
+		// cookie-session CSRF — see `stripBrowserHintsFromTokenClients` in app.ts.
+		//
+		// `productionOriginSemantics` is a TEST hook: Better Auth turns this check off under
+		// NODE_ENV=test, so the matrix has to ask for the production posture explicitly.
+		...(productionOriginSemantics ? { advanced: { disableOriginCheck: false } } : {}),
 
 		plugins: [bearer()],
 	});

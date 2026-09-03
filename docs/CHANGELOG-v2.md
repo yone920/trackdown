@@ -83,6 +83,78 @@ half-lived today.
 
 ---
 
+## The first TestFlight build could not sign anybody up (`fix-native-auth-origin`)
+
+**2026-09-02/03, field bug from the first production build.** Creating an account failed
+with Better Auth's **"Missing or null Origin"** printed on the auth screen.
+
+### The mechanism
+
+Better Auth's form-CSRF middleware reads **any `Sec-Fetch-*` header as "this is a browser"**
+and then *force-validates* the Origin. A native production build sends `Sec-Fetch-*` (iOS
+attaches them) and **no `Origin`** — so the check demands an Origin that was never there and
+throws `MISSING_OR_NULL_ORIGIN`. Reproduced exactly, on both sign-up and sign-in:
+
+| what the client sends | before | after |
+|---|---|---|
+| no Origin, `Sec-Fetch-*` (**the production app**) | **403 MISSING_OR_NULL_ORIGIN** | 200 |
+| no Origin, no hints (curl, scripts) | 200 | 200 |
+| dev-server Origin (Metro, Expo web) | 200 | 200 |
+| bogus Origin | 403 | 403 |
+| `Origin: null` | 403 | 403 |
+| `Sec-Fetch-*` **with a cookie** | 403 | 403 |
+
+Two things hid it. The **dev build inherited an Origin from Metro**, so it never hit the
+path. And **Better Auth turns the origin check off whenever `NODE_ENV=test`**
+(`skipOriginCheck: … isTest() ? true : false`), which vitest sets for the whole suite — so
+every auth test in this repo was green and *could only ever be green*. `auth.origin.test.ts`
+now asks for the production posture explicitly (`productionOriginSemantics`), and it fails
+without the fix: three of its eight cases go red.
+
+### The fix
+
+One middleware at our own edge (`app.ts` §`stripBrowserHintsFromTokenClients`): on
+`/api/auth/*`, for a request carrying **no cookie**, drop the `Sec-Fetch-*` hints. Nothing in
+Better Auth is disabled — it keeps every default — and its own `validateOrigin` already
+returns without checking when there is no cookie. Only the form-CSRF path, which exists for
+cookie-session form posts, forces the issue, and for a bearer-token client that is a false
+positive.
+
+**What still protects a browser**, unchanged: a request *with* a cookie keeps every hint and
+every check; `cors()` refuses any Origin not on the allow-list — including the literal
+`null` — with a 403 before a route runs; and sessions here are bearer tokens an attacker's
+page can neither read nor cause to be sent.
+
+**Rejected, with reasons:** `advanced.disableCSRFCheck` (blanket). The path-array form of
+`disableOriginCheck` — it works at runtime but its published type is `boolean` and its
+documented meaning is callbackURL validation; building the auth layer on an untyped shape is
+how a minor upgrade becomes an outage. `@better-auth/expo` — that plugin exists to trust an
+app-scheme Origin, and our failure is a **missing** one, so it would have been a dependency
+that fixes nothing.
+
+### The auth screen
+
+- **A show-password eye** on the password field, and on both fields when creating an account
+  — one toggle drives both, because somebody hunting a typo wants to see both halves.
+- **The password is typed twice to create an account**, and only then. There is no reset
+  email (no SMTP server; `sendResetPassword` is deliberately unset), so a typo in a password
+  nobody can see is a **locked account with no way back** — recovery is a shell script on the
+  server. Mismatch says "Those passwords do not match." and never reaches the server.
+  Signing in cannot lock anybody out, so it stays one field.
+- **Auth errors render by code** (`lib/errors.ts` §`authLine`): a small table for what a
+  person can act on — wrong password, email already taken — and the generic line for
+  everything else. This is what the field bug broke: "Missing or null Origin" *reads* like a
+  sentence, so the shape guard `looksHuman` waved it through. A shape guard cannot tell a
+  sentence written for a user from one written for whoever wrote the server; a code can.
+
+**Tests** — app 520 → 531, backend 797 → 805. New: `auth.origin.test.ts` (8, the matrix
+above, with the production posture forced) and `__tests__/sign-in.test.tsx` (11 — one field
+on sign-in and two on create, the eye, the mismatch line, the by-code error table with
+`MISSING_OR_NULL_ORIGIN` explicitly falling back to the generic line).
+
+**Note on shipping:** the origin fix is **server-side only** — the production build needs no
+update for it. The confirm-password field and the eye ship over the air.
+
 ## The tap that did nothing (`fix-silent-log`)
 
 **2026-09-02, field bug, high priority.** The user typed — typos theirs — "I just the same

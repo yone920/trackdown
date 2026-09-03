@@ -136,6 +136,27 @@ export function IconChevronLeft(p: IconProps) {
   );
 }
 
+/** Show the password: an eye. The one place this app asks anybody to type in the dark. */
+export function IconEye(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" {...base(p)} />
+      <Circle cx="12" cy="12" r="2.8" {...base(p)} />
+    </Frame>
+  );
+}
+
+/** And hide it again: the same eye, struck through. */
+export function IconEyeOff(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Path d="M9.9 5.2A9.9 9.9 0 0 1 12 5c6 0 9.5 6 9.5 6a17 17 0 0 1-3.3 3.9M6.4 6.9A17 17 0 0 0 2.5 11s3.5 6 9.5 6a9.6 9.6 0 0 0 4-.85" {...base(p)} />
+      <Path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" {...base(p)} />
+      <Line x1="3.5" y1="3.5" x2="20.5" y2="20.5" {...base(p)} />
+    </Frame>
+  );
+}
+
 /** A calendar — the door to any day that has already happened. */
 export function IconCalendar(p: IconProps) {
   return (
