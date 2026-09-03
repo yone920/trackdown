@@ -83,6 +83,69 @@ half-lived today.
 
 ---
 
+## Speak, missing from the first production build (`fix-speech-probe`)
+
+**2026-09-03, field report.** The TestFlight build showed *"Speaking needs the dev build"*
+on the Log sheet. The dev build hears fine, and the configuration was verified correct:
+`expo-speech-recognition@57.0.0` in `dependencies` (not dev), the config plugin in
+`app.json` with both permission strings, `NSMicrophoneUsageDescription` and
+`NSSpeechRecognitionUsageDescription` in `infoPlist`, and no `__DEV__` gating on the probe.
+
+### What was established, and what was not
+
+- The dependency and the plugin were both present **at the build's own commit** (`3b7d78b`),
+  and `package-lock.json` carried `57.0.0`, so EAS installed it.
+- The shipped `Info.plist` has both usage strings — though that proves little, since
+  `app.json` declares them directly as well as through the plugin.
+- `expo-modules-autolinking search --platform ios` resolves the package locally, with the
+  right iOS module (`ExpoSpeechRecognitionModule`), and `expo install --check` does **not**
+  flag it: the version is right for SDK 54.
+- A **rebuild from the same tree reproduced the symptom**, so it is not a transient build
+  glitch.
+
+**A dead end worth writing down**: I tried to prove the native code was missing by grepping
+the IPA's binary for `ExpoSpeechRecognition` and `SFSpeech` — zero hits, against 41 for
+`ExpoImagePicker`. That looked conclusive and was not. `ExpoImagePickerModule` and
+`ExpoSecureStoreModule` also return zero, and those modules demonstrably work in this app:
+Swift class names are not plain strings in a stripped release binary, and the 41 hits were
+incidental substring matches. **The IPA inspection proves nothing either way**, and the
+conclusion it seemed to support was withdrawn before it could justify a rebuild.
+
+### The fix
+
+`lib/ports/speech.ts` asked `requireOptionalNativeModule('ExpoSpeechRecognition')` once and
+treated a null answer as final. A probe is evidence, not proof — one registry lookup, which
+in a release build can answer before the thing it is looking for has registered — and
+treating it as final turned a *maybe* into a capability the user did not have.
+
+So the probe is advisory outside development, and the **require decides**. If the module is
+genuinely absent the require throws and the null port stands exactly as before, and the
+sheet hides Speak; if it is present and the probe was merely early, Speak works. The
+short-circuit stays in development, where it earns its keep: requiring the adapter in Expo
+Go throws while the module evaluates, and the dev overlay redboxes that even when it is
+caught.
+
+**This ships over the air**, which is the point: it reaches the TestFlight build already on
+the phone, without a new binary. It is also the decisive experiment — if Speak appears, the
+module was in the binary all along and the probe was the whole bug.
+
+**Tests** — app 544 → 552. New `__tests__/speech-port.test.ts` (8): the adapter loads when
+the probe says yes; **it still loads when the probe says no and the adapter is present** (the
+bug); the null port stands when the adapter really cannot load; the question never throws;
+development still trusts the probe; and the answer is cached.
+
+**Deferred / uncertain**
+
+- A production build (`593b9863`) was made from `dae5c3a` and **not submitted**. Its native
+  layer is identical to the shipped one — no native dependency changed between them — so it
+  could not have fixed this by itself, and submitting it would have been a TestFlight update
+  that changed nothing. If the OTA does not restore Speak, the module genuinely is not in
+  the binary, and the next step is a build from a tree with the fix in it plus the EAS build
+  logs (which need a browser session the CLI cannot provide non-interactively).
+- Minor version drift: `expo@54.0.33` against an expected `~54.0.37`, and five other Expo
+  packages one patch behind. Not flagged for the speech package, left alone deliberately so
+  the rebuild tested one variable.
+
 ## The recovery rule reaches the exercises (`wp-coach-recovery-variety`)
 
 **2026-09-03, user field report with a screenshot.** Yesterday was a pull day — deadlift
