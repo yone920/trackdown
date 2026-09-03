@@ -2,15 +2,14 @@ import { getSpeech, resetSpeechForTests } from '@/lib/ports/speech';
 
 // Whether this build can hear you, and how that question is answered.
 //
-// Field report 2026-09-03, from the first TestFlight build: the Log sheet said "Speaking
-// needs the dev build" on a production app where the module was configured correctly —
-// dependency (not dev), config plugin with both permission strings, both usage strings in
-// the plist, and `expo-modules-autolinking` resolving it locally. The dev build heard fine.
-//
-// The port had one registry probe and treated a null answer as final. A probe is evidence,
-// not proof: it is one lookup, and in a release build it can answer before the thing it is
-// looking for has registered. So outside development the REQUIRE decides — if the module is
-// genuinely absent the require throws and the null port stands, exactly as before.
+// Two field reports, one day apart, settled this contract. 2026-09-03 morning: the first
+// TestFlight build hid Speak although the module was configured correctly, and a fix made
+// "the require decide" past a null probe answer. 2026-09-03 evening: that fix CRASHED the
+// log sheet — evaluating the adapter against a binary that truly lacks the module aborts
+// below JS, where no try/catch reaches. The registry's no is final in every build: a
+// binary that ships the module registers it before any JS runs. If Speak is missing where
+// the module genuinely exists, the diagnosis is the binary or the registry — never this
+// gate.
 
 const REGISTRY = 'expo-modules-core';
 const ADAPTER = '@/lib/ports/speech.expo';
@@ -54,13 +53,14 @@ describe('finding the speech module', () => {
     expect(speech.getSpeech().available).toBe(true);
   });
 
-  // The whole bug, in one test: the registry says no, and the module is there anyway.
-  it('still loads it when the probe says no but the adapter is present', () => {
+  // The crash, in one test: overriding the registry's no is how the log sheet took the
+  // whole app down. The no is final, even when an adapter file is sitting right there.
+  it('honors the probe when it says no, even if an adapter file is present', () => {
     jest.doMock(REGISTRY, () => ({ requireOptionalNativeModule: () => null }), { virtual: true });
     jest.doMock(ADAPTER, () => ({ createSpeech: () => realPort }), { virtual: true });
 
     const speech = jest.requireActual<typeof import('@/lib/ports/speech')>('@/lib/ports/speech');
-    expect(speech.getSpeech().available).toBe(true);
+    expect(speech.getSpeech().available).toBe(false);
   });
 
   // And the honest negative: nothing to load, so the sheet hides the control rather than

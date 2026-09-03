@@ -47,31 +47,23 @@ export function getSpeech(): SpeechPort {
   // absent and merely importing 'expo-speech-recognition' throws during module evaluation —
   // caught or not, the dev overlay turns that into a full-screen redbox.
   //
-  // **The probe is advisory, and only in development** (field report 2026-09-03: the first
-  // TestFlight build showed "Speaking needs the dev build" with the module configured
-  // correctly — dependency, config plugin, both usage strings, and autolinking resolving it
-  // locally). A probe that returns null is not proof the module is absent: it is one
-  // registry lookup, and in a release build it can answer before the thing it is looking
-  // for has registered. Treating that answer as final is what turned a maybe into a
-  // capability the user did not have.
-  //
-  // So the short-circuit stays where it earns its keep — Expo Go, in development, where
-  // requiring the adapter throws during evaluation and the dev overlay redboxes even when
-  // the throw is caught — and everywhere else the REQUIRE decides. If the module is really
-  // absent the require throws and we land on `nullSpeech` exactly as before; if it is
-  // present and the probe was merely early, Speak works.
-  if (__DEV__) {
-    try {
-      const core = require('expo-modules-core') as {
-        requireOptionalNativeModule?: (name: string) => unknown;
-      };
-      if (core.requireOptionalNativeModule && !core.requireOptionalNativeModule('ExpoSpeechRecognition')) {
-        cached = nullSpeech;
-        return cached;
-      }
-    } catch {
-      // fall through to the guarded require below
+  // The probe DECIDES, in every build. (Reverted 2026-09-03: an update that let "the
+  // require decide" in release evaluated the adapter against a binary that truly lacks
+  // the module, and the failure happened below JS — a native abort no try/catch holds.
+  // Tapping the log sheet crashed the whole app.) A release binary that ships the module
+  // registers it before any JS runs, so a null answer here is the honest answer there.
+  // If Speak is ever missing where the module is genuinely present, diagnose the
+  // registry — never loosen this gate on a binary not verified to contain the module.
+  try {
+    const core = require('expo-modules-core') as {
+      requireOptionalNativeModule?: (name: string) => unknown;
+    };
+    if (core.requireOptionalNativeModule && !core.requireOptionalNativeModule('ExpoSpeechRecognition')) {
+      cached = nullSpeech;
+      return cached;
     }
+  } catch {
+    // fall through to the guarded require below
   }
   try {
      
