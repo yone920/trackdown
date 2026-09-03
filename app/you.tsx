@@ -3,6 +3,7 @@ import { Pressable, ScrollView, Switch, View } from 'react-native';
 
 import { IconChevronLeft } from '@/components/icons';
 import { Card, Chip, Row, Section, SkeletonLines } from '@/components/kit';
+import { LogFab } from '@/components/tab-bar';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { signOut, useSession } from '@/lib/auth';
 import { useProfile, useYou } from '@/lib/queries';
@@ -56,6 +57,7 @@ export default function You() {
     Array.isArray(data?.[field]) ? (data[field] as string[]) : [];
 
   return (
+    <View style={{ flex: 1, backgroundColor: C.bg }}>
     <ScrollView
       testID="you-scroll"
       style={{ flex: 1, backgroundColor: C.bg }}
@@ -148,6 +150,12 @@ export default function You() {
         <Chip label="Tell me" variant="primary" onPress={tell} testID="tell-me" />
       </View>
     </ScrollView>
+    {/* The same floating + as every tab, because this screen is not a special case: it is
+        one more place you can say something and have it filed. It has no tab bar to hang
+        from, so it places itself. Framed `about-you`, so it opens on the person rather
+        than on a shoulder press (field report 2026-09-03). */}
+    <LogFab onPress={tell} style={{ bottom: insets.bottom + 24 }} />
+    </View>
   );
 }
 

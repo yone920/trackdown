@@ -169,4 +169,16 @@ describe('You — the plan and the account', () => {
     // routing — it just stops asking what workout you did when you pressed "Tell me".
     expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { framing: 'about-you' } });
   });
+
+  // The You page is a stack screen with no tab bar, so it had no + at all: the only way in
+  // was a small "Tell me" chip at the bottom of a long scroll, while every tab had a 64px
+  // button (field report 2026-09-03 — "the app should be consistent"). It has one now, and
+  // it opens on the person rather than on a shoulder press.
+  it('offers the same floating + as every tab, framed for the person', async () => {
+    renderYou();
+    await waitFor(() => expect(screen.getByTestId('log-fab')).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId('log-fab'));
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { framing: 'about-you' } });
+  });
 });

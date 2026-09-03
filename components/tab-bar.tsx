@@ -1,6 +1,6 @@
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { router } from 'expo-router';
-import { Pressable, View } from 'react-native';
+import { Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
@@ -13,6 +13,7 @@ import {
   type IconProps,
 } from '@/components/icons';
 import { Eyebrow } from '@/components/type';
+import type { Framing } from '@/lib/log-framing';
 import { C, SPACE } from '@/lib/theme';
 
 // Home · Train · Eat · Progress · You, 84 high, stroke icons at 1.8, inactive `dim`
@@ -33,14 +34,33 @@ const LABELS: Record<string, string> = {
   progress: 'Progress',
 };
 
+/**
+ * What the `+` opens on, per tab (lib/log-framing.ts). A tab about one thing is a door that
+ * knows something, and the sheet should say it: pressing + while looking at what you ate
+ * should not suggest a shoulder press (field report 2026-09-03).
+ *
+ * Home and Progress are deliberately absent. Home thinks in whole days and Progress in the
+ * long view, so neither implies a register and both get the default — which is now three
+ * examples wide rather than a workout.
+ */
+const TAB_FRAMING: Record<string, Framing> = {
+  train: 'workout',
+  eat: 'food',
+};
+
 export function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
+  const framing = TAB_FRAMING[state.routes[state.index]?.name ?? ''];
   return (
     <View style={{ overflow: 'visible' }}>
       {/* The `+` lives inside the tab bar's tree: the tab scenes are native views that can
           cover siblings rendered after the navigator, which made a screen-level FAB
           invisible on iOS. The navigator always draws the tab bar above the scenes. */}
-      <LogFab onPress={() => router.push('/log')} />
+      <LogFab
+        onPress={() =>
+          router.push(framing ? { pathname: '/log', params: { framing } } : { pathname: '/log' })
+        }
+      />
     <View
       style={{
         flexDirection: 'row',
@@ -88,27 +108,35 @@ export function TabBar({ state, navigation }: BottomTabBarProps) {
   );
 }
 
-/** The 64px `+`: `ink` on `bg`, bottom-right above the tab bar, opens the Log sheet. */
-export function LogFab({ onPress }: { onPress: () => void }) {
+/**
+ * The 64px `+`: `ink` on `bg`, bottom-right, opens the Log sheet.
+ *
+ * `style` places it. Left out, it sits above the tab bar it is rendered inside — which is
+ * where it is on the four tabs. A screen with no tab bar (the You page) renders its own and
+ * says where: there is nothing above it to hang from.
+ */
+export function LogFab({ onPress, style }: { onPress: () => void; style?: StyleProp<ViewStyle> }) {
   return (
     <Pressable
       testID="log-fab"
       accessibilityRole="button"
       accessibilityLabel="Log something"
       onPress={onPress}
-      style={({
-        position: 'absolute',
-        right: SPACE.screen,
-        top: -(64 + 18),
-        zIndex: 10,
-        width: 64,
-        height: 64,
-        borderRadius: 32,
-        backgroundColor: C.ink,
-        alignItems: 'center',
-        justifyContent: 'center',
-        opacity: 1,
-      })}>
+      style={[
+        {
+          position: 'absolute',
+          right: SPACE.screen,
+          zIndex: 10,
+          width: 64,
+          height: 64,
+          borderRadius: 32,
+          backgroundColor: C.ink,
+          alignItems: 'center',
+          justifyContent: 'center',
+          opacity: 1,
+        },
+        style ?? { top: -(64 + 18) },
+      ]}>
       <IconPlus size={28} color={C.bg} strokeWidth={2.2} />
     </Pressable>
   );

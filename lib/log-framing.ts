@@ -14,9 +14,14 @@
 // and that is the only thing this carries.
 //
 // A door whose surface implies no particular register passes nothing and gets the default.
-// That is most of them, and it is the right answer for them.
+//
+// The floating + is such a door on Home and Progress, and is NOT on Train and Eat: it sits
+// on a tab about one thing, and opening it on a shoulder press while the user is looking at
+// what they ate is the same mistake the You page made (field report 2026-09-03). The tab bar
+// passes the framing of the tab the + was pressed on, and the You page — a stack screen with
+// no tab bar, and so until now no + at all — carries one of its own.
 
-export const FRAMINGS = ['default', 'plan', 'plan-new', 'about-you'] as const;
+export const FRAMINGS = ['default', 'workout', 'food', 'plan', 'plan-new', 'about-you'] as const;
 export type Framing = (typeof FRAMINGS)[number];
 
 export interface FramingCopy {
@@ -36,11 +41,34 @@ export interface FramingCopy {
 }
 
 const COPY: Record<Framing, FramingCopy> = {
+  /**
+   * The + where the surface implies nothing in particular — Home, which thinks in whole
+   * days, and Progress. Its placeholder used to be a shoulder press, which told everyone
+   * who opened it from anywhere that this box was for workouts (field report 2026-09-03:
+   * "it is always tied to workout"). One example of each of the three things people log
+   * says the true thing instead, which is that it takes any of them.
+   */
   default: {
+    title: 'What did you do?',
+    placeholder: 'Two eggs and a coffee · shoulder press, three sets of ten · weighed 181…',
+    note: null,
+    hint: 'Say it, snap it, or type it — any mix. Food, training, weight, goals.',
+    submit: null,
+  },
+  /** The + on Train. The old default, back where it was always describing. */
+  workout: {
     title: 'What did you do?',
     placeholder: 'Shoulder press, three sets of ten at forty pounds…',
     note: null,
-    hint: 'Say it, snap it, or type it — any mix. Same for food, weight, goals.',
+    hint: 'Say it, snap it, or type it — sets, reps and load, or a photo of the machine.',
+    submit: null,
+  },
+  /** The + on Eat. */
+  food: {
+    title: 'What did you eat?',
+    placeholder: 'Chicken salad with olive oil, and a flat white…',
+    note: null,
+    hint: 'Say it, snap it, or type it — a photo of the plate or the label reads too.',
     submit: null,
   },
   plan: {

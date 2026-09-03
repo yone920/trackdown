@@ -8,6 +8,8 @@ describe('framingOf', () => {
   it('reads the framing a door asked for', () => {
     expect(framingOf('plan')).toBe('plan');
     expect(framingOf('about-you')).toBe('about-you');
+    expect(framingOf('food')).toBe('food');
+    expect(framingOf('workout')).toBe('workout');
     expect(framingOf('default')).toBe('default');
   });
 
@@ -22,13 +24,35 @@ describe('framingOf', () => {
 });
 
 describe('the copy each door opens with', () => {
-  it('leaves the + exactly as it was', () => {
+  // The + on a surface that implies nothing — Home, Progress. Its placeholder was a
+  // shoulder press, which told anyone who opened it that this box was for workouts (field
+  // report 2026-09-03: "it is always tied to workout"). One example of each of the three
+  // things people log says the true thing, which is that it takes any of them.
+  it('offers the whole range on the door that implies nothing', () => {
     const copy = copyFor('default');
     expect(copy.title).toBe('What did you do?');
-    expect(copy.placeholder).toContain('Shoulder press');
+    expect(copy.placeholder).not.toContain('Shoulder press');
+    expect(copy.placeholder).toMatch(/eggs|coffee/i);
+    expect(copy.placeholder).toMatch(/press/i);
+    expect(copy.placeholder).toMatch(/181|weighed/i);
     // Nothing to disambiguate when the + was pressed: no note, no renamed button.
     expect(copy.note).toBeNull();
     expect(copy.submit).toBeNull();
+  });
+
+  it('asks about the plate on the Eat door, and the set on the Train one', () => {
+    const food = copyFor('food');
+    expect(food.title).toBe('What did you eat?');
+    expect(food.placeholder).not.toContain('Shoulder press');
+    expect(food.placeholder).toMatch(/salad|coffee|flat white/i);
+    // It logs a record like any other door: same verb on the button.
+    expect(food.submit).toBeNull();
+    expect(food.note).toBeNull();
+
+    const workout = copyFor('workout');
+    expect(workout.title).toBe('What did you do?');
+    expect(workout.placeholder).toContain('Shoulder press');
+    expect(workout.submit).toBeNull();
   });
 
   it('asks about the person on the You page door, not about a workout', () => {
@@ -81,5 +105,7 @@ describe('the copy each door opens with', () => {
     expect(copyFor('plan-new').submit).toBe('Generate');
     expect(copyFor('default').submit).toBeNull();
     expect(copyFor('about-you').submit).toBeNull();
+    expect(copyFor('food').submit).toBeNull();
+    expect(copyFor('workout').submit).toBeNull();
   });
 });
