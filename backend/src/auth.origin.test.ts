@@ -119,6 +119,35 @@ describe("creating an account from a native client", () => {
 		expect(out.status).toBe(200);
 	});
 
+	// The relock (production log, 2026-09-03 06:59): `origin=— referer_origin=— sec-fetch=—
+	// cookie=yes bearer=yes`. iOS's NSURLSession persists and replays cookies for native
+	// apps, so Better Auth's cookie from the earlier FAILED attempts came back on every
+	// retry — and the v1 rule only relaxed for cookie-less requests. The failure planted the
+	// cookie and the cookie sustained the failure, on a device that could not clear it
+	// without a reinstall.
+	it("works when iOS replays a cookie from the attempts that failed", async () => {
+		const email = freshEmail();
+		await request(app).post("/api/auth/sign-up/email").set(NATIVE).send({ name: "n", email, password: PASSWORD });
+
+		const res = await request(app)
+			.post("/api/auth/sign-in/email")
+			// The logged shape exactly: no origin, no referer, no fetch metadata, and the
+			// cookie jar riding along with a bearer token.
+			.set({ Cookie: "better-auth.session_token=stale-from-a-failed-attempt", Authorization: "Bearer stale-token" })
+			.send({ email, password: PASSWORD });
+
+		expect(res.status).toBe(200);
+		expect(res.headers["set-auth-token"]).toBeTruthy();
+	});
+
+	it("creates an account from that same shape", async () => {
+		const res = await request(app)
+			.post("/api/auth/sign-up/email")
+			.set({ Cookie: "better-auth.session_token=stale-from-a-failed-attempt" })
+			.send({ name: "relocked", email: freshEmail(), password: PASSWORD });
+		expect(res.status).toBe(200);
+	});
+
 	it("still refuses a wrong password — the gate opening is not the lock opening", async () => {
 		const email = freshEmail();
 		await request(app).post("/api/auth/sign-up/email").set(NATIVE).send({ name: "n", email, password: PASSWORD });
@@ -168,12 +197,33 @@ describe("the browser is still gated", () => {
 
 	// The hints are only dropped for a request that cannot be a cookie CSRF. A browser
 	// carrying a session keeps every check it had.
-	it("keeps the origin check for anything holding a cookie", async () => {
+	// The one shape a CSRF attack can wear: a cookie AND the marks of a browser. A cookie
+	// on its own is not enough to be suspicious of — iOS puts one on every native request —
+	// but a cookie with fetch metadata is a browser, and a browser gets every check.
+	it("keeps the origin check for a cookie that arrives looking like a browser", async () => {
 		const res = await request(app)
 			.post("/api/auth/sign-in/email")
 			.set({ ...NATIVE, Cookie: "better-auth.session_token=whatever" })
 			.send({ email: "someone@example.com", password: PASSWORD });
 		expect(res.status).toBe(403);
 		expect(res.body.code).toBe("MISSING_OR_NULL_ORIGIN");
+	});
+
+	it("keeps refusing a bogus origin that carries a cookie", async () => {
+		const res = await request(app)
+			.post("/api/auth/sign-in/email")
+			.set({ Origin: "https://evil.example", Cookie: "better-auth.session_token=whatever" })
+			.send({ email: "someone@example.com", password: PASSWORD });
+		expect(res.status).toBe(403);
+	});
+
+	// A referer alone is a browser mark too: no fetch metadata, no origin, but something
+	// navigated here. It keeps its checks.
+	it("keeps the origin check for a cookie arriving with a referer", async () => {
+		const res = await request(app)
+			.post("/api/auth/sign-in/email")
+			.set({ Referer: "https://evil.example/page", Cookie: "better-auth.session_token=whatever" })
+			.send({ email: "someone@example.com", password: PASSWORD });
+		expect(res.status).toBe(403);
 	});
 });

@@ -67,7 +67,7 @@ export function createAuth({ pool, secret, baseUrl, trustedOrigins, productionOr
 
 		// Nothing is disabled here: the origin gate keeps every default it ships with. What
 		// changes is one header at our own edge, for requests that provably cannot be a
-		// cookie-session CSRF — see `stripBrowserHintsFromTokenClients` in app.ts.
+		// cookie-session CSRF — see `normaliseNativeAuthRequest` in app.ts.
 		//
 		// `productionOriginSemantics` is a TEST hook: Better Auth turns this check off under
 		// NODE_ENV=test, so the matrix has to ask for the production posture explicitly.

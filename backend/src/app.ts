@@ -131,22 +131,68 @@ function safeOrigin(url: string): string | undefined {
 	}
 }
 
-export function stripBrowserHintsFromTokenClients(req: Request, _res: Response, next: NextFunction): void {
-	if (req.headers.cookie) return next();
+export function normaliseNativeAuthRequest(req: Request, _res: Response, next: NextFunction): void {
+	const header = (name: string): string | undefined => {
+		const value = req.headers[name];
+		return typeof value === "string" && value.trim() !== "" ? value : undefined;
+	};
 
-	delete req.headers["sec-fetch-site"];
-	delete req.headers["sec-fetch-mode"];
-	delete req.headers["sec-fetch-dest"];
-	delete req.headers["sec-fetch-user"];
+	const origin = header("origin");
+	const referer = header("referer");
+	const fetchMetadata = Boolean(
+		header("sec-fetch-site") ?? header("sec-fetch-mode") ?? header("sec-fetch-dest") ?? header("sec-fetch-user")
+	);
 
-	// A literal `Origin: null` is the same story told a second way: it is not the origin of
-	// a browser session, it is the absence of one, and Better Auth's form-CSRF path treats
-	// its mere presence as grounds to demand a real origin. On a cookie-less request there
-	// is no session to protect, so the honest reading of `null` is "no origin", which is
-	// what this makes it. (The CORS layer above has already decided such a request may
-	// proceed without being given anything to read.)
-	if (req.headers.origin === "null") delete req.headers.origin;
+	// ── 1. Nothing here says "browser" at all ────────────────────────────────────────
+	//
+	// No Origin, no Referer, and no fetch metadata. **A CSRF-capable browser cannot
+	// produce this combination.** Every engine that ships today sends `Sec-Fetch-*` on
+	// every request (Chrome and Edge since 76, Firefox since 90, Safari since 16.4), and a
+	// browser posting across origins — which is what a CSRF attack IS — sends an `Origin`
+	// besides. A same-origin form post would still carry `Sec-Fetch-Site: same-origin`. So
+	// this shape is a native HTTP client, and the cookie riding along with it is not a
+	// browser session: it is iOS's `NSURLSession` cookie jar, which persists and replays
+	// cookies for native apps automatically.
+	//
+	// That jar is what re-locked the TestFlight build after the first fix (production log,
+	// 2026-09-03 06:59): Better Auth had set a cookie during the earlier *failed* attempts,
+	// and the v1 rule only relaxed for cookie-less requests — so the failure planted the
+	// cookie and the cookie sustained the failure, on a device that could never clear it
+	// short of a reinstall. **A fix that requires a reinstall is not a fix.**
+	//
+	// The cookie is therefore dropped for this shape. We are a bearer-token server: the
+	// session that matters arrives in `Authorization`, `bearer()` is what reads it, and a
+	// stray cookie on a native request carries no authority we want and no protection we
+	// lose. Better Auth then takes its own no-cookie path and stops demanding an Origin.
+	if (!origin && !referer && !fetchMetadata) {
+		delete req.headers.cookie;
+		next();
+		return;
+	}
 
+	// ── 2. Browser-shaped, but with no ambient credential to protect ─────────────────
+	//
+	// The first TestFlight failure: iOS attaches `Sec-Fetch-*` while sending no Origin, and
+	// Better Auth's form-CSRF path reads those hints as proof of a browser and force-
+	// validates an Origin that was never there. With no cookie there is nothing a
+	// cross-site page could spend, so the hints are dropped and the check returns to what
+	// Better Auth itself does for token clients.
+	if (!req.headers.cookie) {
+		delete req.headers["sec-fetch-site"];
+		delete req.headers["sec-fetch-mode"];
+		delete req.headers["sec-fetch-dest"];
+		delete req.headers["sec-fetch-user"];
+
+		// A literal `Origin: null` is the same story told a second way: it is not the origin
+		// of a browser session, it is the absence of one. (The CORS layer above has already
+		// decided such a request may proceed without being given anything to read.)
+		if (req.headers.origin === "null") delete req.headers.origin;
+	}
+
+	// ── 3. Browser-shaped AND cookie-bearing ────────────────────────────────────────
+	//
+	// Untouched, in every respect. This is the only shape a CSRF attack can wear, and it
+	// keeps every check Better Auth ships with.
 	next();
 }
 
@@ -173,7 +219,7 @@ export function createApp({
 
 	// The delegate form, because the decision needs the REQUEST and not just the origin:
 	// whether it carries a cookie is what separates "a browser with a session" from "a
-	// client holding a bearer token" (see stripBrowserHintsFromTokenClients).
+	// client holding a bearer token" (see normaliseNativeAuthRequest).
 	app.use(
 		cors((req, done) => {
 			const base = { credentials: true, exposedHeaders: ["set-auth-token", "Server-Timing"] };
@@ -216,7 +262,7 @@ export function createApp({
 	});
 
 	// Better Auth reads the raw request body itself — must be mounted before express.json
-	app.all("/api/auth/*splat", stripBrowserHintsFromTokenClients, logRefusedAuth, toNodeHandler(auth));
+	app.all("/api/auth/*splat", normaliseNativeAuthRequest, logRefusedAuth, toNodeHandler(auth));
 
 	app.use(express.json({ limit: "256kb" }));
 
