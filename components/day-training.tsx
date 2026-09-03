@@ -26,9 +26,16 @@ import type { DayView } from '@/lib/types';
 export function DayTraining({
   view,
   onCorrect,
+  summary,
 }: {
   view: DayView;
   onCorrect: (kind: 'activity', id: string) => void;
+  /**
+   * Overrides the section's right-hand line. The Train tab passes its own — which carries
+   * the session's time span as well as the calories — because on the live day "when" is
+   * half the answer (user decision 2026-09-03).
+   */
+  summary?: string | null;
 }) {
   const remove = useDeleteRecord();
   const { logged, health } = splitBySource(view.items.activities);
@@ -39,7 +46,9 @@ export function DayTraining({
   return (
     <Section
       title="Training"
-      summary={logged.length === 0 && health.length === 0 ? 'Nothing logged' : `${kcal(view.earned)} kcal earned`}
+      summary={
+        summary ?? (logged.length === 0 && health.length === 0 ? 'Nothing logged' : `${kcal(view.earned)} kcal earned`)
+      }
       note={earnedEstimated ? 'est.' : null}>
       {logged.length === 0 && health.length === 0 ? (
         <Card>

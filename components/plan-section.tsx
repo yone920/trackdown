@@ -37,7 +37,10 @@ import { readerLine } from '@/lib/errors';
 //     with nothing at all; with nothing, it draws the question as a button and waits to be
 //     pressed. That mattered when this was a page you chose to open. It matters more now
 //     that it is on the tab the app lands on.
-//   * **"Start today's workout" is the only generator in the app.** One verb, one place.
+//   * **"Generate today's workout" is the only generator in the app.** One verb, one place.
+//     Named for what it does: somebody who has already logged their own session has very
+//     much started, and telling them to start is the app not reading its own screen (user
+//     decision 2026-09-03).
 //   * Adding keeps everything above it; replacing costs a second tap and says what it will
 //     do. Adjusting is told in words, like every other change (concept-v2 §Principles 7).
 //
@@ -619,7 +622,7 @@ export function PlanSection() {
         <View style={{ marginTop: 16 }}>
           <BigButton
             testID="coach-regenerate"
-            label={busy ? 'Thinking…' : "Start today's workout"}
+            label={busy ? 'Thinking…' : "Generate today's workout"}
             disabled={busy}
             pending={busy}
             onPress={askForPlan}

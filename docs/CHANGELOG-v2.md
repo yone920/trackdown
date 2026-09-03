@@ -83,6 +83,43 @@ half-lived today.
 
 ---
 
+## What you did is not a footnote (`wp-train-inline-log`)
+
+**2026-09-03, two user decisions for the Train tab.**
+
+**The log is on the page.** Somebody logged 100 push-ups before asking for a plan, opened
+Train, and saw a one-line summary of their own morning behind a chevron: *"whenever somebody
+logs, they should see it on the screen, not tucked away hidden."* On a day with **no plan**,
+Train now draws the grouped session itself — `components/day-training.tsx`, the same
+component the whole-day archive and the scoped readings use, so a session reads identically
+wherever it is met: cardio and muscle groups, receipts, tap a row to correct it, ✕ to take it
+back. The header line is the tab's own ("264 kcal earned · 1:30p–2:05p · 2 moves"), because on
+the live day *when* is half the answer; `DayTraining` took an optional `summary` for it.
+
+The compact **Done** door is gone from this page, and with it `SummaryRow`, which nothing
+else used. Its purpose was to keep a long log from burying the plan — and on a day with a
+plan the log is *already* inline, as the plan's own lines plus "Also" (user decision
+2026-09-01), so the door had nowhere left to be useful. The raw record it led to is still one
+tap away, as "See the log as recorded" under the session.
+
+*Judgement call worth flagging:* the brief said the door should exist "only when a plan owns
+the page". With a plan the page already renders every logged row inside the plan card, so
+adding a door there would rebuild the two-section layout that decision removed — the door is
+therefore drawn nowhere, and the log is visible in both states, which is what the user
+actually asked for. Say the word and it comes back for plan days.
+
+**"Start today's workout" → "Generate today's workout"**, everywhere it appears: the Train
+empty state and Home's button when there is no plan. A self-logger has very much started —
+telling them to start is the app not reading its own screen — and what the button does is
+generate a plan. Home's plan-exists label ("Today's session") is untouched, and the hint
+under the button still reads right: it is about what to say *before* generating, not about
+starting.
+
+**Tests** — app 531 → 532, and six rewritten to the new contract: the no-plan day draws
+`day-training` with its rows and header rather than `today-done`, a row opens the correction
+sheet straight from the tab, the record link still goes to `/train/log`, and the button says
+Generate in both places it appears.
+
 ## The first TestFlight build could not sign anybody up (`fix-native-auth-origin`)
 
 **2026-09-02/03, field bug from the first production build.** Creating an account failed

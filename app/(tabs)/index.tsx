@@ -265,7 +265,7 @@ export default function Home() {
  * the same page either way.
  */
 export function planLabel(status: CoachStatus | null): string {
-  return status?.has_plan ? 'Today’s session' : "Start today's workout";
+  return status?.has_plan ? 'Today’s session' : "Generate today's workout";
 }
 
 /** "2 of 6 done" once a plan is being worked through. A rest day counts nothing. */

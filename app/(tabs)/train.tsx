@@ -2,7 +2,8 @@ import { useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, View } from 'react-native';
 
-import { IconAvatar, IconChevronRight } from '@/components/icons';
+import { IconAvatar } from '@/components/icons';
+import { DayTraining } from '@/components/day-training';
 import { Chip, dismissDeletes } from '@/components/kit';
 import { PlanSection } from '@/components/plan-section';
 import { Disp, Eyebrow, Sub } from '@/components/type';
@@ -17,7 +18,7 @@ import {
 } from '@/lib/queries';
 import { keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
 import { useScreenInsets } from '@/lib/screen';
-import { C, RADIUS, SPACE, TABULAR } from '@/lib/theme';
+import { C, SPACE } from '@/lib/theme';
 import { sessionSpan, splitBySource } from '@/lib/training-groups';
 import { OFFLINE_MESSAGE } from '@/lib/errors';
 import { CalendarButton, CalendarSheet } from '@/components/calendar-sheet';
@@ -33,13 +34,13 @@ import { CalendarButton, CalendarSheet } from '@/components/calendar-sheet';
 //
 //   * the plan, ticked off, each done line carrying what was actually logged against it
 //   * off-plan work, under "Also", in the same card
-//   * Adjust / Replace, and Start today's workout when there is no plan
+//   * Adjust / Replace, and Generate today's workout when there is no plan
 //   * the coach's one nudge
 //
 // Nothing on this page links food-ward. The + still logs anything from anywhere.
 //
 // Opening it generates NOTHING: the day and the plan are both reads, and
-// `GET /api/coach/next?generate=false` cannot write. "Start today's workout" is the only
+// `GET /api/coach/next?generate=false` cannot write. "Generate today's workout" is the only
 // generator in the app.
 
 export default function Train() {
@@ -160,22 +161,40 @@ export default function Train() {
           of its own behind an accent button at the bottom of this screen, which put the
           plan and the record of what actually happened on two different screens when they
           are two halves of one day. Opening this tab still generates nothing: the read is
-          an exists-check, and "Start today's workout" is the only generator in the app
+          an exists-check, and "Generate today's workout" is the only generator in the app
           (components/plan-section.tsx). */}
       <PlanSection />
 
-      {/* The training log, behind a door on a day with no plan to hang it off. */}
-      {/* With a plan, the training section IS the log: every line carries what was done
-          under what was asked for, and off-plan work joins the same card (user decision
-          2026-09-01). A second Done row would be the two-section layout coming back. With
-          no plan there is no skeleton to hang the log off, so the door stays. */}
+      {/* The training log, ON the page whenever the page has room for it.
+          
+          With a plan, the training section IS the log: every line carries what was done
+          under what was asked for, and off-plan work joins the same card as "Also" (user
+          decision 2026-09-01) — so there is nothing left to show here.
+
+          With NO plan there is no plan card to bury, and the compact "Done" door was
+          burying the log instead: somebody logged 100 push-ups, looked at Train, and saw a
+          one-line summary of their own morning behind a chevron (user decision 2026-09-03:
+          "whenever somebody logs, they should see it on the screen, not tucked away
+          hidden"). So the grouped session is drawn here, by the same component the day page
+          and the scoped readings use — cardio and muscle groups, receipts, tap to correct,
+          ✕ to take it back. The raw record is still one tap further in. */}
       {hasPlan ? null : (
-        <SummaryRow
-          testID="today-done"
-          title="Done"
-          line={doneLine}
-          onPress={() => router.push('/train/log')}
-        />
+        <>
+          <DayTraining
+            view={view}
+            summary={moves === 0 ? 'Nothing logged yet' : doneLine}
+            onCorrect={(kind, id) =>
+              router.push({ pathname: '/log', params: { editDate: date, editId: id, editKind: kind } })
+            }
+          />
+          <View style={{ marginTop: 12, alignSelf: 'flex-start' }}>
+            <Chip
+              testID="today-done-log"
+              label="See the log as recorded"
+              onPress={() => router.push('/train/log')}
+            />
+          </View>
+        </>
       )}
 
       <CalendarSheet visible={calendar} onClose={() => setCalendar(false)} scope="train" />
@@ -186,47 +205,3 @@ export default function Train() {
 
 
 
-/**
- * One line about a whole section, and a tap that opens it. The logs were pushing the rest
- * of the day off the screen (user decision 2026-09-01: "we can hide them behind a
- * button"), so what stays on Today is the state and the door to the detail.
- */
-function SummaryRow({
-  testID,
-  title,
-  line,
-  onPress,
-}: {
-  testID: string;
-  title: string;
-  line: string;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      testID={testID}
-      accessibilityRole="button"
-      accessibilityLabel={`${title} — ${line}`}
-      onPress={onPress}
-      style={({
-        marginTop: 12,
-        flexDirection: 'row',
-        alignItems: 'center',
-        borderRadius: RADIUS.card,
-        backgroundColor: C.card,
-        paddingVertical: 16,
-        paddingHorizontal: SPACE.card,
-        opacity: 1,
-      })}>
-      <View style={{ flex: 1 }}>
-        <Disp size={19} weight="semi">
-          {title}
-        </Disp>
-        <Sub testID={`${testID}-line`} style={[{ marginTop: 4 }, TABULAR]}>
-          {line}
-        </Sub>
-      </View>
-      <IconChevronRight size={18} color={C.mute} />
-    </Pressable>
-  );
-}

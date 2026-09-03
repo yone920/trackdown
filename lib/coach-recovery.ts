@@ -3,7 +3,7 @@ import type { CoachStatus } from '@/lib/types';
 // What to do when the plan was written but the answer never arrived (field report
 // 2026-09-02).
 //
-// The user pressed "Start today's workout", watched "Thinking…", and then watched the page
+// The user pressed the generate button, watched "Thinking…", and then watched the page
 // go back to "Nothing planned yet". The generation had SUCCEEDED — the brief was on the
 // server, five items, stored — and the app had simply stopped listening: a model call over
 // a phone connection outran the platform's 60-second fetch ceiling, the promise rejected,
