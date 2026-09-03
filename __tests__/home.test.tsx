@@ -114,7 +114,7 @@ describe('Home', () => {
     serve();
     renderHome();
 
-    await waitFor(() => expect(screen.getByText("Start today's workout")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Generate today's workout")).toBeTruthy());
     expect(screen.queryByTestId('home-today-sub')).toBeNull();
 
     fireEvent.press(screen.getByTestId('home-today'));
@@ -137,7 +137,7 @@ describe('Home', () => {
     renderHome();
 
     await waitFor(() => expect(screen.getByTestId('home-today-sub')).toHaveTextContent('Plan complete ✓'));
-    expect(screen.queryByText("Start today's workout")).toBeNull();
+    expect(screen.queryByText("Generate today's workout")).toBeNull();
   });
 
   it('falls back to the invitation when the status cannot be read', async () => {
@@ -150,7 +150,7 @@ describe('Home', () => {
     renderHome();
 
     // The half of the pair that promises nothing that might not be there.
-    await waitFor(() => expect(screen.getByText("Start today's workout")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Generate today's workout")).toBeTruthy());
   });
 
   it('shows the week and the trend, not today’s numbers', async () => {
@@ -197,8 +197,8 @@ describe('Home', () => {
 
 describe('what the button says', () => {
   it('invites, then reports', () => {
-    expect(planLabel(null)).toBe("Start today's workout");
-    expect(planLabel(noPlan())).toBe("Start today's workout");
+    expect(planLabel(null)).toBe("Generate today's workout");
+    expect(planLabel(noPlan())).toBe("Generate today's workout");
     expect(planLabel(noPlan({ has_plan: true }))).toBe('Today’s session');
   });
 

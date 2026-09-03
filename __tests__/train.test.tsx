@@ -132,10 +132,14 @@ describe('Train', () => {
     });
     renderToday();
 
-    await waitFor(() => expect(screen.getByTestId('today-done-line')).toHaveTextContent(/264 kcal earned/));
-    expect(screen.getByTestId('today-done-line')).toHaveTextContent(/1 move/);
-    // Not a single row, and not the block's own title.
-    expect(screen.queryByText('Bench Press')).toBeNull();
+    // The log is ON the page on a no-plan day (user decision 2026-09-03): the grouped
+    // session, not a one-line summary of somebody's own morning behind a chevron.
+    await waitFor(() => expect(screen.getByTestId('day-training')).toBeTruthy());
+    expect(screen.getByText(/264 kcal earned/)).toBeTruthy();
+    expect(screen.getByText('Bench Press')).toBeTruthy();
+    // Grouped by muscle, the way every other reading of a session is.
+    expect(screen.getByText('chest')).toBeTruthy();
+    // And the block's own title is still not a heading anybody sees.
     expect(screen.queryByText('Chest & Triceps')).toBeNull();
   });
 
@@ -339,9 +343,10 @@ describe('Train — the plan and what was done, on one page', () => {
 
     // No plan was asked for, so the section is one card and a button — not a blank.
     await waitFor(() => expect(screen.getByTestId('coach-no-plan')).toBeTruthy());
-    expect(screen.getByText("Start today's workout")).toBeTruthy();
-    // The Done door is still there — it is training, and this tab owns training.
-    expect(screen.getByTestId('today-done-line')).toHaveTextContent(/Nothing logged yet/);
+    expect(screen.getByText("Generate today's workout")).toBeTruthy();
+    // The training section is on the page even with nothing in it — it is training, and
+    // this tab owns training. It says so plainly rather than hiding behind a door.
+    expect(screen.getByText('Nothing logged yet')).toBeTruthy();
     // The meal that was logged is Eat's business, not this tab's.
     expect(screen.queryByTestId('today-eat')).toBeNull();
     expect(screen.queryByText('eggs and toast')).toBeNull();
@@ -422,9 +427,12 @@ describe('Train — the door, and what is no longer on the page', () => {
     );
     renderToday();
 
-    await waitFor(() => expect(screen.getByTestId('today-done-line')).toHaveTextContent(/569 kcal earned/));
-    expect(screen.getByTestId('today-done-line')).toHaveTextContent(/2 moves/);
-    fireEvent.press(screen.getByTestId('today-done'));
+    await waitFor(() => expect(screen.getByTestId('day-training')).toBeTruthy());
+    expect(screen.getByText(/569 kcal earned/)).toBeTruthy();
+    expect(screen.getByText(/2 moves/)).toBeTruthy();
+    // The raw record is still one tap further in — the log is shown, not hidden, and the
+    // receipt is still reachable.
+    fireEvent.press(screen.getByTestId('today-done-log'));
     expect(mockPush).toHaveBeenCalledWith('/train/log');
 
     // Nothing on this tab links food-ward any more except the global + (user decision
@@ -439,7 +447,8 @@ describe('Train — the door, and what is no longer on the page', () => {
     serveDay(makeDay({ arc: [{ at: '2026-08-30T08:10:00.000Z', kind: 'activity', label: 'Bench' }] as never }));
     renderToday();
 
-    await waitFor(() => expect(screen.getByTestId('today-done')).toBeTruthy());
+    // Nothing logged on this fixture, so the training section is its empty line.
+    await waitFor(() => expect(screen.getByTestId('training-empty')).toBeTruthy());
     expect(screen.queryByText('The day so far')).toBeNull();
     expect(screen.queryByText('Body')).toBeNull();
     expect(screen.queryByText('7-day avg')).toBeNull();
@@ -468,15 +477,37 @@ describe('Train — the Done door survives only where there is no plan', () => {
     });
   }
 
-  it('keeps the Done row and its door on a no-plan day', async () => {
+  // User decision 2026-09-03: somebody logged 100 push-ups, opened Train, and saw a
+  // one-line summary of their own morning behind a chevron. "Whenever somebody logs, they
+  // should see it on the screen, not tucked away hidden."
+  it('draws the session itself on a no-plan day, not a door to it', async () => {
     serveDay(
       makeDay({ earned: 264, items: { meals: [], weights: [], activities: [lift()] } }),
       { date: '2026-08-30', brief: null, stale: false },
     );
     renderToday();
 
-    await waitFor(() => expect(screen.getByTestId('today-done-line')).toHaveTextContent(/264 kcal earned/));
-    fireEvent.press(screen.getByTestId('today-done'));
+    await waitFor(() => expect(screen.getByTestId('day-training')).toBeTruthy());
+    // The work, grouped and receipted, with the day's own header line.
+    expect(screen.getByText('Bench Press')).toBeTruthy();
+    expect(screen.getByText(/264 kcal earned/)).toBeTruthy();
+    // The compact door is gone from this page; the record behind it is not.
+    expect(screen.queryByTestId('today-done')).toBeNull();
+    fireEvent.press(screen.getByTestId('today-done-log'));
     expect(mockPush).toHaveBeenCalledWith('/train/log');
+  });
+
+  it('opens a logged row for a correction, straight from the tab', async () => {
+    serveDay(
+      makeDay({ earned: 264, items: { meals: [], weights: [], activities: [lift()] } }),
+      { date: '2026-08-30', brief: null, stale: false },
+    );
+    renderToday();
+
+    await waitFor(() => expect(screen.getByTestId('day-training')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('row-activity-a1-open'));
+    expect(mockPush).toHaveBeenCalledWith(
+      expect.objectContaining({ pathname: '/log', params: expect.objectContaining({ editKind: 'activity' }) }),
+    );
   });
 });
