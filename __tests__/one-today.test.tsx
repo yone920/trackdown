@@ -77,8 +77,8 @@ describe('the Days list', () => {
     serveDays([makeDayRow({ date: today, is_today: true })]);
     wrap(<Progress />);
 
-    await waitFor(() => expect(screen.getByTestId(`day-row-${today}`)).toBeTruthy());
-    fireEvent.press(screen.getByTestId(`day-row-${today}`));
+    await waitFor(() => expect(screen.getByTestId(`day-bar-${today}`)).toBeTruthy());
+    fireEvent.press(screen.getByTestId(`day-bar-${today}`));
     expect(mockPush).toHaveBeenCalledWith('/train');
     expect(mockPush).not.toHaveBeenCalledWith(`/day/${today}`);
   });
@@ -87,8 +87,8 @@ describe('the Days list', () => {
     serveDays([makeDayRow({ date: '2026-08-29', is_today: false })]);
     wrap(<Progress />);
 
-    await waitFor(() => expect(screen.getByTestId('day-row-2026-08-29')).toBeTruthy());
-    fireEvent.press(screen.getByTestId('day-row-2026-08-29'));
+    await waitFor(() => expect(screen.getByTestId('day-bar-2026-08-29')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('day-bar-2026-08-29'));
     expect(mockPush).toHaveBeenCalledWith('/day/2026-08-29');
   });
 });

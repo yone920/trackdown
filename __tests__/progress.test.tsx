@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import React from 'react';
 
 import Progress from '@/app/(tabs)/progress';
@@ -51,22 +51,26 @@ jest.mock('@/lib/auth', () => ({
  * colours — so the stub renders one node per part carrying exactly that.
  */
 jest.mock('react-native-body-highlighter', () => {
-  const { View } = require('react-native');
+  const { Pressable, View } = require('react-native');
   const ReactModule = require('react');
   return {
     __esModule: true,
-    default: ({ data, side }: any) =>
-      ReactModule.createElement(
+    default: ({ data, side, onBodyPartPress }: any) => {
+      // The coverage tile's pair and the muscle sheet's zoomed figure are mounted at the
+      // same time, so a test reaches parts through the wrapper it wants (`within`).
+      return ReactModule.createElement(
         View,
         { testID: `figure-${side}` },
         data.map((part: any) =>
-          ReactModule.createElement(View, {
+          ReactModule.createElement(Pressable, {
             key: part.slug,
             testID: `part-${side}-${part.slug}`,
             accessibilityLabel: `${part.slug} ${part.styles.fill} ${part.styles.stroke}`,
+            onPress: () => onBodyPartPress?.({ slug: part.slug }),
           }),
         ),
-      ),
+      );
+    },
   };
 });
 
@@ -155,13 +159,15 @@ describe('Progress — one screenful of live facts', () => {
 
   // The whole point of the rebuild: everything below used to be drawn open, in this order,
   // several screens deep, and nobody reached the bottom of it.
-  it('opens none of it in place — no figure, no lift cards, no weigh-in rows, no archive', async () => {
+  // The coverage tile draws a SUMMARY pair of figures since 2026-09-03 (user decision, from
+  // a reviewed mockup) — the full-width map, its legend and the sessions-a-week bars are
+  // still behind the door. Everything else below stays shut.
+  it('opens none of it in place — no lift cards, no weigh-in rows, no archive', async () => {
     serve({ goals: { active: [weightGoal()], history: [], no_goal: false } });
     renderProgress();
     await waitFor(() => expect(screen.getByTestId('tile-goal')).toBeTruthy());
 
-    expect(screen.queryByTestId('figure-front')).toBeNull();
-    expect(screen.queryByTestId('figure-back')).toBeNull();
+    expect(screen.queryByTestId('body-map-legend')).toBeNull();
     expect(screen.queryByTestId('lifts-board')).toBeNull();
     expect(screen.queryByTestId('lift-Bench Press')).toBeNull();
     expect(screen.queryByTestId('cardio-board')).toBeNull();
@@ -198,30 +204,36 @@ describe('Progress — one screenful of live facts', () => {
     expect(screen.getByTestId('body-spark')).toBeTruthy();
   });
 
-  it('says what is new on the board, and names the movers it is new about', async () => {
+  // The two mover rows left the tile on 2026-09-03: name and prescription truncated against
+  // each other at tile width, which made the most actionable line on the page the least
+  // readable one. They are on app/progress/strength.tsx, where they have a full line each.
+  it('says what is new on the board, and how many lifts are waiting', async () => {
     serve();
     renderProgress();
     await boardReady();
 
     expect(screen.getByText('Strength · 2 lifts')).toBeTruthy();
-    expect(screen.getByTestId('strength-news').props.children).toBe('1 ready to step up');
-    // The chin-up is the one with news; the bench is holding and stays behind the door.
-    expect(screen.getByTestId('mover-Assisted Chin-Up')).toBeTruthy();
-    expect(screen.getByTestId('mover-next-Assisted Chin-Up').props.children).toBe(
-      '50 lb of assistance next — one step less help',
-    );
-    expect(screen.queryByTestId('mover-Bench Press')).toBeNull();
+    expect(screen.getByTestId('strength-news').props.children[0]).toBe('1 ready to step up');
+    expect(screen.getByTestId('strength-waiting').props.children).toBe(' · 1 waiting on you');
+    // The prescriptions themselves are behind the door now.
+    expect(screen.queryByTestId('mover-Assisted Chin-Up')).toBeNull();
+    expect(screen.queryByTestId('strength-movers')).toBeNull();
   });
 
-  it('counts the coverage and draws twelve chips, not two figures', async () => {
+  // Twelve names do not fit four to a row on a phone: half of them arrived as "Upper ba…"
+  // and "Hamstrin…" (field report 2026-09-03). Colour on a shape needs no label at all.
+  it('counts the coverage and draws the week on a body, not twelve chips', async () => {
     serve();
     renderProgress();
     await boardReady();
 
     expect(screen.getByTestId('coverage-line').props.children).toBe('3 of 12 served · quiet: calves, core');
-    expect(screen.getByTestId('chip-chest')).toBeTruthy();
-    expect(screen.getByTestId('chip-calves')).toBeTruthy();
-    expect(screen.getByTestId('coverage-chips').props.children).toHaveLength(12);
+    expect(screen.getByTestId('coverage-figures')).toBeTruthy();
+    expect(within(screen.getByTestId('coverage-front')).getByTestId('part-front-chest')).toBeTruthy();
+    expect(screen.getByTestId('coverage-back')).toBeTruthy();
+    // Nothing is labelled on the tile, so nothing on it can truncate.
+    expect(screen.queryByTestId('coverage-chips')).toBeNull();
+    expect(screen.queryByTestId('chip-chest')).toBeNull();
   });
 
   it('puts the week against its cardio target, with the next prescription in green', async () => {
@@ -233,17 +245,22 @@ describe('Progress — one screenful of live facts', () => {
     expect(screen.getByTestId('cardio-bar')).toBeTruthy();
   });
 
-  it('keeps the last three days and what each one earned', async () => {
+  // Three sentences became a strip on 2026-09-03: both halves of every row truncated, and
+  // the right-hand column sat under the floating +. One bar per day says the same shape.
+  it('draws a fortnight as a strip, one bar per day, newest on the right', async () => {
     serve();
     renderProgress();
-    await waitFor(() => expect(screen.getByTestId(`day-row-${todayKey()}`)).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId(`day-bar-${todayKey()}`)).toBeTruthy());
 
-    expect(screen.getByText('Today · Pull day + walk')).toBeTruthy();
-    expect(screen.getByTestId(`day-right-${todayKey()}`).props.children).toBe('175 earned');
-    expect(screen.getByTestId('day-row-2026-08-30')).toBeTruthy();
-    expect(screen.getByTestId('day-row-2026-08-29')).toBeTruthy();
-    // Three, and the fourth is behind "All days".
-    expect(screen.queryByTestId('day-row-2026-08-28')).toBeNull();
+    expect(screen.getByTestId('day-bar-2026-08-30')).toBeTruthy();
+    expect(screen.getByTestId('day-bar-2026-08-29')).toBeTruthy();
+    // The day the old three-row tile could not reach is on the strip.
+    expect(screen.getByTestId('day-bar-2026-08-28')).toBeTruthy();
+    // Oldest first, so a strip of time reads the way time does.
+    const bars = screen.getByTestId('days-strip').props.children as { key: string }[];
+    expect(bars[bars.length - 1]!.key).toBe(todayKey());
+    // No prose to truncate: the tally is the summary.
+    expect(screen.queryByTestId(`day-right-${todayKey()}`)).toBeNull();
     expect(screen.getByText('4 of 7 served', { exact: false })).toBeTruthy();
   });
 });
@@ -264,15 +281,15 @@ describe('Progress — every row is a door', () => {
     expect(mockPush).toHaveBeenCalledWith(route);
   });
 
-  it('sends a day row to its day, and today to the tab that owns it', async () => {
+  it('sends a day bar to its day, and today to the tab that owns it', async () => {
     serve();
     renderProgress();
-    await waitFor(() => expect(screen.getByTestId('day-row-2026-08-30')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('day-bar-2026-08-30')).toBeTruthy());
 
-    fireEvent.press(screen.getByTestId('day-row-2026-08-30'));
+    fireEvent.press(screen.getByTestId('day-bar-2026-08-30'));
     expect(mockPush).toHaveBeenCalledWith('/day/2026-08-30');
 
-    fireEvent.press(screen.getByTestId(`day-row-${todayKey()}`));
+    fireEvent.press(screen.getByTestId(`day-bar-${todayKey()}`));
     expect(mockPush).toHaveBeenCalledWith('/train');
   });
 
@@ -300,15 +317,16 @@ describe('Progress — the muscle popup', () => {
     await boardReady();
     expect(screen.queryByTestId('muscle-sheet-headline')).toBeNull();
 
-    fireEvent.press(screen.getByTestId('chip-chest'));
+    fireEvent.press(within(screen.getByTestId('coverage-front')).getByTestId('part-front-chest'));
     await waitFor(() => expect(screen.getByTestId('muscle-sheet-headline')).toBeTruthy());
 
     expect(screen.getByTestId('muscle-sheet-eyebrow').props.children).toBe('Coverage · Chest');
     expect(screen.getByTestId('muscle-sheet-headline').props.children).toBe('12 sets this week');
     expect(screen.getByTestId('muscle-sheet-band').props.children).toBe('in the band');
     // The figure, zoomed on the muscle that was tapped and on nothing else.
-    expect(screen.getByTestId('part-front-chest')).toBeTruthy();
-    expect(screen.queryByTestId('part-front-biceps')).toBeNull();
+    const zoomed = within(screen.getByTestId('muscle-sheet-figure'));
+    expect(zoomed.getByTestId('part-front-chest')).toBeTruthy();
+    expect(zoomed.queryByTestId('part-front-biceps')).toBeNull();
     // The fact stack: the band, when it was last trained, and what is feeding it.
     expect(screen.getByTestId('muscle-fact-target').props.children).toBe('10–20 sets/wk');
     expect(screen.getByTestId('muscle-fact-last-trained').props.children).toContain('Bench Press');
@@ -320,7 +338,7 @@ describe('Progress — the muscle popup', () => {
     renderProgress();
     await boardReady();
 
-    fireEvent.press(screen.getByTestId('chip-calves'));
+    fireEvent.press(within(screen.getByTestId('coverage-front')).getByTestId('part-front-calves'));
     await waitFor(() => expect(screen.getByTestId('muscle-sheet-headline')).toBeTruthy());
     expect(screen.getByTestId('muscle-sheet-headline').props.children).toBe('Nothing in four weeks');
 
@@ -335,7 +353,9 @@ describe('Progress — an account with nothing on it', () => {
     renderProgress();
 
     await waitFor(() => expect(screen.getByTestId('body-empty').props.children).toBe('No weigh-ins yet.'));
-    expect(screen.getByTestId('strength-news').props.children).toBe('Nothing lifted in four weeks');
+    // Nothing lifted is nothing waiting: no count trails the news.
+    expect(screen.getByTestId('strength-news').props.children[0]).toBe('Nothing lifted in four weeks');
+    expect(screen.queryByTestId('strength-waiting')).toBeNull();
     expect(screen.getByTestId('coverage-line').props.children).toBe('0 of 12 served');
     // Cardio is not a row on the screen of somebody who lifts and does not run.
     expect(screen.queryByTestId('tile-cardio')).toBeNull();

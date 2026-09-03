@@ -21,11 +21,8 @@ function renderBar(focused: string) {
     routes: ROUTES.map((name) => ({ key: `${name}-key`, name })),
   };
   const navigation = { emit: () => ({ defaultPrevented: false }), navigate: jest.fn() };
-  return render(
-    <TabBar
-      {...({ state, navigation, descriptors: {}, insets: { top: 0, bottom: 0, left: 0, right: 0 } } as never)}
-    />,
-  );
+  const props = { state, navigation, descriptors: {}, insets: { top: 0, bottom: 0, left: 0, right: 0 } };
+  return render(<TabBar {...(props as unknown as React.ComponentProps<typeof TabBar>)} />);
 }
 
 beforeEach(() => mockPush.mockReset());

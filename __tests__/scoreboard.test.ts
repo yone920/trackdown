@@ -217,17 +217,34 @@ describe('the cardio row', () => {
 });
 
 describe('the days row', () => {
-  it('keeps the last three, newest first, with what each one earned', () => {
+  // A fortnight since 2026-09-03: the tile draws one bar per day, and three bars are not a
+  // rhythm. The window is DAYS_ON_ROW and the sort is still newest first.
+  it('takes a fortnight, newest first, with what each one earned', () => {
     const rows = daysRow([
       makeDayRow({ date: '2026-08-28', earned: 0, verdict: 'missed' }),
       makeDayRow({ date: '2026-08-31', is_today: true, earned: 175, summary: 'Pull day + walk' }),
       makeDayRow({ date: '2026-08-30', earned: 300 }),
       makeDayRow({ date: '2026-08-29' }),
     ]);
-    expect(rows.map((row) => row.date)).toEqual(['2026-08-31', '2026-08-30', '2026-08-29']);
+    expect(rows.map((row) => row.date)).toEqual(['2026-08-31', '2026-08-30', '2026-08-29', '2026-08-28']);
     expect(rows[0]).toMatchObject({ line: 'Today · Pull day + walk', right: '175 earned', open: true });
     expect(rows[1]?.right).toBe('300 earned');
     expect(rows[1]?.line).toBe('Served your goal · Chest and triceps · 1,450 kcal');
+    // The bar heights read the number, not the sentence.
+    expect(rows[0]?.earned).toBe(175);
+    expect(rows[3]?.earned).toBe(0);
+  });
+
+  it('still takes only what it is asked for', () => {
+    const rows = daysRow(
+      [
+        makeDayRow({ date: '2026-08-31' }),
+        makeDayRow({ date: '2026-08-30' }),
+        makeDayRow({ date: '2026-08-29' }),
+      ],
+      2,
+    );
+    expect(rows.map((row) => row.date)).toEqual(['2026-08-31', '2026-08-30']);
   });
 
   it('falls back to the verdict when a day earned nothing', () => {

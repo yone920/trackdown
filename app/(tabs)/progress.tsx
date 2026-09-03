@@ -16,6 +16,7 @@ import { dateEyebrow } from '@/lib/format';
 import {
   bodyRow,
   cardioRow,
+  DAYS_ON_ROW,
   daysHeadline,
   daysRow,
   goalRow,
@@ -69,7 +70,8 @@ export default function Progress() {
   const goals = useGoals();
   const week = useWeek();
   const board = useTrainingBoard();
-  const days = useDays(undefined, 7);
+  // The strip draws a fortnight (lib/scoreboard.ts §DAYS_ON_ROW).
+  const days = useDays(undefined, DAYS_ON_ROW);
 
   const active = goals.data?.active ?? [];
   const primary = active[0] ?? null;
@@ -125,7 +127,9 @@ export default function Progress() {
       contentContainerStyle={{
         paddingHorizontal: SPACE.screen,
         paddingTop: insets.top + 12,
-        paddingBottom: SPACE.tabBar + 24,
+        // Clear of the floating + (components/tab-bar.tsx), which hangs 64 + 18 above the
+        // bar: at 24 it sat on the last tile's right-hand column (field report 2026-09-03).
+        paddingBottom: SPACE.tabBar + 88,
         gap: TILE_GAP,
       }}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.mute} />}>

@@ -53,23 +53,26 @@ jest.mock('@/lib/auth', () => ({
 
 /** The figure, stubbed — see the note in progress.test.tsx. */
 jest.mock('react-native-body-highlighter', () => {
-  const { Pressable } = require('react-native');
+  const { Pressable, View } = require('react-native');
   const ReactModule = require('react');
   return {
     __esModule: true,
-    default: ({ data, side, onBodyPartPress }: any) =>
-      ReactModule.createElement(
-        Pressable,
+    default: ({ data, side, onBodyPartPress }: any) => {
+      // The coverage tile's pair and the muscle sheet's zoomed figure are mounted at the
+      // same time, so a test reaches parts through the wrapper it wants (`within`).
+      return ReactModule.createElement(
+        View,
         { testID: `figure-${side}` },
         data.map((part: any) =>
           ReactModule.createElement(Pressable, {
             key: part.slug,
             testID: `part-${side}-${part.slug}`,
             accessibilityLabel: `${part.slug} ${part.styles.fill} ${part.styles.stroke}`,
-            onPress: () => onBodyPartPress?.(part),
+            onPress: () => onBodyPartPress?.({ slug: part.slug }),
           }),
         ),
-      ),
+      );
+    },
   };
 });
 

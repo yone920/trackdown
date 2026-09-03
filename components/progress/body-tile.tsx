@@ -10,9 +10,14 @@ import { C, TABULAR } from '@/lib/theme';
 //
 // The full-height chart and the weigh-in rows (tap to correct, ✕ to take it back) are
 // behind this door, on app/progress/body.tsx. What a person wants from the page itself is
-// the shape of the line and today's number, and a 34 px sparkline says the shape.
+// the shape of the line and today's number.
+//
+// The line used to be 84 px wide, `dim`, wedged between the number and the chevron, and at
+// that size it read as a scratch on the glass rather than as a chart (field report
+// 2026-09-03 — "too cramped, too dense"). It is the most interesting thing on the tile, so
+// it now gets the full width under the number, in accent, with a fade beneath it.
 
-const SPARK_WIDTH = 84;
+const SPARK_HEIGHT = 62;
 
 export function BodyTile({ body, loading, onOpen }: { body: BodyRowView | null; loading: boolean; onOpen: () => void }) {
   if (!body) {
@@ -36,13 +41,14 @@ export function BodyTile({ body, loading, onOpen }: { body: BodyRowView | null; 
             {body.trend ? <Body style={{ color: C.mute }}>{` · ${body.trend}`}</Body> : null}
           </Body>
         </View>
-        {body.values.length > 0 ? (
-          <View testID="body-spark" style={{ width: SPARK_WIDTH }}>
-            <Sparkline points={body.values} height={34} color={C.dim} />
-          </View>
-        ) : null}
         <Chevron />
       </View>
+      {/* One reading is a dot, not a line: nothing to draw until there are two. */}
+      {body.values.length > 1 ? (
+        <View testID="body-spark" style={{ marginTop: 10 }}>
+          <Sparkline points={body.values} height={SPARK_HEIGHT} color={C.accent} area />
+        </View>
+      ) : null}
     </Tile>
   );
 }

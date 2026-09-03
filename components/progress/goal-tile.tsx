@@ -13,7 +13,12 @@ import { C, FONT, TABULAR } from '@/lib/theme';
 // behind this row now (app/progress/goal.tsx). What survives on the page is the answer:
 // how far along, what the measure reads, and which way it moved.
 
-const RING = 46;
+/**
+ * The goal is the one tile a person looks at first, and it was exactly the size of the five
+ * below it — so the page opened with no entry point at all (user decision 2026-09-03, from a
+ * reviewed mockup). The ring and the number both grow; nothing else on the tile changes.
+ */
+const RING = 62;
 
 export const TONE_COLOR: Record<Tone, string> = {
   ink: C.ink,
@@ -55,12 +60,12 @@ export function GoalTile({
   }
 
   return (
-    <Tile testID="tile-goal" accessibilityLabel={`Goal, ${goal.title}`} onPress={onOpen}>
+    <Tile testID="tile-goal" accessibilityLabel={`Goal, ${goal.title}`} onPress={onOpen} style={{ paddingVertical: 18 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
         {goal.percent == null ? null : (
-          <View style={{ marginRight: 13 }}>
+          <View style={{ marginRight: 15 }}>
             <Ring size={RING} stroke={5} fraction={goal.percent} color={goal.judge ? C.accent : C.mute}>
-              <Body testID="goal-percent" style={{ fontFamily: FONT.semi, fontSize: 11, color: C.mute }}>
+              <Body testID="goal-percent" style={{ fontFamily: FONT.semi, fontSize: 13, color: C.mute }}>
                 {`${Math.round(goal.percent * 100)}%`}
               </Body>
             </Ring>
@@ -73,11 +78,11 @@ export function GoalTile({
             tone={goal.judge ? C.accent : C.mute}
           />
           <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 3 }}>
-            <Disp size={30} testID="goal-value">
+            <Disp size={44} testID="goal-value">
               {goal.value}
             </Disp>
             {goal.unit ? (
-              <Sub style={{ marginLeft: 5, fontFamily: FONT.medium, fontSize: 12 }}>{goal.unit}</Sub>
+              <Sub style={{ marginLeft: 6, fontFamily: FONT.medium, fontSize: 14 }}>{goal.unit}</Sub>
             ) : null}
           </View>
           {goal.delta ? (

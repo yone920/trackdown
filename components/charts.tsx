@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, type LayoutChangeEvent } from 'react-native';
-import Svg, { Circle, Line, Path, Rect } from 'react-native-svg';
+import Svg, { Circle, Defs, Line, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 
 import { C } from '@/lib/theme';
 
@@ -134,12 +134,19 @@ export function Sparkline({
   height = 40,
   color = C.ink,
   target,
+  area = false,
 }: {
   points: number[];
   height?: number;
   color?: string;
   /** A dashed line to draw across the chart — the goal weight, usually. */
   target?: number | null;
+  /**
+   * Fill under the line, fading out downward. A 2px stroke on its own reads as a scratch
+   * on the glass at tile width (field report 2026-09-03); the fill gives the line a body
+   * and tells the eye at a glance which way the weight is going.
+   */
+  area?: boolean;
 }) {
   const [width, onLayout] = useWidth();
   const values = points.filter((n) => Number.isFinite(n));
@@ -167,6 +174,17 @@ export function Sparkline({
               strokeWidth={1}
               strokeDasharray="3 4"
             />
+          )}
+          {area && values.length > 1 && (
+            <>
+              <Defs>
+                <LinearGradient id="sparkArea" x1="0" y1="0" x2="0" y2="1">
+                  <Stop offset="0" stopColor={color} stopOpacity={0.28} />
+                  <Stop offset="1" stopColor={color} stopOpacity={0} />
+                </LinearGradient>
+              </Defs>
+              <Path d={`${d} L${x(values.length - 1)},${height} L${x(0)},${height} Z`} fill="url(#sparkArea)" />
+            </>
           )}
           {values.length > 1 && <Path d={d} stroke={color} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />}
           <Circle cx={x(values.length - 1)} cy={y(values[values.length - 1]!)} r={3} fill={color} />

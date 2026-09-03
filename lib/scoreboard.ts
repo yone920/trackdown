@@ -452,7 +452,12 @@ export function cardioRow(cardio: TrainingBoard['cardio'] | null | undefined): C
 // ---------------------------------------------------------------------------
 
 /** How many days the row keeps. Three is what fits under everything above it. */
-export const DAYS_ON_ROW = 3;
+/**
+ * How many days the strip on the Progress tile draws. Three was the count when the tile was
+ * three sentences; a fortnight is the shortest window in which a rhythm — and a gap in one —
+ * is visible as a shape (user decision 2026-09-03).
+ */
+export const DAYS_ON_ROW = 14;
 
 export type DayLineView = {
   date: IsoDate;
@@ -460,6 +465,8 @@ export type DayLineView = {
   line: string;
   /** "175 earned", or the verdict when the day earned nothing. */
   right: string;
+  /** The calories earned, as a number, for the strip's bar heights. Null when none were. */
+  earned: number | null;
   verdict: DayRow['verdict'];
   /** An open day is a ring rather than a filled dot: the day is not over. */
   open: boolean;
@@ -473,6 +480,7 @@ export function daysRow(rows: readonly DayRow[], limit = DAYS_ON_ROW): DayLineVi
       date: row.date,
       line: [row.is_today ? 'Today' : row.verdict_words, row.summary].filter(Boolean).join(' · '),
       right: row.earned != null && row.earned > 0 ? `${Math.round(row.earned)} earned` : verdictWord(row),
+      earned: row.earned ?? null,
       verdict: row.verdict,
       open: row.is_today,
     }));
