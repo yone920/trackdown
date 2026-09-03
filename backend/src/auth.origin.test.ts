@@ -144,11 +144,25 @@ describe("the browser is still gated", () => {
 		expect(res.status).toBe(403);
 	});
 
-	it("refuses a null origin — a sandboxed page is not a native app", async () => {
+	// `Origin: null` from a client with no cookie is let THROUGH — some native stacks send
+	// it, and a locked-out user is a real cost — but it is given nothing to read back: no
+	// `Access-Control-Allow-Origin`, so a browser in that state is refused the response by
+	// its own rules. The request succeeding is not the same as the answer being readable.
+	it("lets a cookie-less null origin sign up, but hands it no CORS grant", async () => {
 		const res = await request(app)
 			.post("/api/auth/sign-up/email")
 			.set({ Origin: "null" })
 			.send({ name: "sandbox", email: freshEmail(), password: PASSWORD });
+		expect(res.status).toBe(200);
+		expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+	});
+
+	// A cookie with a null origin is a session being used from somewhere it should not be.
+	it("still refuses a null origin that carries a cookie", async () => {
+		const res = await request(app)
+			.post("/api/auth/sign-in/email")
+			.set({ Origin: "null", Cookie: "better-auth.session_token=whatever" })
+			.send({ email: "someone@example.com", password: PASSWORD });
 		expect(res.status).toBe(403);
 	});
 
