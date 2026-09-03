@@ -282,6 +282,29 @@ describe('a meal whose numbers did not add up', () => {
     expect(screen.getByTestId('meal-consistency')).toHaveTextContent(/read again and adjusted/);
   });
 
+  // A correction is not a fault. The user says "the calorie is 1200", the macros move to meet
+  // it, and the card had been reporting that success in the same alarmed words it uses for a
+  // reading it distrusts — over the very number they had just supplied (field report
+  // 2026-09-03: "does this look correct, I thought you fixed the issue").
+  it('says a restated meal was KEPT, not that it failed to add up', () => {
+    render(
+      <ConfirmCard
+        result={{
+          ...meal,
+          kcal: 1200,
+          protein_g: 65,
+          carbs_g: 80,
+          fat_g: 48,
+          consistency: { outcome: 'restated', stated_kcal: 1200, implied_kcal: 876 },
+        }}
+      />,
+    );
+    const line = screen.getByTestId('meal-consistency');
+    expect(line).toHaveTextContent(/Kept your 1,200 kcal/);
+    expect(line).toHaveTextContent(/macros were re-estimated to match/);
+    expect(line).not.toHaveTextContent(/didn’t add up/);
+  });
+
   it('draws nothing for the meal that added up first time, which is nearly all of them', () => {
     render(<ConfirmCard result={meal} />);
     expect(screen.queryByTestId('meal-consistency')).toBeNull();

@@ -161,6 +161,14 @@ export function consistencyLine(consistency: MealConsistency | null | undefined)
           implied,
         ).toLocaleString('en-US')} from the macros`
       : '';
+  // A correction is not a fault. "The numbers didn't add up" over a plate the user has just
+  // told the calories of reads as the app refusing them — which is exactly how it read on the
+  // day it was still overwriting them (field report 2026-09-03). Their figure is named as
+  // KEPT, and the macros are described as what moved.
+  if (consistency.outcome === 'restated') {
+    const kept = stated != null ? ` your ${Math.round(stated).toLocaleString('en-US')} kcal` : ' your figure';
+    return `Kept${kept} — the macros were re-estimated to match.`;
+  }
   return consistency.outcome === 'adjusted'
     ? `The numbers didn’t add up${sum}; read again and adjusted.`
     : `The numbers didn’t add up${sum}; flagged, not adjusted.`;
@@ -294,7 +302,14 @@ export function ConfirmCard({
           ) : null}
           {sourcesLine(result.sources) ? <Sub style={{ marginTop: 4 }}>{sourcesLine(result.sources)}</Sub> : null}
           {consistencyLine(result.consistency) ? (
-            <Sub testID="meal-consistency" style={{ marginTop: 4, color: C.accent }}>
+            <Sub
+              testID="meal-consistency"
+              style={{
+                marginTop: 4,
+                // Orange is the app saying "look at this". A restated meal is the app
+                // confirming it did as it was told, which is not the same errand.
+                color: result.consistency?.outcome === 'restated' ? C.mute : C.accent,
+              }}>
               {consistencyLine(result.consistency)}
             </Sub>
           ) : null}

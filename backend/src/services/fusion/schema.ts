@@ -159,7 +159,7 @@ export const MEAL_TYPES = ["breakfast", "lunch", "dinner", "snack"] as const;
  * Derived, never asked for: it is a fact about our own reading, so no model-facing schema
  * pays a byte for it. Defaulted, so a client written before this still confirms.
  */
-export const MEAL_CONSISTENCY_OUTCOMES = ["adjusted", "flagged"] as const;
+export const MEAL_CONSISTENCY_OUTCOMES = ["adjusted", "restated", "flagged"] as const;
 export const MealConsistencySchema = z.object({
 	outcome: z.enum(MEAL_CONSISTENCY_OUTCOMES),
 	/** The kcal as stated, and the 4P+4C+9F they implied, as the reading finally stands. */

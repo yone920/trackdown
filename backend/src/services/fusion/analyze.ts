@@ -261,7 +261,11 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 			// is the one thing the user cannot check for themselves at a glance.
 			confidence: settled ? reread.confidence : "low",
 			consistency: {
-				outcome: settled ? "adjusted" : "flagged",
+				// "restated" is a settled gate whose discrepancy the USER created by correcting
+				// the meal. Nothing went wrong there and the card must not imply it did: the app
+				// was told a number and moved the rest to it, which is the feature working. Only
+				// a disagreement the app found on its own is worth a warning.
+				outcome: settled ? (instruction?.trim() ? "restated" : "adjusted") : "flagged",
 				stated_kcal: shown.stated_kcal ?? reread.kcal,
 				implied_kcal: shown.implied_kcal,
 			},

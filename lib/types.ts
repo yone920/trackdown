@@ -721,10 +721,12 @@ export type ProfileFields = {
  * 4 × protein + 4 × carbs + 9 × fat against the kcal beside them.
  *
  *   "adjusted" — one automatic re-ask reconciled it.
+ *   "restated" — the user corrected a number and the rest was moved to meet it. Not a
+ *                warning: they said what it was, and the app did as it was told.
  *   "flagged"  — it still does not add up; the confidence was forced to low.
  */
 export type MealConsistency = {
-  outcome: 'adjusted' | 'flagged';
+  outcome: 'adjusted' | 'restated' | 'flagged';
   stated_kcal: number | null;
   implied_kcal: number | null;
 };

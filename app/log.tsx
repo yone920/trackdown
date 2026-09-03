@@ -14,7 +14,7 @@ import {
 import { ConfirmCard, type DateChoice } from '@/components/confirm-card';
 import { Control } from '@/components/control';
 import { EvidenceThumbs, LocalThumbs } from '@/components/evidence';
-import { IconCamera, IconClose, IconKeyboard, IconMic } from '@/components/icons';
+import { IconCamera, IconClose, IconKeyboard, IconMic, IconStop } from '@/components/icons';
 import { BigButton, Card, Chip, Chips, Skeleton, SkeletonLines } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { GENERIC_MESSAGE, readerLine } from '@/lib/errors';
@@ -148,6 +148,10 @@ export default function LogSheet() {
   // can file the correction with its own diff of the row before and after.
   const [told, setTold] = useState<string | null>(null);
   const [listening, setListening] = useState(false);
+  // The words already in the box when the current dictation started. A ref, not state: the
+  // speech callbacks are handed to the port once and would otherwise close over the value it
+  // had at that moment.
+  const speechBaseRef = useRef('');
   const [transcribed, setTranscribed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Something that WORKED and is worth saying — a preference saved, and what it changes. */
@@ -488,6 +492,20 @@ export default function LogSheet() {
     if (taken.length > 0) setPhotos((current) => [...current, ...taken].slice(0, MAX_PHOTOS));
   };
 
+  /**
+   * One dictation joined onto whatever was in the box when the mic opened. A partial replaces
+   * the last partial and never the words in front of them, so the box grows as they talk and
+   * the earlier half stays put.
+   */
+  const continued = (spoken: string) => {
+    const base = speechBaseRef.current;
+    const heard = spoken.trim();
+    if (!base) return heard;
+    if (!heard) return base;
+    // No double space, and no space swallowed after a comma the recogniser punctuated.
+    return `${base.replace(/\s+$/, '')} ${heard}`;
+  };
+
   const toggleSpeak = async () => {
     if (listening) {
       speech.stop();
@@ -499,16 +517,23 @@ export default function LogSheet() {
       setError('Microphone or speech permission was refused.');
       return;
     }
+    // What is already in the box when the mic opens. Every transcript is added to it rather
+    // than put in its place: the user stops mid-log to remember what the machine was called,
+    // then carries on, and a second dictation that wiped the first would make the pause cost
+    // them the sentence (field report 2026-09-03).
+    speechBaseRef.current = text.trim();
     setListening(true);
     setTranscribed(true);
     await speech.start({
-      onPartial: (partial) => setText(partial),
+      onPartial: (partial) => setText(continued(partial)),
       onResult: (final) => {
-        setText(final);
+        const heard = continued(final);
+        setText(heard);
         setListening(false);
-        // Spoken, in either mode: a change can be told out loud too.
-        if (revising) void runRevise(final);
-        else void runAnalyze(final, photos);
+        // Spoken, in either mode: a change can be told out loud too. What is read is what the
+        // box now HOLDS — everything said so far — not the last burst on its own.
+        if (revising) void runRevise(heard);
+        else void runAnalyze(heard, photos);
       },
       // The platform's own speech error is a developer string ("recognition_failed",
       // "No speech input"): the user needs to know the app did not hear them, not what the
@@ -749,9 +774,16 @@ export default function LogSheet() {
                   <IconCamera size={26} color={C.ink} />
                 </Control>
               )}
+              {/* Running, the control stops being a mic and becomes the stop button: accent
+                  tile, filled square, and the word under it says what pressing it does. */}
               {speech.available ? (
-                <Control label={listening ? 'Listening' : 'Speak'} filled onPress={toggleSpeak} testID="control-speak">
-                  <IconMic size={26} color={C.bg} />
+                <Control
+                  label={listening ? 'Stop' : 'Speak'}
+                  filled
+                  active={listening}
+                  onPress={toggleSpeak}
+                  testID="control-speak">
+                  {listening ? <IconStop size={26} color={C.bg} /> : <IconMic size={26} color={C.bg} />}
                 </Control>
               ) : null}
               <Control label="Type" onPress={() => inputRef.current?.focus()} testID="control-type">

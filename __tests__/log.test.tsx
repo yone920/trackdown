@@ -127,6 +127,11 @@ beforeEach(() => {
   mockApi.mockReset();
   mockUpload.mockReset();
   mockSpeech.available = false;
+  // The port is one object shared by every test in this file: without this, "was start called
+  // once?" counts the presses of whichever tests ran before it.
+  mockSpeech.requestPermission.mockReset();
+  mockSpeech.start.mockReset();
+  mockSpeech.stop.mockReset();
 });
 
 describe('the log sheet', () => {
@@ -142,6 +147,83 @@ describe('the log sheet', () => {
     mockSpeech.available = true;
     renderSheet();
     expect(screen.getByTestId('control-speak')).toBeTruthy();
+  });
+
+  // Dictating twice is the normal way to log something you have to think about: you say what
+  // you can, stop to remember what the machine was called, and carry on. A second dictation
+  // that replaced the first made the pause cost the sentence (field report 2026-09-03).
+  it('adds a dictation onto what is already in the box', async () => {
+    mockSpeech.available = true;
+    mockSpeech.requestPermission.mockResolvedValue(true);
+    let heard: { onPartial?: (t: string) => void; onResult: (t: string) => void } | null = null;
+    mockSpeech.start.mockImplementation(async (events: typeof heard) => {
+      heard = events;
+    });
+    mockUpload.mockResolvedValue(analyzed([meal]));
+    renderSheet();
+
+    fireEvent.changeText(screen.getByTestId('log-text'), 'chicken and rice');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('control-speak'));
+    });
+
+    // Partials replace each other and never the words in front of them.
+    act(() => heard!.onPartial!('and'));
+    act(() => heard!.onPartial!('and broccoli'));
+    expect(screen.getByTestId('log-text').props.value).toBe('chicken and rice and broccoli');
+
+    // And what goes to the reader is everything said so far, not the last burst alone.
+    await act(async () => heard!.onResult('and broccoli'));
+    expect(mockUpload).toHaveBeenCalledWith(
+      '/api/log/analyze',
+      expect.arrayContaining([{ name: 'text', value: 'chicken and rice and broccoli' }]),
+    );
+  });
+
+  it('starts from empty when the box was empty, with no leading space', async () => {
+    mockSpeech.available = true;
+    mockSpeech.requestPermission.mockResolvedValue(true);
+    let heard: { onPartial?: (t: string) => void; onResult: (t: string) => void } | null = null;
+    mockSpeech.start.mockImplementation(async (events: typeof heard) => {
+      heard = events;
+    });
+    renderSheet();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('control-speak'));
+    });
+    act(() => heard!.onPartial!('two eggs'));
+    expect(screen.getByTestId('log-text').props.value).toBe('two eggs');
+  });
+
+  // The 11px word under the tile was the only thing that changed while the mic was open, and
+  // it read as a label rather than a state ("small and not intuitive" — same report). The
+  // control itself is the indicator now, and it says what pressing it does.
+  it('turns the Speak control into a stop button while it is listening', async () => {
+    mockSpeech.available = true;
+    mockSpeech.requestPermission.mockResolvedValue(true);
+    mockSpeech.start.mockImplementation(async () => {});
+    renderSheet();
+
+    const speak = screen.getByTestId('control-speak');
+    expect(speak.props.accessibilityLabel).toBe('Speak');
+    expect(speak.props.accessibilityState.selected).toBe(false);
+
+    await act(async () => {
+      fireEvent.press(speak);
+    });
+
+    expect(screen.getByTestId('control-speak').props.accessibilityLabel).toBe('Stop');
+    expect(screen.getByTestId('control-speak').props.accessibilityState.selected).toBe(true);
+    expect(screen.getByText('Stop')).toBeTruthy();
+
+    // And pressing it again stops the recogniser rather than starting a second one.
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('control-speak'));
+    });
+    expect(mockSpeech.stop).toHaveBeenCalled();
+    expect(mockSpeech.start).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('control-speak').props.accessibilityLabel).toBe('Speak');
   });
 
   it('calls its primary button Log, and shows a review page when it has read something', async () => {

@@ -204,6 +204,19 @@ export function IconMic(p: IconProps) {
   );
 }
 
+/**
+ * Stop — the filled square every recorder has used since the tape deck. Filled rather than
+ * stroked on purpose: it is the one icon here that has to read as "this is running, and this
+ * is the thing that ends it" from arm's length, mid-sentence.
+ */
+export function IconStop(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Rect x={6.5} y={6.5} width={11} height={11} rx={2.5} fill={p.color ?? C.ink} />
+    </Frame>
+  );
+}
+
 export function IconKeyboard(p: IconProps) {
   return (
     <Frame size={p.size}>

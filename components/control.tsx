@@ -12,6 +12,7 @@ export function Control({
   label,
   onPress,
   filled = false,
+  active = false,
   disabled = false,
   testID,
   children,
@@ -20,6 +21,12 @@ export function Control({
   onPress: () => void;
   /** Speak is the filled one where it is available. */
   filled?: boolean;
+  /**
+   * Running, and pressing it stops. The control IS the indicator: a 76px tile that turns
+   * accent under your thumb says "recording" from across the room, where the 11px word
+   * beneath it did not (field report 2026-09-03 — "it is small and not intuitive").
+   */
+  active?: boolean;
   disabled?: boolean;
   testID?: string;
   children: React.ReactNode;
@@ -30,6 +37,9 @@ export function Control({
         testID={testID}
         accessibilityRole="button"
         accessibilityLabel={label}
+        // So VoiceOver says "Stop recording, selected" rather than leaving the running
+        // recorder as just another button in the row.
+        accessibilityState={{ disabled, selected: active }}
         onPress={onPress}
         disabled={disabled}
         style={({
@@ -38,12 +48,12 @@ export function Control({
           borderRadius: RADIUS.tile,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: filled ? C.ink : C.card,
+          backgroundColor: active ? C.accent : filled ? C.ink : C.card,
           opacity: disabled ? 0.4 : 1,
         })}>
         {children}
       </Pressable>
-      <Eyebrow>{label}</Eyebrow>
+      <Eyebrow style={active ? { color: C.accent } : undefined}>{label}</Eyebrow>
     </View>
   );
 }

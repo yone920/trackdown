@@ -1461,7 +1461,9 @@ describe("the arithmetic gate", () => {
 		});
 
 		expect(llm.requests.map((request) => request.schemaName)).toEqual(["meal", "meal"]);
-		expect(revised).toMatchObject({ carbs_g: 89, consistency: { outcome: "adjusted" } });
+		// "restated" wherever the gate fires at revise: the user moved a number and the rest
+		// followed, which is the feature rather than a fault to warn about.
+		expect(revised).toMatchObject({ carbs_g: 89, consistency: { outcome: "restated" } });
 	});
 
 	// A number the user has just said out loud is not a misread label (services/fusion/prompt.ts
@@ -1506,13 +1508,16 @@ describe("the arithmetic gate", () => {
 		// And NOT told the thing that caused the revert, which is right only for a label.
 		expect(reask).not.toContain("Do not simply scale");
 
+		// "restated", not "adjusted": the discrepancy was the user's own correction, and the
+		// card must not report doing as it was told in the words it uses for a reading it
+		// distrusts.
 		expect(revised).toMatchObject({
 			kind: "meal",
 			kcal: 1200,
 			protein_g: 60,
 			carbs_g: 95,
 			fat_g: 60,
-			consistency: { outcome: "adjusted", stated_kcal: 1200, implied_kcal: 876 },
+			consistency: { outcome: "restated", stated_kcal: 1200, implied_kcal: 876 },
 		});
 	});
 
