@@ -42,6 +42,24 @@ type Query = Record<string, string | number | boolean | undefined>;
  */
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
+/**
+ * No cookies, ever — on any request this app makes.
+ *
+ * This is a **bearer-token** client: the session arrives once in `set-auth-token` and goes
+ * back in `Authorization`. A cookie has never carried anything we read. But iOS's
+ * `NSURLSession` keeps a cookie jar per app and replays it automatically, so a cookie the
+ * server set for its own reasons rides along on every later request without the app ever
+ * asking for it — and on 2026-09-03 that jar locked a TestFlight user out of the app
+ * entirely: a cookie planted during failed sign-in attempts made every retry look
+ * cookie-bearing, which was the one shape the server's origin gate would not relax for.
+ * The device could not clear it short of a reinstall.
+ *
+ * The server no longer depends on this (backend app.ts §normaliseNativeAuthRequest reads
+ * the shape instead), and this is the other half: a jar that is never sent cannot lock
+ * anybody out of anything. Cookies here are pure liability, so we decline them.
+ */
+const CREDENTIALS: RequestCredentials = 'omit';
+
 /** A generation is a model call over a phone connection. It is allowed to take its time. */
 export const GENERATE_TIMEOUT_MS = 180_000;
 
@@ -96,6 +114,7 @@ export async function api<T>(
         headers,
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
         signal,
+        credentials: CREDENTIALS,
       }),
     ms,
   );
@@ -209,7 +228,7 @@ export async function upload<T>(path: string, parts: UploadPart[]): Promise<T> {
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(API_URL + path, { method: 'POST', headers, body: form });
+  const res = await fetch(API_URL + path, { method: 'POST', headers, body: form, credentials: CREDENTIALS });
   const text = await res.text();
   let data: unknown = null;
   try {
