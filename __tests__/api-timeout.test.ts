@@ -88,3 +88,34 @@ describe('the request deadline', () => {
     await expect(api('/api/coach/status')).resolves.toEqual({ has_plan: true });
   });
 });
+
+// ── the cookie jar this app never asked for ──────────────────────────────────────────
+//
+// iOS's NSURLSession keeps a cookie jar per app and replays it automatically. Better Auth
+// sets a session cookie alongside the bearer token, so that jar filled up on its own — and
+// on 2026-09-03 it locked a TestFlight user out entirely: a cookie planted during failed
+// sign-in attempts made every retry look cookie-bearing, which was the one shape the
+// server's origin gate would not relax for, and nothing but a reinstall could clear it.
+//
+// The server reads the request's shape now rather than trusting the absence of a cookie
+// (backend app.ts §normaliseNativeAuthRequest). This is the other half: a jar that is never
+// sent cannot lock anybody out of anything. We are a bearer-token client; cookies here
+// carry no authority we read and no protection we lose.
+
+describe('cookies', () => {
+  it('are never sent — the token is the session, and the jar is liability', async () => {
+    const sent = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      text: async () => '{}',
+    });
+    global.fetch = sent as unknown as typeof fetch;
+
+    await api('/api/week');
+
+    expect(sent).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ credentials: 'omit' }));
+    // And the session still travels the way it always has.
+    expect(sent.mock.calls[0]![1].headers.Authorization).toBe('Bearer test-token');
+  });
+});

@@ -83,6 +83,61 @@ half-lived today.
 
 ---
 
+## The cookie the app never asked for (`fix-native-cookie-origin`)
+
+**2026-09-03, the same lockout, second cause.** The origin fix shipped, and the user was
+still locked out. This time there was a log line for it — the refusal logging added hours
+earlier, doing exactly the job it was added for:
+
+```
+🔒 auth refused 403 POST /api/auth/sign-in/email · origin=— · referer_origin=— ·
+   sec-fetch=— · cookie=yes · bearer=yes · ua=TrackDown/2 CFNetwork/…
+```
+
+**The trap.** iOS's `NSURLSession` keeps a cookie jar per app and replays it automatically.
+Better Auth had set a session cookie during the attempts that *failed*, and v1 only relaxed
+the gate for **cookie-less** requests. So the device locked itself in a loop: the failure
+planted the cookie, and the cookie guaranteed the next failure. Nothing short of deleting
+and reinstalling the app could clear it — and a fix that requires a reinstall is not a fix.
+
+### Layer 1 — the server reads the shape, not the cookie (deployed first, alone)
+
+`origin` absent **and** `referer` absent **and** no `Sec-Fetch-*`: a CSRF-capable browser
+cannot produce that combination. Every engine shipping today sends fetch metadata on every
+request (Chrome/Edge 76, Firefox 90, Safari 16.4), and a browser posting across origins —
+which is what a CSRF attack *is* — sends an `Origin` besides; even a same-origin form post
+carries `Sec-Fetch-Site: same-origin`. So that shape is a native client, and the cookie on it
+is a jar, not a session. It is dropped, and Better Auth takes its own no-cookie path.
+
+A cookie arriving with **any** browser mark — fetch metadata, an origin, a referer — keeps
+every check it had. That is the only shape a CSRF attack can wear.
+
+| shape | before | after |
+|---|---|---|
+| no origin/referer/sec-fetch, **cookie + bearer** (the logged lockout) | **403** | 200 |
+| no origin, `Sec-Fetch-*`, no cookie (the first bug) | 200 | 200 |
+| `Sec-Fetch-*` **with** a cookie | 403 | 403 |
+| bogus origin with a cookie | 403 | 403 |
+| referer with a cookie | 403 | 403 |
+
+### Layer 2 — the app declines cookies entirely (OTA)
+
+`credentials: 'omit'` on every request the app makes: both `fetch` sites in `lib/api.ts` and
+the Better Auth client in `lib/auth.ts`. This is a bearer-token client — the session arrives
+once in `set-auth-token` and goes back in `Authorization` — so a cookie has never carried
+anything we read. A jar that is never sent cannot lock anybody out of anything.
+
+**Tests** — backend 806 → 810, app 532 → 533. The matrix gained the logged shape (sign-in
+*and* sign-up), a cookie with a referer, and a bogus origin with a cookie; removing the new
+rule turns two of them red, which is the check that the test is real. App-side, `api()` is
+asserted to send `credentials: 'omit'` while still carrying the bearer token.
+
+**Deferred / uncertain**
+
+- If a future iOS starts sending `Sec-Fetch-*` *and* replaying cookies on native requests,
+  layer 1 would refuse it again — layer 2 is what makes that survivable, since the jar would
+  never be sent in the first place. Belt and braces, deliberately.
+
 ## What you did is not a footnote (`wp-train-inline-log`)
 
 **2026-09-03, two user decisions for the Train tab.**

@@ -16,6 +16,10 @@ import { authLine } from './errors';
 export const authClient = createAuthClient({
   baseURL: API_URL,
   fetchOptions: {
+    // The auth calls are the ones the cookie jar actually bit (lib/api.ts §CREDENTIALS):
+    // Better Auth sets a session cookie alongside the bearer token, iOS stores it, and it
+    // comes back on every subsequent sign-in attempt. We never read it; we decline it.
+    credentials: 'omit',
     auth: { type: 'Bearer', token: () => getToken() ?? '' },
     onSuccess: (ctx) => {
       const token = ctx.response.headers.get('set-auth-token');
