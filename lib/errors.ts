@@ -95,6 +95,47 @@ export function readerLine(error: unknown, fallback: string = GENERIC_MESSAGE): 
   return fallback;
 }
 
+// ── the auth screen ──────────────────────────────────────────────────────────────────
+//
+// The same discipline, on the one form this app has. Field bug (TestFlight, 2026-09-02):
+// Better Auth's "Missing or null Origin" was rendered on the create-account screen. It got
+// there because it *reads* like a sentence — no JSON, no id, no leading status — so a shape
+// guard waved it through. A shape guard cannot tell a sentence written for a user from a
+// sentence written for whoever wrote the server.
+//
+// So auth is by CODE too. Better Auth sends one for everything a person can act on
+// (INVALID_EMAIL_OR_PASSWORD, USER_ALREADY_EXISTS…); anything else — an origin gate, a
+// database that fell over, a code added in a future release — is the generic line.
+
+export const AUTH_MESSAGE: Record<string, string> = {
+  INVALID_EMAIL_OR_PASSWORD: "That email and password don't match.",
+  INVALID_EMAIL: 'That does not look like an email address.',
+  INVALID_PASSWORD: "That password isn't right.",
+  USER_ALREADY_EXISTS: 'There is already an account with that email — sign in instead.',
+  USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL: 'There is already an account with that email — sign in instead.',
+  USER_NOT_FOUND: 'No account with that email yet — create one.',
+  PASSWORD_TOO_SHORT: 'That password is too short.',
+  PASSWORD_TOO_LONG: 'That password is too long.',
+  EMAIL_NOT_VERIFIED: 'That email has not been verified yet.',
+  SESSION_EXPIRED: 'That session has expired — sign in again.',
+};
+
+/** What the screen says when the server refused for a reason nobody wrote copy for. */
+export const AUTH_FALLBACK: Record<'in' | 'up', string> = {
+  in: 'Could not sign you in just now — try again.',
+  up: 'Could not create your account just now — try again.',
+};
+
+/**
+ * The line for a failed sign-in or sign-up. `error` is whatever the auth client handed
+ * back; only its `code` is trusted, never its prose.
+ */
+export function authLine(error: { code?: string | null; message?: string | null } | null | undefined, flow: 'in' | 'up'): string | null {
+  if (!error) return null;
+  const code = typeof error.code === 'string' ? error.code : '';
+  return AUTH_MESSAGE[code] ?? AUTH_FALLBACK[flow];
+}
+
 /** True when the reader is merely busy — the only failure worth suggesting "in a few seconds". */
 export function isBusy(error: unknown): boolean {
   const failure = asServerFailure(error);

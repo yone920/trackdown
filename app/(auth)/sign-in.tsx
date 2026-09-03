@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { IconEye, IconEyeOff } from '@/components/icons';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { MIN_PASSWORD_LENGTH, signIn, signUp } from '@/lib/auth';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
@@ -24,6 +25,17 @@ export default function SignIn() {
   const [mode, setMode] = useState<Mode>('sign-in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  /**
+   * Typed twice when an account is being created, and never on sign-in.
+   *
+   * **There is no reset email** (docs/build-plan.md §WP0a: no SMTP server, so
+   * `sendResetPassword` is deliberately unset). A typo in a password nobody can see is
+   * therefore not an annoyance, it is a locked account with no way back in — recovery is a
+   * shell script on the server. Signing IN cannot lock anybody out, so it stays one field.
+   */
+  const [confirm, setConfirm] = useState('');
+  /** The one form in this app, so it is the one place a password may be looked at. */
+  const [reveal, setReveal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,6 +46,12 @@ export default function SignIn() {
     }
     if (password.length < MIN_PASSWORD_LENGTH) {
       setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+      return;
+    }
+    // Checked here rather than on the server: the two fields are a fact about this screen,
+    // and the server never sees the second one.
+    if (mode === 'sign-up' && confirm !== password) {
+      setError('Those passwords do not match.');
       return;
     }
     setBusy(true);
@@ -98,12 +116,39 @@ export default function SignIn() {
               autoCorrect={false}
               autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'}
               textContentType={mode === 'sign-in' ? 'password' : 'newPassword'}
-              returnKeyType="go"
-              onSubmitEditing={submit}
+              returnKeyType={mode === 'sign-in' ? 'go' : 'next'}
+              onSubmitEditing={mode === 'sign-in' ? submit : undefined}
+              testID="auth-password"
+              reveal={reveal}
+              onToggleReveal={() => setReveal((shown) => !shown)}
             />
+            {mode === 'sign-up' ? (
+              <AuthField
+                label="Password again"
+                value={confirm}
+                onChangeText={(next) => {
+                  setConfirm(next);
+                  setError(null);
+                }}
+                placeholder="••••••••"
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="new-password"
+                textContentType="newPassword"
+                returnKeyType="go"
+                onSubmitEditing={submit}
+                testID="auth-confirm"
+                reveal={reveal}
+                onToggleReveal={() => setReveal((shown) => !shown)}
+              />
+            ) : null}
           </View>
 
-          {error ? <Sub style={{ marginTop: 14, color: C.accent }}>{error}</Sub> : null}
+          {error ? (
+            <Sub testID="auth-error" style={{ marginTop: 14, color: C.accent }}>
+              {error}
+            </Sub>
+          ) : null}
 
           <Pressable
             testID="auth-submit"
@@ -127,9 +172,12 @@ export default function SignIn() {
           </Pressable>
 
           <Pressable
+            testID="auth-switch-mode"
             onPress={() => {
               setMode(mode === 'sign-in' ? 'sign-up' : 'sign-in');
               setError(null);
+              // The second field belongs to the mode that asks for it.
+              setConfirm('');
             }}
             style={{ marginTop: 20, alignSelf: 'center' }}>
             <Sub>
@@ -142,26 +190,59 @@ export default function SignIn() {
   );
 }
 
-type AuthFieldProps = React.ComponentProps<typeof TextInput> & { label: string };
+type AuthFieldProps = React.ComponentProps<typeof TextInput> & {
+  label: string;
+  /** Present on a password field: draws the eye and says which way it is pointing. */
+  reveal?: boolean;
+  onToggleReveal?: () => void;
+};
 
-function AuthField({ label, ...rest }: AuthFieldProps) {
+function AuthField({ label, reveal, onToggleReveal, ...rest }: AuthFieldProps) {
+  const isPassword = onToggleReveal !== undefined;
   return (
     <View>
       <Eyebrow>{label}</Eyebrow>
-      <TextInput
-        {...rest}
-        placeholderTextColor={C.dim}
-        style={{
-          marginTop: 6,
-          fontFamily: FONT.medium,
-          fontSize: 17,
-          color: C.ink,
-          backgroundColor: C.card,
-          borderRadius: RADIUS.tile,
-          paddingHorizontal: 14,
-          paddingVertical: 14,
-        }}
-      />
+      <View style={{ justifyContent: 'center' }}>
+        <TextInput
+          {...rest}
+          // The eye is what decides this, on a password field: one toggle drives both
+          // fields, because a person checking their typing wants to see both halves of it.
+          secureTextEntry={isPassword ? !reveal : rest.secureTextEntry}
+          placeholderTextColor={C.dim}
+          style={{
+            marginTop: 6,
+            fontFamily: FONT.medium,
+            fontSize: 17,
+            color: C.ink,
+            backgroundColor: C.card,
+            borderRadius: RADIUS.tile,
+            paddingHorizontal: 14,
+            paddingVertical: 14,
+            // Room for the eye, so a long password never runs under it.
+            paddingRight: isPassword ? 52 : 14,
+          }}
+        />
+        {isPassword ? (
+          <Pressable
+            testID={`${rest.testID ?? 'auth'}-reveal`}
+            accessibilityRole="button"
+            accessibilityLabel={reveal ? 'Hide password' : 'Show password'}
+            accessibilityState={{ selected: reveal }}
+            onPress={onToggleReveal}
+            hitSlop={10}
+            style={{
+              position: 'absolute',
+              right: 6,
+              top: 6,
+              width: 44,
+              height: 50,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+            {reveal ? <IconEyeOff size={20} color={C.mute} /> : <IconEye size={20} color={C.mute} />}
+          </Pressable>
+        ) : null}
+      </View>
     </View>
   );
 }

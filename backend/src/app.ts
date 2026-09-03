@@ -60,6 +60,48 @@ export interface AppDeps {
  */
 export const UNEXPECTED_MESSAGE = "Something went wrong on our end.";
 
+/**
+ * Browser hints, removed from requests that cannot possibly be a browser form post.
+ *
+ * **The bug (TestFlight, 2026-09-02).** Creating an account on the first production build
+ * failed with Better Auth's "Missing or null Origin". A native build sends no `Origin`, and
+ * iOS attaches `Sec-Fetch-*`; Better Auth's form-CSRF middleware reads any `Sec-Fetch-*`
+ * header as "this came from a browser" and then *force-validates* an Origin that is not
+ * there. The dev build never hit it because Metro gave every request an Origin, and the
+ * suite never hit it because Better Auth turns the whole check off under `NODE_ENV=test`
+ * (`auth.origin.test.ts` reproduces it by asking for production semantics on purpose).
+ *
+ * **What this does, and only this**: on `/api/auth/*`, for a request carrying **no cookie**,
+ * drop the `Sec-Fetch-*` hints. A request with no cookie has no ambient credential to abuse
+ * — CSRF is a browser attaching cookies it holds — and Better Auth's own `validateOrigin`
+ * agrees: with no cookie header it returns without checking. Only the form-CSRF path, which
+ * exists for cookie-session form posts, forces the issue, and that path is a false positive
+ * for a bearer-token client.
+ *
+ * **What still protects a browser.** Everything that did before:
+ *   · a request WITH a cookie keeps every hint and every check, untouched;
+ *   · `cors()` above refuses any Origin not on the allow-list — including the literal
+ *     `null` — with a 403 before a route runs, so a cross-site browser POST never reaches
+ *     Better Auth's gate at all;
+ *   · sessions here are bearer tokens (`set-auth-token` → `Authorization`), which an
+ *     attacker's page can neither read nor cause to be sent.
+ *
+ * Deliberately not `advanced.disableCSRFCheck` (blanket), and not the undocumented
+ * path-array form of `disableOriginCheck` (its published type is `boolean` and its
+ * documented meaning is callbackURL validation — building auth on an untyped shape is how a
+ * minor upgrade turns into an outage). Deliberately not `@better-auth/expo` either: that
+ * plugin exists to trust an app-scheme Origin, and our failure is a MISSING one.
+ */
+export function stripBrowserHintsFromTokenClients(req: Request, _res: Response, next: NextFunction): void {
+	if (!req.headers.cookie) {
+		delete req.headers["sec-fetch-site"];
+		delete req.headers["sec-fetch-mode"];
+		delete req.headers["sec-fetch-dest"];
+		delete req.headers["sec-fetch-user"];
+	}
+	next();
+}
+
 export function createApp({
 	pool,
 	auth,
@@ -108,7 +150,7 @@ export function createApp({
 	});
 
 	// Better Auth reads the raw request body itself — must be mounted before express.json
-	app.all("/api/auth/*splat", toNodeHandler(auth));
+	app.all("/api/auth/*splat", stripBrowserHintsFromTokenClients, toNodeHandler(auth));
 
 	app.use(express.json({ limit: "256kb" }));
 
