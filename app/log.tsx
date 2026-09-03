@@ -527,13 +527,13 @@ export default function LogSheet() {
     await speech.start({
       onPartial: (partial) => setText(continued(partial)),
       onResult: (final) => {
-        const heard = continued(final);
-        setText(heard);
+        // The transcript lands in the box and STOPS there. It used to go straight to the
+        // reader, which made a pause to think indistinguishable from being finished: the
+        // recogniser closes after a second of silence, the log fired on whatever had been
+        // said so far, and there was no longer anything to correct or add to (field report
+        // 2026-09-03). Speaking fills the box; Log reads it. Pressing Speak again adds to it.
+        setText(continued(final));
         setListening(false);
-        // Spoken, in either mode: a change can be told out loud too. What is read is what the
-        // box now HOLDS — everything said so far — not the last burst on its own.
-        if (revising) void runRevise(heard);
-        else void runAnalyze(heard, photos);
       },
       // The platform's own speech error is a developer string ("recognition_failed",
       // "No speech input"): the user needs to know the app did not hear them, not what the

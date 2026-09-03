@@ -172,12 +172,46 @@ describe('the log sheet', () => {
     act(() => heard!.onPartial!('and broccoli'));
     expect(screen.getByTestId('log-text').props.value).toBe('chicken and rice and broccoli');
 
-    // And what goes to the reader is everything said so far, not the last burst alone.
+    // The transcript stops in the box. Nothing is read until Log is pressed — and what goes
+    // then is everything said so far, not the last burst alone.
     await act(async () => heard!.onResult('and broccoli'));
-    expect(mockUpload).toHaveBeenCalledWith(
-      '/api/log/analyze',
-      expect.arrayContaining([{ name: 'text', value: 'chicken and rice and broccoli' }]),
+    expect(mockUpload).not.toHaveBeenCalled();
+    expect(screen.getByTestId('log-text').props.value).toBe('chicken and rice and broccoli');
+
+    fireEvent.press(screen.getByTestId('log-submit'));
+    await waitFor(() =>
+      expect(mockUpload).toHaveBeenCalledWith(
+        '/api/log/analyze',
+        expect.arrayContaining([{ name: 'text', value: 'chicken and rice and broccoli' }]),
+      ),
     );
+  });
+
+  // The recogniser closes itself after about a second of silence, so "finished speaking" and
+  // "stopped to think" arrive as the same event. Logging on it meant the pause sent the log
+  // (field report 2026-09-03) — and an auto-log is unrecoverable in a way a button press is
+  // not: there is nothing left to edit or add to.
+  it('does not log on its own when the recogniser finishes', async () => {
+    mockSpeech.available = true;
+    mockSpeech.requestPermission.mockResolvedValue(true);
+    let heard: { onPartial?: (t: string) => void; onResult: (t: string) => void } | null = null;
+    mockSpeech.start.mockImplementation(async (events: typeof heard) => {
+      heard = events;
+    });
+    mockUpload.mockResolvedValue(analyzed([meal]));
+    renderSheet();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('control-speak'));
+    });
+    await act(async () => heard!.onResult('two eggs and a coffee'));
+
+    expect(mockUpload).not.toHaveBeenCalled();
+    // Still on the say step, with the words there to be changed.
+    expect(screen.getByTestId('log-text').props.value).toBe('two eggs and a coffee');
+    expect(screen.queryByTestId('confirm-card')).toBeNull();
+    // And the control has gone back to offering another go at it.
+    expect(screen.getByTestId('control-speak').props.accessibilityLabel).toBe('Speak');
   });
 
   it('starts from empty when the box was empty, with no leading space', async () => {
