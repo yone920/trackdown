@@ -18,23 +18,49 @@ type Queryable = pg.Pool | pg.PoolClient;
 export interface CatalogFacts {
 	equipment: Record<string, string[]>;
 	loadDirection: Record<string, LoadDirection>;
+	/**
+	 * What each movement is mostly FOR, by lower-cased name — the catalogue's first primary
+	 * muscle, which is its own ordering and not ours to reinterpret.
+	 *
+	 * The recovery rule needs it. A muscle trained inside 48 hours is not today's primary
+	 * target, and until 2026-09-03 that gated only the day's stated targets: the plan could
+	 * name quads and glutes and then prescribe a deadlift, which is a hamstring and
+	 * lower-back movement done the morning after a deadlift session (user field report).
+	 * Secondary overlap stays allowed — nobody squats without hamstrings — so it is the
+	 * PRIMARY that decides (services/coach/rules.ts §recoveringExercises).
+	 */
+	primaryMuscle: Record<string, string>;
 }
 
-export const EMPTY_CATALOG_FACTS: CatalogFacts = { equipment: {}, loadDirection: {} };
+export const EMPTY_CATALOG_FACTS: CatalogFacts = { equipment: {}, loadDirection: {}, primaryMuscle: {} };
 
 /** Equipment and load direction for a set of exercise names, keyed by lower-cased name. */
 export async function catalogFactsFor(db: Queryable, names: readonly string[]): Promise<CatalogFacts> {
 	const wanted = [...new Set(names.map((name) => name.trim().toLowerCase()).filter(Boolean))];
-	if (wanted.length === 0) return { equipment: {}, loadDirection: {} };
+	if (wanted.length === 0) return { equipment: {}, loadDirection: {}, primaryMuscle: {} };
 
-	const { rows } = await db.query<{ name: string; equipment: string[] | null; load_direction: LoadDirection }>(
-		`SELECT name, equipment, load_direction FROM exercise_catalog WHERE lower(name) = ANY($1::text[])`,
+	const { rows } = await db.query<{
+		name: string;
+		equipment: string[] | null;
+		load_direction: LoadDirection;
+		primary_muscles: string[] | null;
+	}>(
+		`SELECT name, equipment, load_direction, primary_muscles FROM exercise_catalog WHERE lower(name) = ANY($1::text[])`,
 		[wanted]
 	);
 	return {
 		equipment: Object.fromEntries(rows.map((row) => [row.name.trim().toLowerCase(), row.equipment ?? []])),
 		loadDirection: Object.fromEntries(
 			rows.map((row) => [row.name.trim().toLowerCase(), row.load_direction ?? DEFAULT_LOAD_DIRECTION])
+		),
+		// The FIRST primary muscle: the catalogue lists them in its own order and that order
+		// is the answer to "what is this movement for" (lib/progress-sections.ts uses the
+		// same rule to group the lifts board). A row with none contributes nothing, and the
+		// caller falls back to what the log itself recorded.
+		primaryMuscle: Object.fromEntries(
+			rows
+				.filter((row) => (row.primary_muscles ?? []).length > 0)
+				.map((row) => [row.name.trim().toLowerCase(), (row.primary_muscles as string[])[0] as string])
 		),
 	};
 }

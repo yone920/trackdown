@@ -1,5 +1,6 @@
 import { DEFAULT_LOAD_DIRECTION, type LoadDirection } from "../../db/exercises.js";
 import type { ReferenceLoad } from "../fusion/schema.js";
+import { sameMovement } from "./completion.js";
 import type { CoachFeatures, CoverageEntry, ExerciseFeature, ExerciseSession, MuscleFeature } from "./features.js";
 
 // The coach's deterministic half (docs/concept-v2.md §Progression rules: "deterministic,
@@ -210,13 +211,57 @@ export function coverageRule(coverage: readonly CoverageEntry[], avoidPrimary: r
  * as a rule rather than left to the model's taste, because "include some bodyweight work"
  * and "at most one new thing" are both constraints the user stated.
  */
-export function varietyRule(candidates: readonly string[]): string {
+/**
+ * How much appetite the user has stated for new work — read from their OWN words.
+ *
+ * User report 2026-09-03: "I was hoping to start working out new stuff; feels the same as
+ * working out on my own", alongside a preference typed into the app asking for variety and
+ * for new exercises. One introduction per plan is the right default for somebody who has
+ * said nothing; it is the wrong answer for somebody who has just asked, in writing, to be
+ * shown new movements.
+ *
+ * Deterministic and conservative: it reads the stated background, which is the field their
+ * sentence lands in, and it only moves off the default when the words are unambiguous. A
+ * stated preference for routine lowers nothing below the default — one introduction is
+ * already the floor — but it is recognised so the prompt can stop offering.
+ */
+export type VarietyAppetite = "wants" | "steady" | "default";
+
+const WANTS_VARIETY =
+	/\bvariety\b|\brotate\b|\brotation\b|mix (it |things )?up|new (exercises|movements|stuff|things)|different (exercises|movements)|something new|keep me interested|\bbored\b/i;
+const WANTS_ROUTINE =
+	/keep it simple|same routine|stick to (the|my)|no surprises|don'?t change|nothing new/i;
+
+export function varietyAppetite(background: TrainingBackground = NO_BACKGROUND): VarietyAppetite {
+	const said = [background.background, background.experience].filter(Boolean).join(" ");
+	if (!said.trim()) return "default";
+	// Routine wins a tie: a user who says both is asking for care, not for novelty.
+	if (WANTS_ROUTINE.test(said)) return "steady";
+	if (WANTS_VARIETY.test(said)) return "wants";
+	return "default";
+}
+
+/**
+ * How many never-logged movements one plan may introduce.
+ *
+ * One is the standing rule (user decision 2026-08-31 §B8) and stays the default. A stated
+ * appetite for new work raises it — still capped, because a session that is mostly movements
+ * the user has never done is a session they cannot load with any confidence.
+ */
+export const MAX_NEW_PER_PLAN = { default: 1, steady: 1, wants: 3 } as const;
+
+export function varietyRule(candidates: readonly string[], appetite: VarietyAppetite = "default"): string {
+	const allowance = MAX_NEW_PER_PLAN[appetite];
 	const introduction =
 		candidates.length === 0
 			? "There is nothing in the catalogue this user has not already logged, so introduce nothing: set is_new false on every exercise."
-			: `You may include AT MOST ONE exercise the user has never logged. Choose it from this list and from nowhere else — ${candidates.join(
-					", "
-				)} — set is_new true on exactly that one, and put the reason in its note in one line ("your calves have had nothing in three weeks"). Every other exercise has is_new false. Introducing nothing is a perfectly good answer; introducing two is not.`;
+			: appetite === "wants"
+				? `This user has ASKED to be shown new movements. Include UP TO ${allowance} exercises they have never logged — two is a good answer on most days — chosen from this list and from nowhere else: ${candidates.join(
+						", "
+					)}. Set is_new true on each one and put the reason in its note in one line ("your calves have had nothing in three weeks"). Every other exercise has is_new false. Never introduce more than ${allowance}: a session built mostly of movements they have never done is one they cannot load with any confidence.`
+				: `You may include AT MOST ONE exercise the user has never logged. Choose it from this list and from nowhere else — ${candidates.join(
+						", "
+					)} — set is_new true on exactly that one, and put the reason in its note in one line ("your calves have had nothing in three weeks"). Every other exercise has is_new false. Introducing nothing is a perfectly good answer; introducing two is not.`;
 	return `VARIETY AND INTRODUCTIONS
 - Rotate the movements, not just the muscles. A session that is the same five lifts every week is how a plan stops being read.
 - Bodyweight work belongs in the rotation on its own merits — push-ups, chin-ups, dips, planks, lunges, glute bridges — not only as a fallback when equipment is missing.
@@ -262,6 +307,19 @@ export interface CoachRules {
 	/** How long today's session is and what fits in it (migration 0014). */
 	sizing: SessionSizing;
 	prescriptions: Prescription[];
+	/**
+	 * Movements taken off today's menu because their PRIMARY muscle is still recovering
+	 * (§recoveringExercises). Computed once: the prompt's statement is written from this
+	 * list and the model's answer is enforced against the same one, so the request and the
+	 * rule cannot drift apart.
+	 */
+	off_menu: { exercise: string; muscle: string }[];
+	/**
+	 * How many never-logged movements this plan may introduce — 1 unless the user has said
+	 * they want to be shown new work (§varietyAppetite). Asked for in the prompt and capped
+	 * here, the same way the plan's size is.
+	 */
+	max_new: number;
 	nudge: NudgeSelection;
 	/** Every rule above as a line the prompt can print. Order is the order they are read in. */
 	statements: string[];
@@ -274,6 +332,12 @@ export interface BuildRulesInput {
 	equipment?: Record<string, string[]>;
 	/** `load_direction` per exercise from the catalogue, keyed the same way (migration 0013). */
 	loadDirection?: Record<string, LoadDirection>;
+	/**
+	 * What each movement is primarily for, keyed the same way. The recovery rule reads it to
+	 * take a movement off today's menu when its primary muscle is still recovering
+	 * (§recoveringExercises).
+	 */
+	primaryMuscle?: Record<string, string>;
 	/** What the user said they bring with them, when they have said anything. */
 	background?: TrainingBackground;
 	/** The profile's stated session length; null falls back to DEFAULT_SESSION_MINUTES. */
@@ -507,6 +571,59 @@ export function cardioNextMinutes(shortByMin: number, lastMinutes: number | null
 }
 
 /** "Cardio prescribed by weekly minutes vs the plan, not by yesterday." */
+/**
+ * How many cardio sessions running on one modality is a rut rather than a routine.
+ *
+ * Two is a preference; three in a row is the treadmill (user report 2026-09-03: "cardio is
+ * stuck on incline treadmill"). Only consulted when the user has ASKED for variety —
+ * following the history is the right default for everybody else, and always was.
+ */
+export const CARDIO_RUT_SESSIONS = 3;
+
+/**
+ * The cardio the user has actually been doing, most recent first, one entry per session.
+ *
+ * Equivalent minutes already normalise the credit across modalities
+ * (services/coach/cardioIntensity.ts), so rotating costs the week nothing: twenty hard
+ * minutes on a rower is worth the same as twenty hard minutes on a treadmill. That is what
+ * makes this rule safe to state as strongly as it is.
+ */
+export function recentCardioModalities(features: CoachFeatures, limit = CARDIO_RUT_SESSIONS): string[] {
+	// SESSIONS, not exercises: `features.exercises` holds one entry per movement with its
+	// sessions inside it, so three treadmill walks are one entry — and a rut counted off
+	// entries can never reach three, which is how the first version of this rule silently
+	// never fired.
+	return features.exercises
+		.filter((exercise) => exercise.category === "cardio")
+		.flatMap((exercise) => exercise.sessions.map((session) => ({ name: exercise.exercise, date: session.date })))
+		.sort((a, b) => b.date.localeCompare(a.date) || a.name.localeCompare(b.name))
+		.slice(0, limit)
+		.map((session) => session.name);
+}
+
+/**
+ * "You have done the same one three times running and you asked for variety, so pick
+ * another." Null when the user has not asked, or when there is no rut to name.
+ */
+export function cardioRotationRule(
+	features: CoachFeatures,
+	appetite: VarietyAppetite,
+	candidates: readonly string[] = []
+): string | null {
+	if (appetite !== "wants") return null;
+	const recent = recentCardioModalities(features);
+	if (recent.length < CARDIO_RUT_SESSIONS) return null;
+	// Every recent session on one modality, by the log's own matcher so "Treadmill Run" and
+	// "treadmill run" are one thing.
+	const [first, ...rest] = recent as [string, ...string[]];
+	if (!rest.every((name) => sameMovement(first, name))) return null;
+
+	const alternatives = candidates.filter((name) => !sameMovement(first, name)).slice(0, 6);
+	return `CARDIO ROTATION — the last ${recent.length} cardio sessions were all ${first}, and this user has asked for variety. Prescribe a DIFFERENT modality today${
+		alternatives.length > 0 ? `: ${alternatives.join(", ")} are all available` : ""
+	}. Equivalent minutes already price the modalities against each other, so the week's target is unaffected by the swap — do not prescribe ${first} again today unless the user asked for it in as many words.`;
+}
+
 export function cardioRule(features: CoachFeatures): CardioRule {
 	const { cardio } = features;
 	// The week in the currency the target is actually in, with the arithmetic beside it so
@@ -722,6 +839,49 @@ export function prescribeLoads(
 }
 
 /**
+ * The movements that are off today's menu because what they are FOR is still recovering
+ * (user field report 2026-09-03).
+ *
+ * The screenshot: yesterday was a pull day — deadlift 3×10 at 115, good mornings, all
+ * completed. This morning's plan targeted quads, glutes, shoulders and abs, and prescribed
+ * **deadlift and good morning again**, under 24 hours later. The recovery rule was working
+ * exactly as written and exactly as uselessly: it gated the day's stated TARGETS, and said
+ * nothing about which exercises could serve them. A plan can name any targets it likes and
+ * still be a hamstring session.
+ *
+ * So the rule extends to the exercises. An exercise whose **primary** muscle was trained
+ * inside 48 hours is off the menu, whatever target it would nominally serve. Secondary
+ * overlap stays allowed and always will — nobody squats without hamstrings, and a rule that
+ * banned incidental involvement would ban training.
+ *
+ * The primary comes from the catalogue's own ordering, with the log's first muscle group as
+ * the fallback for a movement the catalogue has never heard of. A movement with neither is
+ * not blocked: silence is not evidence.
+ */
+export function recoveringExercises(
+	features: CoachFeatures,
+	recovery: RecoveryRule,
+	primaryMuscle: Record<string, string> = {}
+): { exercise: string; muscle: string }[] {
+	const avoid = new Set(recovery.avoid_primary.map((muscle) => muscle.trim().toLowerCase()));
+	if (avoid.size === 0) return [];
+
+	return features.exercises.flatMap((exercise) => {
+		const key = exercise.exercise.trim().toLowerCase();
+		const primary = (primaryMuscle[key] ?? exercise.muscle_groups[0] ?? "").trim().toLowerCase();
+		return primary && avoid.has(primary) ? [{ exercise: exercise.exercise, muscle: primary }] : [];
+	});
+}
+
+/** The line the prompt prints about them, and the reason it names each one. */
+export function recoveringExercisesStatement(blocked: readonly { exercise: string; muscle: string }[]): string | null {
+	if (blocked.length === 0) return null;
+	return `OFF THE MENU TODAY — trained inside 48 hours, so these movements are not available whatever today's targets are: ${blocked
+		.map((item) => `${item.exercise} (${item.muscle})`)
+		.join(", ")}. Do not prescribe them, do not substitute a near-identical movement for the same primary muscle, and do not work around this by renaming them. Muscles they hit as SECONDARY work are fine.`;
+}
+
+/**
  * The stated loads, for the exercises the log has nothing on. Two deliberate choices:
  *
  *   * A restart steps the reference down only when the gap is a *measured* one. On a brand
@@ -849,6 +1009,7 @@ export function buildRules({
 	goals,
 	equipment,
 	loadDirection,
+	primaryMuscle,
 	background = NO_BACKGROUND,
 	sessionMinutes = null,
 	introductionCandidates = [],
@@ -857,21 +1018,29 @@ export function buildRules({
 	const recovery = recoveryRule(features.muscles);
 	const cardio = cardioRule(features);
 	const sizing = sessionSizing(sessionMinutes, sessionMinutes != null);
+	const blocked = recoveringExercises(features, recovery, primaryMuscle ?? {});
+	const blockedNames = new Set(blocked.map((item) => item.exercise.trim().toLowerCase()));
+	// The menu is filtered, not merely discouraged: an exercise the model cannot see the
+	// numbers for is one it is far less likely to reach for, and the statement below says
+	// out loud why it is missing. Enforcement after the answer lives in coach.ts.
 	const prescriptions = prescribeLoads(features, {
 		...(equipment ? { equipment } : {}),
 		...(loadDirection ? { loadDirection } : {}),
 		gap,
 		referenceLoads: background.reference_loads,
-	});
+	}).filter((item) => !blockedNames.has(item.exercise.trim().toLowerCase()));
+	const appetite = varietyAppetite(background);
 	const nudge = selectNudge(features, goals, background);
 
 	const statements = [
 		gap.text,
 		recovery.text,
+		recoveringExercisesStatement(blocked),
 		cardio.text,
 		sizing.text,
 		coverageRule(features.coverage ?? [], recovery.avoid_primary),
-		varietyRule(introductionCandidates),
+		cardioRotationRule(features, appetite, introductionCandidates),
+		varietyRule(introductionCandidates, appetite),
 		`Sessions: ${features.sessions_this_week} in the last 7 days${
 			features.training_days_target ? ` against a plan of ${features.training_days_target}/week` : ""
 		}.`,
@@ -881,7 +1050,7 @@ export function buildRules({
 		`Nudge: ${nudge.subject}`,
 	].filter((line): line is string => line !== null);
 
-	return { gap, recovery, cardio, sizing, prescriptions, nudge, statements };
+	return { gap, recovery, cardio, sizing, prescriptions, off_menu: blocked, max_new: MAX_NEW_PER_PLAN[appetite], nudge, statements };
 }
 
 /**

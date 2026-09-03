@@ -76,6 +76,9 @@ import type { FusionResult, PartCorrection } from '@/lib/types';
 /** The two steps. The review step is its own page: it is the thing being confirmed. */
 type Step = 'say' | 'review';
 
+/** What the sheet says when a sentence turned out to be a standing preference. */
+const STANDING_SAVED = 'Saved as a standing preference — it shapes every plan from now on.';
+
 export default function LogSheet() {
   const router = useRouter();
   const insets = useScreenInsets();
@@ -147,6 +150,8 @@ export default function LogSheet() {
   const [listening, setListening] = useState(false);
   const [transcribed, setTranscribed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Something that WORKED and is worth saying — a preference saved, and what it changes. */
+  const [notice, setNotice] = useState<string | null>(null);
 
   const analyze = useAnalyze();
   const askCoach = useAskCoach();
@@ -286,12 +291,63 @@ export default function LogSheet() {
     const line = instruction.trim();
     if (!line) return;
     setError(null);
+    setNotice(null);
     try {
+      await saveStandingPreferences(line);
+      // The plan in front of them still changes where it can: a preference about how they
+      // train applies today as much as it does next Tuesday.
       await askCoach.mutateAsync({ revision: line, mode: 'append' });
       router.back();
     } catch (caught) {
-      setError(readerLine(caught, 'Could not adjust the plan.'));
+      // A sentence that was SAVED is not a failure, whatever the adjust made of it. The
+      // field report is the case where both halves went wrong at once: the words were a
+      // standing preference, the adjust had nothing to append them to, and the screen said
+      // "Could not adjust the plan." — so the preference looked lost as well.
+      if (savedStanding.current) {
+        setNotice(STANDING_SAVED);
+        setError(null);
+        return;
+      }
+      setError(
+        readerLine(caught, 'Could not adjust the plan. Try naming what to add — "add some core", "make it shorter".'),
+      );
     }
+  };
+
+  /**
+   * The half of a sentence that is not about today (user field report 2026-09-03).
+   *
+   * The user typed "I want variety — rotate my cardio, keep introducing me to new
+   * exercises" into *Adjust the plan* and got "Could not adjust the plan." It is a standing
+   * preference, not a change to one session: the adjust endpoint had nothing to append it
+   * to, and a dead end is what the user got for saying something perfectly sensible in the
+   * one place this app promises they can say anything.
+   *
+   * So the words are classified first, by the SAME router every other sentence goes through
+   * (concept-v2 §Principles 7 — one input surface, one reader). A statement scoped
+   * `constraint` or `preference` is standing: it is saved the way the + saves it, which is
+   * what writes it into the plan the coach reads. `coach_context` is about today and is
+   * left to the adjust itself. Mixed input does both, because the router already splits it.
+   */
+  const savedStanding = useRef(false);
+  const saveStandingPreferences = async (line: string): Promise<FusionResult[]> => {
+    savedStanding.current = false;
+    const read = await analyze.mutateAsync({ text: line, photos: [], kindHint: null });
+    const parts = read.results ?? (read.result ? [read.result] : []);
+    // The app's own union names the scope as the kind: a preference and a constraint are
+    // standing, `coach_context` is about today and belongs to the adjust itself.
+    const standing = parts.filter((part) => part.kind === 'preference' || part.kind === 'constraint');
+    if (standing.length === 0) return [];
+
+    await confirm.mutateAsync({
+      clientId: Crypto.randomUUID(),
+      results: standing,
+      text: line,
+      textKind: transcribed ? 'transcript' : 'text',
+    });
+    savedStanding.current = true;
+    setNotice(STANDING_SAVED);
+    return standing;
   };
 
   /**
@@ -321,6 +377,10 @@ export default function LogSheet() {
     const words = said.trim();
     setError(null);
     try {
+      // A preference said while asking for a session is still a preference: it is saved
+      // standing AND passed as today's context, so it shapes this plan and every later one
+      // (user field report 2026-09-03).
+      if (words) await saveStandingPreferences(words);
       // The outcome comes back from the call rather than being read off the hook: `note`
       // in this closure is the value from the render that started the generation, and
       // trusting it would close the sheet on a failure it never showed.
@@ -721,6 +781,11 @@ export default function LogSheet() {
         {error && step === 'say' ? (
           <Sub testID="log-error" style={{ marginTop: 14, color: C.accent }}>
             {error}
+          </Sub>
+        ) : null}
+        {notice && !error && step === 'say' ? (
+          <Sub testID="log-notice" style={{ marginTop: 14, color: C.good }}>
+            {notice}
           </Sub>
         ) : null}
 

@@ -83,6 +83,91 @@ half-lived today.
 
 ---
 
+## The recovery rule reaches the exercises (`wp-coach-recovery-variety`)
+
+**2026-09-03, user field report with a screenshot.** Yesterday was a pull day — deadlift
+3×10 at 115, good mornings, all completed. This morning's plan targeted quads, glutes,
+shoulders and abs, and prescribed **deadlift and good morning again**, under 24 hours later.
+
+### The mechanism
+
+`recoveryRule` was doing exactly what it says and exactly nothing more: it gated the day's
+stated **targets** (`avoid_primary`) and said nothing about which movements could serve
+them. A plan may name any targets it likes and still be a hamstring session. The exercise
+menu — "EXERCISES ON RECORD" and "PRESCRIBED LOADS" — was built from the user's history with
+no reference to recovery at all, so the deadlift was sitting there with a load on it.
+
+### The fix, in three layers
+
+- **Data**: `CatalogFacts` carries `primaryMuscle` — the catalogue's own first primary muscle
+  per movement, with the log's first muscle group as the fallback for anything uncatalogued.
+- **Menu**: `recoveringExercises` takes any movement whose PRIMARY muscle was trained inside
+  48 hours off today's menu. Its prescription is removed and a rule states it by name: *"OFF
+  THE MENU TODAY … do not substitute a near-identical movement for the same primary muscle"*.
+  **Secondary overlap stays allowed** — nobody squats without hamstrings, and a rule that
+  banned incidental involvement would ban training.
+- **Enforcement**: `dropRecovering` holds the ANSWER to the same rule and names what it
+  refused, the way the append dedupe does. A prompt is a request; this is a data rule.
+
+Two things it deliberately will not do. It **never empties a training day** — if everything
+offered is off the menu the plan stands and the note says so, because trading one broken
+plan for an empty one is not a fix. And it **never gates a line already on the plan**: an
+append promises the plan above it stays, those lines may already be ticked off against work
+the user has done, and quietly deleting a completed line would be worse than the bug.
+
+### Variety, when the user asks for it
+
+Same report, second half: *"cardio is stuck on incline treadmill"*, *"I was hoping to start
+working out new stuff; feels the same as working out on my own."*
+
+- **`varietyAppetite`** reads the user's own stated background — the field their sentence
+  lands in — and only moves off the default when the words are unambiguous. A stated
+  preference for routine wins any tie: somebody asking for both is asking for care.
+- **Novelty follows appetite**: the one-newcomer cap becomes 3 when variety was asked for,
+  still capped (a session mostly of movements you have never done is one you cannot load
+  with confidence), and `capBrief` enforces whatever the rules allow. Every newcomer keeps
+  its `is_new` chip and its info sheet.
+- **Cardio rotation**: three sessions running on one modality, with variety asked for, is a
+  rut — the prompt names it and asks for a different modality, listing candidates.
+  Equivalent minutes already price modalities against each other, so the week's target is
+  untouched by the swap. Absent a stated preference, following the history stays the default.
+
+**What the menu actually offers** (the question asked): history (`EXERCISES ON RECORD` +
+`PRESCRIBED LOADS`) **plus ten never-logged catalogue candidates**, biased to muscles the
+ledger says are owed and to entries with photographs. The pool is not starved — 166
+catalogue entries, ten offered — but until today only **one** could be taken per plan, and
+the same debt ordering surfaced the same ten names, which is what three near-identical plans
+feel like from the inside.
+
+### The preference that had nowhere to go
+
+Third report: the user typed *"I want variety — rotate my cardio… keep introducing me to new
+exercises"* into **Adjust the plan** and got *"Could not adjust the plan."* It is a standing
+preference, not a change to one session — the adjust endpoint had nothing to append it to —
+and a dead end is what they got for saying something sensible in the one place this app
+promises they can say anything.
+
+Now the words are classified first, by the same router every other sentence goes through. A
+statement scoped `preference` or `constraint` is **standing**: it is saved the way the +
+saves it (which is what writes the background the appetite rule reads), the sheet says
+*"Saved as a standing preference — it shapes every plan from now on"*, and the same words
+still go to today's plan as an append. `coach_context` is about today and is left to the
+adjust. Mixed input does both, because the router already splits it. A genuine adjust
+failure still says so — and now names what to try.
+
+**Tests** — backend 810 → 826, app 538 → 544. New: the off-menu rule (yesterday blocks,
+three days ago does not, secondary overlap never blocks, the catalogue falls back to the
+log), the appetite reader, the newcomer allowance, cardio rotation (rut named, silent
+without a stated preference, silent when already varied, silent before three), and a **live
+contract test**: deadlift and good morning yesterday → the model's plan contains neither.
+App-side: the preference-into-adjust-door saves and confirms, a day-change still routes to
+the adjust, and the generate door keeps a preference said while asking.
+
+**Two bugs my own tests caught before shipping**: the first enforcement dropped plan lines
+the user had already completed today (fixed by never gating lines already on the plan), and
+the first cardio rut counted `features.exercises` — one entry per movement — so three
+treadmill walks read as one and the rule could never fire.
+
 ## Ask for the session before it is written (`wp-plan-new-framing`)
 
 **2026-09-03, user decision.** "Generate today's workout" fired the moment it was pressed.

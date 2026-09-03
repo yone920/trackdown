@@ -100,7 +100,7 @@ describe("one row per regularly-logged exercise", () => {
 });
 
 describe("assistance is labelled as assistance", () => {
-	const catalog = { equipment: {}, loadDirection: { "assisted chin-up": "assistance" as const } };
+	const catalog = { equipment: {}, loadDirection: { "assisted chin-up": "assistance" as const }, primaryMuscle: {} };
 
 	it("says 'of assistance' and reads a drop as progress", () => {
 		const result = board(

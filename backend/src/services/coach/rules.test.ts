@@ -10,7 +10,11 @@ import {
 	DEFAULT_SESSION_MINUTES,
 	gapRule,
 	prescribeLoads,
+	recoveringExercises,
 	recoveryRule,
+	cardioRotationRule,
+	varietyAppetite,
+	MAX_NEW_PER_PLAN,
 	selectNudge,
 	sessionSizing,
 	stepFor,
@@ -340,7 +344,10 @@ describe("prescribeLoads — an assisted machine, where the load is the help", (
 
 	it("says so in the rules the prompt is handed, and only when one is in today's list", () => {
 		const withAssisted = buildRules({
-			features: featuresFor([assisted(daysAgo(1), { load: 55 }), assisted(daysAgo(8), { load: 55 })]),
+			// Three days ago, not one: a movement trained inside 48 hours is off today's menu
+			// and carries no prescription, so the ASSISTED MACHINES line would have nothing to
+			// be about (§recoveringExercises).
+			features: featuresFor([assisted(daysAgo(3), { load: 55 }), assisted(daysAgo(10), { load: 55 })]),
 			goals: [],
 			loadDirection: ASSISTED,
 		});
@@ -840,5 +847,184 @@ describe("prescribeLoads — a strength movement carrying no load", () => {
 		const item = only(prescribeLoads(featuresFor([banded(daysAgo(1))])), "Band Lateral Raise");
 		expect(item.load_lb).toBeNull();
 		expect(item.why).not.toMatch(/\blb\b/);
+	});
+});
+
+// ── the recovery rule, extended to the exercises ─────────────────────────────────────
+// User field report 2026-09-03, with a screenshot: yesterday was a pull day — deadlift
+// 3×10 at 115 and good mornings, all completed. This morning's plan targeted quads,
+// glutes, shoulders and abs, and prescribed deadlift and good morning AGAIN, under 24
+// hours later. The rule gated the day's stated TARGETS and said nothing about which
+// movements could serve them, so a plan could name any targets it liked and still be a
+// hamstring session.
+
+describe("what is off today's menu", () => {
+	const deadlift = (date: string) =>
+		activity(date, {
+			exercise: "Deadlift",
+			category: "strength",
+			muscle_groups: ["hamstrings", "lower_back"],
+			sets: 3,
+			reps: 10,
+			load_lb: 115,
+			confidence: "high",
+		});
+
+	const PRIMARIES = { deadlift: "hamstrings", "lat pulldown": "lats" };
+
+	it("takes out a movement whose primary muscle was trained yesterday", () => {
+		const features = featuresFor([deadlift(daysAgo(1))]);
+		const blocked = recoveringExercises(features, recoveryRule(features.muscles), PRIMARIES);
+		expect(blocked).toEqual([{ exercise: "Deadlift", muscle: "hamstrings" }]);
+	});
+
+	it("leaves it alone once it has recovered", () => {
+		const features = featuresFor([deadlift(daysAgo(3))]);
+		expect(recoveringExercises(features, recoveryRule(features.muscles), PRIMARIES)).toEqual([]);
+	});
+
+	// The other half of the rule, and the one that keeps it usable: you cannot squat without
+	// hamstrings, and a rule that banned incidental involvement would ban training.
+	it("does not block a movement that only touches the muscle as secondary work", () => {
+		const squat = activity(daysAgo(3), {
+			exercise: "Back Squat",
+			category: "strength",
+			// The log records the secondary involvement; the PRIMARY is what decides.
+			muscle_groups: ["quads", "hamstrings", "glutes"],
+			sets: 3,
+			reps: 5,
+			load_lb: 185,
+			confidence: "high",
+		});
+		// Quads three days ago (recovered), hamstrings yesterday (not). The squat touches
+		// hamstrings as secondary work and stays on the menu; the deadlift does not.
+		const features = featuresFor([deadlift(daysAgo(1)), squat]);
+		const blocked = recoveringExercises(features, recoveryRule(features.muscles), {
+			...PRIMARIES,
+			"back squat": "quads",
+		});
+		expect(blocked.map((item) => item.exercise)).toEqual(["Deadlift"]);
+	});
+
+	it("falls back to the log's own first muscle when the catalogue has never heard of it", () => {
+		const features = featuresFor([deadlift(daysAgo(1))]);
+		// No catalogue entry: the log said hamstrings first, and that is evidence enough.
+		expect(recoveringExercises(features, recoveryRule(features.muscles), {})).toEqual([
+			{ exercise: "Deadlift", muscle: "hamstrings" },
+		]);
+	});
+
+	it("takes the prescription off the menu and says why in the rules", () => {
+		const rules = buildRules({
+			features: featuresFor([deadlift(daysAgo(1)), deadlift(daysAgo(8))]),
+			goals: [],
+			primaryMuscle: PRIMARIES,
+		});
+
+		expect(rules.prescriptions.map((item) => item.exercise)).not.toContain("Deadlift");
+		expect(rules.off_menu).toEqual([{ exercise: "Deadlift", muscle: "hamstrings" }]);
+		const line = rules.statements.find((statement) => statement.startsWith("OFF THE MENU TODAY"));
+		expect(line).toContain("Deadlift (hamstrings)");
+		expect(line).toContain("do not substitute a near-identical movement");
+	});
+});
+
+// ── variety, when the user has asked for it ──────────────────────────────────────────
+// User report 2026-09-03: "cardio is stuck on incline treadmill", "I was hoping to start
+// working out new stuff; feels the same as working out on my own" — alongside a preference
+// typed into the app asking for variety and for new movements.
+
+describe("how much new work the user has asked for", () => {
+	const said = (background: string) => ({ experience: null, background, reference_loads: [] });
+
+	it("hears an explicit ask for variety in their own words", () => {
+		expect(varietyAppetite(said("I want variety — rotate my cardio and keep introducing me to new exercises"))).toBe("wants");
+		expect(varietyAppetite(said("mix it up please"))).toBe("wants");
+		expect(varietyAppetite(said("I get bored doing the same thing"))).toBe("wants");
+	});
+
+	it("hears a preference for routine, and never mistakes one for the other", () => {
+		expect(varietyAppetite(said("keep it simple, I like the same routine"))).toBe("steady");
+		// Both said: care wins. Somebody asking for both is asking not to be surprised.
+		expect(varietyAppetite(said("I like variety but keep it simple"))).toBe("steady");
+	});
+
+	it("assumes nothing when nothing was said", () => {
+		expect(varietyAppetite(said(""))).toBe("default");
+		expect(varietyAppetite(said("bad left knee, 45 minutes at lunch"))).toBe("default");
+	});
+
+	it("raises the newcomer allowance only for an appetite that was stated", () => {
+		expect(MAX_NEW_PER_PLAN.default).toBe(1);
+		expect(MAX_NEW_PER_PLAN.steady).toBe(1);
+		expect(MAX_NEW_PER_PLAN.wants).toBeGreaterThan(1);
+		expect(MAX_NEW_PER_PLAN.wants).toBeLessThanOrEqual(3);
+	});
+
+	it("asks the prompt for more than one introduction, and still caps it", () => {
+		const wants = varietyRule(["Kettlebell Swing", "Face Pull"], "wants");
+		expect(wants).toContain("UP TO 3");
+		expect(wants).toContain("Never introduce more than 3");
+
+		const plain = varietyRule(["Kettlebell Swing"], "default");
+		expect(plain).toContain("AT MOST ONE");
+	});
+
+	it("carries the allowance on the rules, where the cap can read it", () => {
+		const rules = buildRules({
+			features: featuresFor([lift(daysAgo(3))]),
+			goals: [],
+			background: said("keep introducing me to new movements"),
+		});
+		expect(rules.max_new).toBe(3);
+	});
+});
+
+describe("cardio that has stopped rotating", () => {
+	const walk = (date: string, exercise = "Incline Treadmill Walk") =>
+		activity(date, { exercise, category: "cardio", duration_min: 30, muscle_groups: [] });
+	const wantsVariety = { experience: null, background: "rotate my cardio please", reference_loads: [] };
+
+	it("names the rut and asks for something else, when variety was asked for", () => {
+		const features = computeFeatures({
+			facts: facts({ activities: [walk(daysAgo(1)), walk(daysAgo(3)), walk(daysAgo(5))] }),
+		});
+		const line = cardioRotationRule(features, "wants", ["Rowing Machine", "Stationary Bike"]);
+		expect(line).toContain("the last 3 cardio sessions were all Incline Treadmill Walk");
+		expect(line).toContain("Prescribe a DIFFERENT modality today");
+		expect(line).toContain("Rowing Machine");
+		// The week's arithmetic is unaffected, and the prompt says so.
+		expect(line).toContain("Equivalent minutes already price the modalities");
+	});
+
+  // Following the history is right for everybody who has not asked otherwise.
+	it("says nothing at all when no variety was asked for", () => {
+		const features = computeFeatures({
+			facts: facts({ activities: [walk(daysAgo(1)), walk(daysAgo(3)), walk(daysAgo(5))] }),
+		});
+		expect(cardioRotationRule(features, "default", ["Rowing Machine"])).toBeNull();
+		expect(cardioRotationRule(features, "steady", ["Rowing Machine"])).toBeNull();
+	});
+
+	it("says nothing when the cardio is already varied", () => {
+		const features = computeFeatures({
+			facts: facts({
+				activities: [walk(daysAgo(1)), walk(daysAgo(3), "Rowing Machine"), walk(daysAgo(5))],
+			}),
+		});
+		expect(cardioRotationRule(features, "wants", ["Stationary Bike"])).toBeNull();
+	});
+
+	it("says nothing before there is a rut to name", () => {
+		const features = computeFeatures({ facts: facts({ activities: [walk(daysAgo(1)), walk(daysAgo(3))] }) });
+		expect(cardioRotationRule(features, "wants", ["Rowing Machine"])).toBeNull();
+	});
+
+	it("puts the line in the rules the prompt is handed", () => {
+		const features = computeFeatures({
+			facts: facts({ activities: [walk(daysAgo(1)), walk(daysAgo(3)), walk(daysAgo(5))] }),
+		});
+		const rules = buildRules({ features, goals: [], background: wantsVariety, introductionCandidates: ["Rowing Machine"] });
+		expect(rules.statements.some((statement) => statement.startsWith("CARDIO ROTATION"))).toBe(true);
 	});
 });
