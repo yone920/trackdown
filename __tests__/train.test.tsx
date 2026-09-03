@@ -344,6 +344,13 @@ describe('Train — the plan and what was done, on one page', () => {
     // No plan was asked for, so the section is one card and a button — not a blank.
     await waitFor(() => expect(screen.getByTestId('coach-no-plan')).toBeTruthy());
     expect(screen.getByText("Generate today's workout")).toBeTruthy();
+
+    // User decision 2026-09-03: the button opens the ONE logger sheet in plan-new framing
+    // so the session can be shaped first. It generates nothing by itself — pressing it is
+    // a door, and the generation is on the far side of the sheet's own Generate.
+    fireEvent.press(screen.getByTestId('coach-regenerate'));
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { framing: 'plan-new' } });
+    expect(mockApi.mock.calls.map(([path]) => path)).not.toContain('/api/coach/next/regenerate');
     // The training section is on the page even with nothing in it — it is training, and
     // this tab owns training. It says so plainly rather than hiding behind a door.
     expect(screen.getByText('Nothing logged yet')).toBeTruthy();

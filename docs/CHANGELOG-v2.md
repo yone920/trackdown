@@ -83,6 +83,58 @@ half-lived today.
 
 ---
 
+## Ask for the session before it is written (`wp-plan-new-framing`)
+
+**2026-09-03, user decision.** "Generate today's workout" fired the moment it was pressed.
+Asking for a whole session is exactly the moment somebody is most likely to have something
+to say about it — *"the form opens and I can say anything, shorter or longer, or if I'm
+interested in something different, so my preferences are added for that day"* — and the only
+way to say it was to know, in advance, to make a separate trip through the +.
+
+So the button is a **door** now. It opens the ONE logger sheet in a fourth framing,
+`plan-new` (`lib/log-framing.ts`): *"What should today be?"*, a note saying the coach reads
+the log, the goals and the week and writes the session — and that anything said here shapes
+it — with the same say / type / snap affordances as every other door, and **Generate** on
+the button.
+
+**Saying nothing is the normal case, and it is first-class.** Generate on an empty box runs
+exactly the generation the old button ran: no nag, no required field, no validation. This
+app has no forms (concept-v2 §Principles 7) and a sheet that refused to proceed without
+words would be one. The box is an offer to speak; declining is a complete answer.
+
+**Where the words go.** They ride as the ask's own `context` — the field the coach route has
+always had for this ("a fact about today that the next brief should account for"), and the
+one the pre-merge coach page's little box used. The server appends it to whatever the day
+already had to say and hands it to the model as "what the user said when they asked". Not as
+a `revision`: that is an instruction about a brief the user is looking at, and there is
+nothing on the page yet to revise. One call, so a generation that fails leaves no half-saved
+preference behind.
+
+**Both doors go through it**: Train's generate button, and Home's button when there is no
+plan (with a plan Home still opens Today, unchanged). Neither generates anything by itself
+any more — a tap opens the sheet, and the generation is on the far side of a second,
+deliberate press.
+
+**The resilience machinery moved with the call, intact**: the 180-second timeout, the
+status-poll recovery when an answer is lost, the button that says "Thinking…" and cannot be
+pressed twice, and the note that means it never ends in silence. Two fixes were needed to
+keep that true from a sheet:
+
+- the pending/disabled state reads `busy` (the call **or** the recovery poll), not `asking`,
+  so a second tap during recovery cannot start a second generation;
+- `useStartWorkout.start()` now **returns** `{ ok, note }`. The sheet has to decide whether
+  to close, and `note` read from the hook is the value from the render that started the
+  generation — trusting it closed the sheet on a failure it had never shown.
+
+**Tests** — app 533 → 538. New: the framing contract for `plan-new` (title, Generate,
+a note that says both what the coach reads and that silence is allowed), the empty submit
+generating with no context written, a worded submit sending `context` and never `revision`,
+and that this door never asks the reader — it logs no meal, no set, no weigh-in. The four
+"answer that never came back" tests moved from the plan section to the sheet, where the
+generation now runs, and still hold it to polling rather than reverting, saying so in words,
+and one tap being one generation. Updated: Train's and Home's buttons are asserted as doors
+that post nothing.
+
 ## The cookie the app never asked for (`fix-native-cookie-origin`)
 
 **2026-09-03, the same lockout, second cause.** The origin fix shipped, and the user was

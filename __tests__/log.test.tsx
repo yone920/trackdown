@@ -4,6 +4,7 @@ import React from 'react';
 
 import LogSheet from '@/app/log';
 import { ApiError } from '@/lib/api';
+import { RECOVERY_DELAYS_MS } from '@/lib/coach-recovery';
 import { keyboardPadding } from '@/lib/keyboard';
 import type { ActivityItem, FusionResult } from '@/lib/types';
 
@@ -647,5 +648,220 @@ describe('when the reader fails', () => {
   it("keeps our own server's sentence about the request", async () => {
     await submitAnd(failure(422, 'Could not understand that.'));
     expect(await screen.findByText('Could not understand that.')).toBeTruthy();
+  });
+});
+
+// ── generating a session, with or without a word about it ────────────────────────────
+//
+// User decision 2026-09-03: "Generate today's workout" opens this sheet instead of firing.
+// "The form opens and I can say anything — shorter or longer, or if I'm interested in
+// something different — so my preferences are added for that day."
+//
+// The law it must not break is the one that made this app: **no forms**. The box is an
+// offer to speak, so pressing Generate with nothing in it is a complete, first-class
+// answer — it runs exactly the generation the button used to run, with no nag and no
+// required field.
+
+describe('the plan-new door', () => {
+  /** What the sheet needs to answer while it generates. */
+  function serveGeneration(): { path: string; body?: Record<string, unknown> }[] {
+    const calls: { path: string; body?: Record<string, unknown> }[] = [];
+    mockApi.mockImplementation((path: string, options?: { body?: Record<string, unknown> }) => {
+      calls.push({ path, ...(options ?? {}) });
+      if (path === '/api/coach/next/regenerate') return Promise.resolve({ brief: { headline: 'Pull day' } });
+      if (path === '/api/log/confirm') return Promise.resolve({ coach_context: { date: '2026-09-03', text: 'x' } });
+      return Promise.resolve(null);
+    });
+    return calls;
+  }
+
+  it('offers Generate on an empty box, and says nothing about needing words', async () => {
+    mockParams = { framing: 'plan-new' };
+    serveGeneration();
+    renderSheet();
+
+    expect(screen.getByText('What should today be?')).toBeTruthy();
+    expect(screen.getByTestId('log-framing-note').props.children).toMatch(/say nothing/i);
+    // Enabled with an empty box: this is the normal way to use it.
+    expect(screen.getByTestId('log-submit').props.accessibilityState?.disabled).toBeFalsy();
+  });
+
+  it('generates the plain session when nothing is said', async () => {
+    mockParams = { framing: 'plan-new' };
+    const calls = serveGeneration();
+    renderSheet();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+
+    // The generation ran…
+    expect(calls.some((call) => call.path === '/api/coach/next/regenerate')).toBe(true);
+    // …and nothing was written as context, because nothing was said.
+    expect(calls.some((call) => call.path === '/api/log/confirm')).toBe(false);
+    expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('sends what was said as the ask’s own context, in one call', async () => {
+    mockParams = { framing: 'plan-new' };
+    const calls = serveGeneration();
+    renderSheet();
+
+    fireEvent.changeText(screen.getByTestId('log-text'), 'only 30 minutes and my knee is sore');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+
+    const ask = calls.find((call) => call.path === '/api/coach/next/regenerate');
+    expect(ask).toBeTruthy();
+    // `context` — "a fact about today the next brief should account for" — and never
+    // `revision`, which is an instruction about a brief that does not exist yet.
+    expect(ask!.body!.context).toBe('only 30 minutes and my knee is sore');
+    expect(ask!.body!.revision).toBeNull();
+    // One call: a generation that fails leaves no half-saved preference behind.
+    expect(calls.filter((call) => call.path === '/api/log/confirm')).toHaveLength(0);
+    expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('does not log a record — this door writes no meal, no set, no weigh-in', async () => {
+    mockParams = { framing: 'plan-new' };
+    const calls = serveGeneration();
+    renderSheet();
+
+    fireEvent.changeText(screen.getByTestId('log-text'), 'something with the bands');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+
+    // The reader is never asked: this is not a log, and the words are not a record.
+    expect(mockUpload).not.toHaveBeenCalled();
+    expect(calls.some((call) => call.path === '/api/log/analyze')).toBe(false);
+  });
+});
+
+// ── the answer that never came back ──────────────────────────────────────────────────
+// Field report 2026-09-02: the user asked for a session, watched "Thinking…", and watched
+// the page revert to "Nothing planned yet" — while a five-item brief sat finished on the
+// server. A model call over a phone connection outran the platform's 60-second fetch
+// ceiling, the promise rejected, and the screen said nothing at all.
+//
+// The recovery that answers that lives in `useStartWorkout`, and since 2026-09-03 the
+// generation runs from THIS sheet — so this is where the machinery is held to its promises:
+// it polls rather than reverting, it never ends in silence, and one tap is one generation.
+
+describe('a generation whose answer is lost', () => {
+  const lost = () => Object.assign(new Error('Network request failed'), { name: 'TypeError' });
+
+  /** The generate call drops; then the server admits it has a plan after all. */
+  function serveLostAnswer({ everFinds = true }: { everFinds?: boolean } = {}) {
+    let found = false;
+    mockApi.mockImplementation((path: string, options?: { method?: string }) => {
+      if (path === '/api/coach/next/regenerate' && options?.method === 'POST') {
+        // The generation succeeds server-side; the ANSWER is what is lost.
+        found = everFinds;
+        return Promise.reject(lost());
+      }
+      if (path === '/api/coach/status') {
+        return Promise.resolve({ date: '2026-08-30', has_plan: found, done_count: 0, total_count: found ? 5 : 0, complete: false });
+      }
+      return Promise.resolve(null);
+    });
+  }
+
+  const asks = () =>
+    mockApi.mock.calls.filter(([path, options]) => path === '/api/coach/next/regenerate' && options?.method === 'POST');
+
+  afterEach(() => jest.useRealTimers());
+
+  /** Let the sheet settle before freezing the clock, or the press lands on a dead button. */
+  async function settleThenFreeze() {
+    mockParams = { framing: 'plan-new' };
+    renderSheet();
+    await act(async () => {});
+    jest.useFakeTimers();
+  }
+
+  it('polls for the plan instead of giving up, and closes when it turns up', async () => {
+    serveLostAnswer();
+    await settleThenFreeze();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+
+    // The poll took over rather than the sheet reverting or closing on nothing.
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2_000);
+    });
+    expect(mockApi.mock.calls.some(([path]) => path === '/api/coach/status')).toBe(true);
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(2_000);
+    });
+    // The plan the server had all along was found, so the sheet gets out of the way.
+    expect(mockBack).toHaveBeenCalled();
+    // Exactly one generation was ever asked for.
+    expect(asks()).toHaveLength(1);
+  });
+
+  it('never ends in silence: it says so in words, and the sheet stays open', async () => {
+    serveLostAnswer({ everFinds: false });
+    await settleThenFreeze();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+    // Each wait is created after the previous one resolves, so the clock has to be advanced
+    // with the microtasks flushed between — one big jump only ever fires the first sleep.
+    for (const ms of RECOVERY_DELAYS_MS) {
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(ms);
+      });
+    }
+    await act(async () => {});
+
+    const said = screen.getByTestId('log-error');
+    expect(said).toHaveTextContent(/didn’t come back/);
+    expect(said).toHaveTextContent(/may still be being written/);
+    // It never claims the plan failed, because it does not know that.
+    expect(said).not.toHaveTextContent(/failed/i);
+    // The sheet is still here, with the words still in it, so nothing was lost.
+    expect(mockBack).not.toHaveBeenCalled();
+  });
+
+  it('will not let a second tap start a second generation while the first is in flight', async () => {
+    serveLostAnswer();
+    await settleThenFreeze();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+    expect(asks()).toHaveLength(1);
+  });
+
+  it('says a refusal plainly rather than polling for a plan nobody is writing', async () => {
+    // A 503 is an answer. Only a LOST answer is worth waiting on.
+    mockApi.mockImplementation((path: string, options?: { method?: string }) => {
+      if (path === '/api/coach/next/regenerate' && options?.method === 'POST') {
+        return Promise.reject(new ApiError(503, 'The reader is down right now.', undefined, 'reader_unavailable'));
+      }
+      return Promise.resolve(null);
+    });
+    await settleThenFreeze();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+    await act(async () => {});
+
+    expect(screen.getByTestId('log-error')).toHaveTextContent(
+      'The reader is down right now. Your words are kept — try again in a bit.',
+    );
+    expect(mockApi.mock.calls.some(([path]) => path === '/api/coach/status')).toBe(false);
+    expect(mockBack).not.toHaveBeenCalled();
   });
 });

@@ -110,7 +110,10 @@ describe('Home', () => {
     expect(asked).not.toContain('/api/coach/next/regenerate');
   });
 
-  it('invites you to start when there is no plan, and only opens Today', async () => {
+  // User decision 2026-09-03: the invitation opens the ONE logger sheet in plan-new
+  // framing, so a session can be shaped before it is written. It still generates nothing
+  // by itself — the generation is on the far side of the sheet's own Generate button.
+  it('invites you to shape today when there is no plan, and generates nothing', async () => {
     serve();
     renderHome();
 
@@ -118,7 +121,7 @@ describe('Home', () => {
     expect(screen.queryByTestId('home-today-sub')).toBeNull();
 
     fireEvent.press(screen.getByTestId('home-today'));
-    expect(mockPush).toHaveBeenCalledWith('/train');
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { framing: 'plan-new' } });
     expect(mockApi.mock.calls.map(([path]) => path)).not.toContain('/api/coach/next/regenerate');
   });
 
@@ -325,7 +328,9 @@ describe('Home — the whole day', () => {
     serve({ coach: noPlan({ has_plan: true, done_count: 2, total_count: 6 }), day: makeDay() });
     renderHome();
 
-    await waitFor(() => expect(screen.getByTestId('home-today')).toBeTruthy());
+    // Wait for the STATUS, not just the button: with a plan the button is a door to Today,
+    // and before the status lands it is the invitation instead.
+    await waitFor(() => expect(screen.getByTestId('home-today-sub')).toBeTruthy());
     fireEvent.press(screen.getByTestId('home-today'));
     expect(mockPush).toHaveBeenCalledWith('/train');
 

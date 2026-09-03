@@ -30,7 +30,15 @@ import { copyFor, framingOf } from '@/lib/log-framing';
 import { composeMaxHeight, footerLift, keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
 import { MAX_PHOTOS, pickPhotos, takePhoto, type LocalPhoto } from '@/lib/photos';
 import { getSpeech } from '@/lib/ports/speech';
-import { useAnalyze, useAskCoach, useConfirm, useDayLog, usePatchRecord, useSplitRecord } from '@/lib/queries';
+import {
+  useAnalyze,
+  useAskCoach,
+  useConfirm,
+  useDayLog,
+  usePatchRecord,
+  useSplitRecord,
+  useStartWorkout,
+} from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
 import type { FusionResult, PartCorrection } from '@/lib/types';
@@ -93,6 +101,13 @@ export default function LogSheet() {
   const framing = framingOf(params.framing);
   const copy = copyFor(framing);
   const adjustingPlan = framing === 'plan';
+  /**
+   * The plan that does not exist yet (user decision 2026-09-03). "Generate today's workout"
+   * opens this sheet instead of firing, so a session can be shaped before it is written —
+   * and **an empty submission is the normal one**: Generate with nothing typed runs exactly
+   * the generation the button always ran.
+   */
+  const generatingPlan = framing === 'plan-new';
   const editId = typeof params.editId === 'string' ? params.editId : null;
   const editKind = (typeof params.editKind === 'string' ? params.editKind : null) as EditKind | null;
   const editDate = typeof params.editDate === 'string' ? params.editDate : '';
@@ -136,6 +151,9 @@ export default function LogSheet() {
   const analyze = useAnalyze();
   const askCoach = useAskCoach();
   const confirm = useConfirm();
+  // The same generator the Train tab uses, with the same recovery around it: this sheet is
+  // a door to it now, not a second implementation of it (user decision 2026-09-03).
+  const startWorkout = useStartWorkout();
   const patch = usePatchRecord();
   const split = useSplitRecord();
   const keyboard = useKeyboardHeight();
@@ -276,11 +294,54 @@ export default function LogSheet() {
     }
   };
 
+  /**
+   * The words that shape a session that has not been written yet, and then the writing of
+   * it (user decision 2026-09-03).
+   *
+   * They ride as the ask's own CONTEXT — the field the coach route has always had for
+   * exactly this ("a fact about today that the next brief should account for", backend
+   * routes/coach.ts), which the pre-merge coach page used for its one-line box. The server
+   * appends it to whatever the day already had to say and hands the lot to the model as
+   * "what the user said when they asked" (services/coach/prompt.ts).
+   *
+   * NOT a revision: a revision is an instruction about a brief the user is looking at, and
+   * there is nothing on the page yet to revise. And not a separate save-then-ask either —
+   * one call cannot half-succeed, so a generation that fails leaves no orphan behind.
+   *
+   * With nothing said this is one call and no ceremony, which is the point: the sheet is an
+   * offer to speak, and declining is a first-class answer.
+   *
+   * The generation runs from HERE, through `useStartWorkout`, so it keeps everything that
+   * makes it survivable: the long timeout, the status poll when an answer is lost, the
+   * button that says "Thinking…" and cannot be pressed twice, and a note when it fails
+   * (lib/queries.ts §useStartWorkout). The sheet stays open until it lands — closing early
+   * would take the recovery down with it.
+   */
+  const runGeneratePlan = async (said: string) => {
+    const words = said.trim();
+    setError(null);
+    try {
+      // The outcome comes back from the call rather than being read off the hook: `note`
+      // in this closure is the value from the render that started the generation, and
+      // trusting it would close the sheet on a failure it never showed.
+      const { ok, note } = await startWorkout.start(words ? { context: words } : {});
+      if (!ok) {
+        setError(note ?? GENERIC_MESSAGE);
+        return;
+      }
+      router.back();
+    } catch (caught) {
+      setError(readerLine(caught, 'Could not write today’s session.'));
+    }
+  };
+
   /** Log, or Change it: the same button, doing the thing the step is for. */
   const submit = () => {
     if (revising) void runRevise(text);
     // Words about the plan go to the coach; a photo is context and goes the usual way.
     else if (adjustingPlan && photos.length === 0) void runAdjustPlan(text);
+    // Same rule for a plan that does not exist yet, and the empty box is allowed through.
+    else if (generatingPlan && photos.length === 0) void runGeneratePlan(text);
     else void runAnalyze(text, photos);
   };
 
@@ -400,7 +461,14 @@ export default function LogSheet() {
     });
   };
 
-  const canSubmit = (text.trim().length > 0 || (!revising && photos.length > 0)) && !analyze.isPending;
+  // Generating a plan is the one submission that needs nothing in the box: saying nothing
+  // is how most people will use it (lib/log-framing.ts §plan-new).
+  const canSubmit =
+    (generatingPlan || text.trim().length > 0 || (!revising && photos.length > 0)) &&
+    !analyze.isPending &&
+    // `busy`, not `asking`: the poll that recovers a lost answer is still the same
+    // generation, and a second tap during it would start a second one (lib/queries.ts).
+    !startWorkout.busy;
   /** The parts that are records rather than questions — what "Log it" would write. */
   const savable = results.filter((result) => result.kind !== 'unclear');
   const busy = confirm.isPending || patch.isPending;
@@ -434,8 +502,14 @@ export default function LogSheet() {
       ? {
           testID: 'log-submit',
           label: revising ? 'Change it' : (copy.submit ?? 'Log'),
-          pendingLabel: revising ? 'Changing…' : adjustingPlan ? 'Adjusting…' : 'Reading…',
-          pending: analyze.isPending || askCoach.isPending,
+          pendingLabel: revising
+            ? 'Changing…'
+            : adjustingPlan
+              ? 'Adjusting…'
+              : generatingPlan
+                ? 'Thinking…'
+                : 'Reading…',
+          pending: analyze.isPending || askCoach.isPending || startWorkout.busy,
           disabled: !canSubmit,
           onPress: submit,
         }
@@ -644,7 +718,11 @@ export default function LogSheet() {
           </Card>
         ) : null}
 
-        {error && step === 'say' ? <Sub style={{ marginTop: 14, color: C.accent }}>{error}</Sub> : null}
+        {error && step === 'say' ? (
+          <Sub testID="log-error" style={{ marginTop: 14, color: C.accent }}>
+            {error}
+          </Sub>
+        ) : null}
 
         {/* The question, on the say-it step, where the answer to it is typed. */}
         {step === 'say'
@@ -675,7 +753,11 @@ export default function LogSheet() {
               />
             ))}
 
-            {error ? <Sub style={{ marginTop: 14, color: C.accent }}>{error}</Sub> : null}
+            {error ? (
+              <Sub testID="log-error-review" style={{ marginTop: 14, color: C.accent }}>
+                {error}
+              </Sub>
+            ) : null}
 
             <Body style={{ marginTop: 16, color: C.mute, fontSize: 13, lineHeight: 19 }}>
               Nothing to type: tell me what is wrong and I will read it again.

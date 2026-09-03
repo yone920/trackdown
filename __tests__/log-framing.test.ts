@@ -50,6 +50,21 @@ describe('the copy each door opens with', () => {
     expect(copy.note).toMatch(/does not log anything you did/);
   });
 
+  // User decision 2026-09-03: "Generate today's workout" opens the sheet instead of firing,
+  // so a session can be shaped before it is written.
+  it('opens the new-plan door on an offer to speak, never a demand', () => {
+    const copy = copyFor('plan-new');
+    expect(copy.title).toBe('What should today be?');
+    expect(copy.submit).toBe('Generate');
+    // The note has to say both halves: what the coach reads by itself, and that saying
+    // nothing is a complete answer.
+    expect(copy.note).toMatch(/log|goals|week/i);
+    expect(copy.note).toMatch(/say nothing/i);
+    expect(copy.hint).toMatch(/say nothing/i);
+    // It is not the adjust door: there is no plan yet to adjust.
+    expect(copy.title).not.toBe(copyFor('plan').title);
+  });
+
   it('gives every framing a title, a placeholder and a hint', () => {
     for (const framing of FRAMINGS) {
       const copy = copyFor(framing);
@@ -63,6 +78,7 @@ describe('the copy each door opens with', () => {
     // The plan door does not write a log, so its verb differs. Everything else does, and
     // borrowing a different verb for the same act would be the words drifting from the deed.
     expect(copyFor('plan').submit).toBeTruthy();
+    expect(copyFor('plan-new').submit).toBe('Generate');
     expect(copyFor('default').submit).toBeNull();
     expect(copyFor('about-you').submit).toBeNull();
   });
