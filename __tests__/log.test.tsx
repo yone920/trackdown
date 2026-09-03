@@ -664,14 +664,17 @@ describe('when the reader fails', () => {
 
 describe('the plan-new door', () => {
   /** What the sheet needs to answer while it generates. */
-  function serveGeneration(): { path: string; body?: Record<string, unknown> }[] {
+  function serveGeneration(read: FusionResult[] = []): { path: string; body?: Record<string, unknown> }[] {
     const calls: { path: string; body?: Record<string, unknown> }[] = [];
     mockApi.mockImplementation((path: string, options?: { body?: Record<string, unknown> }) => {
       calls.push({ path, ...(options ?? {}) });
       if (path === '/api/coach/next/regenerate') return Promise.resolve({ brief: { headline: 'Pull day' } });
-      if (path === '/api/log/confirm') return Promise.resolve({ coach_context: { date: '2026-09-03', text: 'x' } });
+      if (path === '/api/log/confirm') return Promise.resolve({ ok: true });
       return Promise.resolve(null);
     });
+    // Words are classified before they are used, so a standing preference said while asking
+    // for a session is kept as one (app/log.tsx §saveStandingPreferences).
+    mockUpload.mockResolvedValue(analyzed(read));
     return calls;
   }
 
@@ -718,14 +721,18 @@ describe('the plan-new door', () => {
     // `revision`, which is an instruction about a brief that does not exist yet.
     expect(ask!.body!.context).toBe('only 30 minutes and my knee is sore');
     expect(ask!.body!.revision).toBeNull();
-    // One call: a generation that fails leaves no half-saved preference behind.
+    // Nothing was saved as standing: "only 30 minutes" is about today, and the reader said
+    // so by classifying it as nothing standing.
     expect(calls.filter((call) => call.path === '/api/log/confirm')).toHaveLength(0);
     expect(mockBack).toHaveBeenCalled();
   });
 
-  it('does not log a record — this door writes no meal, no set, no weigh-in', async () => {
+  it('writes no meal, no set and no weigh-in — this door logs nothing', async () => {
     mockParams = { framing: 'plan-new' };
-    const calls = serveGeneration();
+    // The reader classifies a meal out of the words; the generate door must not save it.
+    const calls = serveGeneration([
+      { kind: 'meal', description: 'eggs', kcal: 200, protein_g: 12, carbs_g: 2, fat_g: 14, fiber_g: 0, items: [], meal_type: null, confidence: 'high', sources: {}, consistency: null } as unknown as FusionResult,
+    ]);
     renderSheet();
 
     fireEvent.changeText(screen.getByTestId('log-text'), 'something with the bands');
@@ -733,9 +740,31 @@ describe('the plan-new door', () => {
       fireEvent.press(screen.getByTestId('log-submit'));
     });
 
-    // The reader is never asked: this is not a log, and the words are not a record.
-    expect(mockUpload).not.toHaveBeenCalled();
-    expect(calls.some((call) => call.path === '/api/log/analyze')).toBe(false);
+    // Only standing preferences are saved from this door; a record is not one.
+    expect(calls.some((call) => call.path === '/api/log/confirm')).toBe(false);
+    expect(calls.some((call) => call.path === '/api/coach/next/regenerate')).toBe(true);
+  });
+
+  // The other half of the field report: a preference said while asking for a session is
+  // still a preference, and it shapes every plan from now on.
+  it('keeps a standing preference said while asking, and still generates today', async () => {
+    mockParams = { framing: 'plan-new' };
+    const calls = serveGeneration([
+      { kind: 'preference', text: 'rotate my cardio and keep introducing me to new exercises' } as unknown as FusionResult,
+    ]);
+    renderSheet();
+
+    fireEvent.changeText(screen.getByTestId('log-text'), 'rotate my cardio and keep introducing me to new exercises');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+
+    const saved = calls.find((call) => call.path === '/api/log/confirm');
+    expect(saved).toBeTruthy();
+    expect((saved!.body!.results as { kind: string }[])[0]!.kind).toBe('preference');
+    // And today still gets it, as the ask's own context.
+    const ask = calls.find((call) => call.path === '/api/coach/next/regenerate');
+    expect(ask!.body!.context).toContain('rotate my cardio');
   });
 });
 
@@ -863,5 +892,108 @@ describe('a generation whose answer is lost', () => {
     );
     expect(mockApi.mock.calls.some(([path]) => path === '/api/coach/status')).toBe(false);
     expect(mockBack).not.toHaveBeenCalled();
+  });
+});
+
+// ── the preference typed into the adjust door ────────────────────────────────────────
+// Field report 2026-09-03, with a screenshot: the user typed "I want variety — rotate my
+// cardio... keep introducing me to new exercises" into *Adjust the plan* and got "Could
+// not adjust the plan." It is a standing preference, not a change to one session — the
+// adjust endpoint had nothing to append it to — and a dead end is what they got for saying
+// something sensible in the one place this app promises they can say anything.
+
+describe('the adjust door', () => {
+  function serveAdjust(read: FusionResult[], { adjustFails = false } = {}) {
+    const calls: { path: string; body?: Record<string, unknown> }[] = [];
+    mockApi.mockImplementation((path: string, options?: { body?: Record<string, unknown> }) => {
+      calls.push({ path, ...(options ?? {}) });
+      if (path === '/api/coach/next/regenerate') {
+        return adjustFails
+          ? Promise.reject(new ApiError(422, 'Nothing to adjust.'))
+          : Promise.resolve({ brief: { headline: 'Pull day' } });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    mockUpload.mockResolvedValue(analyzed(read));
+    return calls;
+  }
+
+  const PREFERENCE = [
+    { kind: 'preference', text: 'rotate my cardio and keep introducing me to new exercises' } as unknown as FusionResult,
+  ];
+
+  async function adjust(said: string) {
+    mockParams = { framing: 'plan' };
+    renderSheet();
+    fireEvent.changeText(screen.getByTestId('log-text'), said);
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+  }
+
+  it('saves a standing preference and says what it changed, instead of a dead end', async () => {
+    // The adjust itself fails, exactly as it did in the report: there is nothing on today's
+    // plan for "rotate my cardio" to append to.
+    const calls = serveAdjust(PREFERENCE, { adjustFails: true });
+    await adjust('I want variety — rotate my cardio, keep introducing me to new exercises');
+
+    const saved = calls.find((call) => call.path === '/api/log/confirm');
+    expect(saved).toBeTruthy();
+    expect((saved!.body!.results as { kind: string }[])[0]!.kind).toBe('preference');
+
+    // What the user sees is what happened, not what failed.
+    expect(await screen.findByTestId('log-notice')).toHaveTextContent(
+      'Saved as a standing preference — it shapes every plan from now on.',
+    );
+    expect(screen.queryByTestId('log-error')).toBeNull();
+  });
+
+  it('still adjusts today when the plan can take it', async () => {
+    const calls = serveAdjust(PREFERENCE);
+    await adjust('rotate my cardio');
+
+    // Both halves: saved standing, and today's plan asked to take it as an append.
+    expect(calls.some((call) => call.path === '/api/log/confirm')).toBe(true);
+    const ask = calls.find((call) => call.path === '/api/coach/next/regenerate');
+    expect(ask!.body).toMatchObject({ revision: 'rotate my cardio', mode: 'append' });
+    expect(mockBack).toHaveBeenCalled();
+  });
+
+  // A plain day-change is not a preference and must not become one.
+  it('leaves a change about today to the adjust, saving nothing standing', async () => {
+    const calls = serveAdjust([
+      { kind: 'coach_context', text: 'only 30 minutes today' } as unknown as FusionResult,
+    ]);
+    await adjust('only 30 minutes today');
+
+    expect(calls.some((call) => call.path === '/api/log/confirm')).toBe(false);
+    const ask = calls.find((call) => call.path === '/api/coach/next/regenerate');
+    expect(ask!.body).toMatchObject({ revision: 'only 30 minutes today', mode: 'append' });
+  });
+
+  it('shows our own 4xx sentence when the server wrote one', async () => {
+    // "Nothing to adjust." is this server's own words about the request, and those are
+    // still shown (lib/errors.ts): the policy replaces machine prose, not plain English.
+    serveAdjust([{ kind: 'coach_context', text: 'add some core' } as unknown as FusionResult], { adjustFails: true });
+    await adjust('add some core');
+    expect(await screen.findByTestId('log-error')).toHaveTextContent('Nothing to adjust.');
+  });
+
+  it('names a way forward when the failure says nothing usable', async () => {
+    const calls: { path: string }[] = [];
+    mockApi.mockImplementation((path: string) => {
+      calls.push({ path });
+      // A network throw: no code, no status, nothing the policy table can speak to — which
+      // is where the caller's own sentence is the one the user gets.
+      if (path === '/api/coach/next/regenerate') return Promise.reject(new Error('Network request failed'));
+      return Promise.resolve({ ok: true });
+    });
+    mockUpload.mockResolvedValue(analyzed([{ kind: 'coach_context', text: 'add some core' } as unknown as FusionResult]));
+    await adjust('add some core');
+
+    const said = await screen.findByTestId('log-error');
+    // A dead end that at least names the way out.
+    expect(said).toHaveTextContent(/Could not adjust the plan/);
+    expect(said).toHaveTextContent(/add some core|make it shorter/);
   });
 });

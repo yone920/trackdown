@@ -3333,10 +3333,14 @@ describe("the living plan — completion, add-ons and the live Eat card", () => 
 			workout: {
 				type: "strength",
 				targets: ["back"],
+				// Legs, deliberately: this suite logged a Lat Pulldown earlier today, and a
+				// movement whose primary muscle was trained inside 48 hours is off today's
+				// menu now (services/coach/rules.ts §recoveringExercises). This test is about
+				// the is_new cap, so it uses movements the recovery rule has no opinion on.
 				exercises: [
-					{ name: "Lat Pulldown", load_lb: 110, sets: 3, reps: 10, minutes: null, note: null, is_new: true },
-					{ name: "Face Pull", load_lb: 40, sets: 3, reps: 15, minutes: null, note: null, is_new: true },
-					{ name: "Overhead Press", load_lb: 65, sets: 3, reps: 8, minutes: null, note: null, is_new: true },
+					{ name: "Leg Press", load_lb: 200, sets: 3, reps: 10, minutes: null, note: null, is_new: true },
+					{ name: "Leg Curl", load_lb: 60, sets: 3, reps: 12, minutes: null, note: null, is_new: true },
+					{ name: "Standing Calf Raise", load_lb: 90, sets: 3, reps: 15, minutes: null, note: null, is_new: true },
 				],
 				finisher: [],
 			},
@@ -3962,7 +3966,10 @@ describe("training background — what the user brings with them", () => {
 				load_lb: 175,
 				kcal: 110,
 				confidence: "high",
-				logged_at: localInstant(addDays(today, -1), "18:00", tz),
+				// Three days back, not one: a movement trained inside 48 hours is off today's
+				// menu and carries no prescription, which is a different rule from the one
+				// this test is about (services/coach/rules.ts §recoveringExercises).
+				logged_at: localInstant(addDays(today, -3), "18:00", tz),
 			});
 		coachLlm.nextOutput = READING;
 		await request(app).post("/api/coach/next/regenerate").set(headers).send({ tz_offset_min: tz });
@@ -4102,7 +4109,7 @@ describe("the exercise sheet", () => {
 
 		// The finisher's stretches are catalogued now (2026-09-01), so give one of them the
 		// two frames the import would have downloaded and leave the other uncatalogued.
-		await db.pool.query(`UPDATE exercise_catalog SET media_count = 2 WHERE name = 'Chest Stretch'`);
+		await db.pool.query(`UPDATE exercise_catalog SET media_count = 2 WHERE name IN ('Chest Stretch', 'Lat Pulldown')`);
 		coach.nextBrief = {
 			...SAMPLE_BRIEF,
 			workout: {
@@ -4123,12 +4130,15 @@ describe("the exercise sheet", () => {
 			.send({ tz_offset_min: tz, context: "media counts please" });
 		expect(plan.status).toBe(200);
 		const planned = plan.body.brief.workout.exercises;
-		expect(planned[0]).toMatchObject({ name: "Bench Press", exercise_id: bench.id, media_count: 2 });
-		// Lat Pulldown and Overhead Press are catalogued but were never imported here, so
-		// they resolve to an id and to no pictures — which is exactly the distinction the
-		// glyph is drawn from.
-		expect(planned[1]).toMatchObject({ name: "Lat Pulldown", media_count: 0 });
-		expect(planned[1].exercise_id).toMatch(/^[0-9a-f-]{36}$/);
+		// Bench Press was trained this morning, so it is off today's menu and the plan does
+		// not carry it (services/coach/rules.ts §recoveringExercises) — the media plumbing is
+		// the same on every line, so it is read off the lines that survive.
+		expect(planned.map((e: { name: string }) => e.name)).not.toContain("Bench Press");
+		expect(planned[0]).toMatchObject({ name: "Lat Pulldown", media_count: 2 });
+		expect(planned[0].exercise_id).toMatch(/^[0-9a-f-]{36}$/);
+		// Overhead Press is catalogued but was never imported here, so it resolves to an id
+		// and to no pictures — exactly the distinction the glyph is drawn from.
+		expect(planned[1]).toMatchObject({ name: "Overhead Press", media_count: 0 });
 
 		// The finisher is resolved on the same lookup. "Doorway Chest Stretch" is an alias of
 		// the seeded Chest Stretch, so it gets an id and its pictures; "Shake It Out" is not
@@ -4431,8 +4441,26 @@ describe("a qualifier the catalogue must not drop", () => {
 	});
 
 	it("tells the coach the load is help, not resistance", async () => {
+		// Its own account: the sibling test above logs an assisted chin-up TODAY, and a
+		// movement trained inside 48 hours is off today's menu — so it carries no
+		// prescription and the ASSISTED MACHINES line has nothing to be about. Here it was
+		// trained three days ago, which is what that line exists for.
+		const token = await signUp("assisted-prompt@example.com");
+		const own = { Authorization: `Bearer ${token}` };
+		await request(app)
+			.post("/api/entries/movement")
+			.set(own)
+			.send({
+				description: "assisted chin-up at 50 lb",
+				exercise: "assisted chin up",
+				load_lb: 50,
+				sets: 3,
+				reps: 8,
+				kcal: 40,
+				logged_at: localInstant(addDays(localDay(new Date(), 0).date, -3), "18:00", 0),
+			});
 		coachLlm.nextOutput = READING;
-		const asked = await request(app).get(`/api/coach/next?tz=0`).set(headers);
+		const asked = await request(app).get(`/api/coach/next?tz=0`).set(own);
 		expect(asked.status).toBe(200);
 		const prompt = buildCoachPrompt(coach.inputs.at(-1)!);
 		expect(prompt).toContain("Assisted Chin-Up");

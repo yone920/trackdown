@@ -446,6 +446,7 @@ export async function loadCoachInputs(
 		goals,
 		equipment: catalogFacts.equipment,
 		loadDirection: catalogFacts.loadDirection,
+		primaryMuscle: catalogFacts.primaryMuscle,
 		background,
 		sessionMinutes: plan?.session_minutes ?? null,
 		introductionCandidates: candidates,
@@ -831,11 +832,18 @@ async function chooseBrief(
 
 	try {
 		const { brief: asked, skipped } = await askUsable(coach, inputs, revision, current);
-		const answer = capBrief(asked, inputs, { revised: revision !== undefined });
+		const capped = capBrief(asked, inputs, { revised: revision !== undefined });
+		// The recovery rule, enforced rather than requested (user field report 2026-09-03).
+		const { brief: answer, dropped } = dropRecovering(capped, inputs, current ? toBrief(current).workout.exercises : []);
 		const stored = await storeBrief(db, userId, inputs, hash, answer, coach.model);
 		// Not a failure, so not an error — but the user asked for more and got fewer items
 		// than the model offered, and is owed the reason (field report 2026-09-02).
-		return { brief: stored, inputs, stale: false, note: skippedNote(skipped) };
+		return {
+			brief: stored,
+			inputs,
+			stale: false,
+			note: [skippedNote(skipped), recoveringNote(dropped)].filter(Boolean).join(" ") || null,
+		};
 	} catch (error) {
 		// A brief the user has already read beats an error page; nothing at all is a 503,
 		// because unlike a day reading the brief *is* the answer they asked for.
@@ -920,11 +928,15 @@ export function capBrief<T extends StorableBrief>(
 	inputs: CoachBriefInputs,
 	{ revised = false }: { revised?: boolean } = {}
 ): T {
-	let seenNew = false;
+	// How many newcomers this plan may carry: one, unless the user has asked to be shown
+	// new work (services/coach/rules.ts §varietyAppetite). Over-marked movements keep their
+	// place in the plan and lose only the chip — the flag was wrong, not the exercise.
+	const allowance = Math.max(1, inputs.rules.max_new ?? 1);
+	let seenNew = 0;
 	const exercises = brief.workout.exercises.map((exercise) => {
 		if (!exercise.is_new) return exercise;
-		if (seenNew) return { ...exercise, is_new: false };
-		seenNew = true;
+		if (seenNew >= allowance) return { ...exercise, is_new: false };
+		seenNew += 1;
 		return exercise;
 	});
 	const cap = Math.max(1, inputs.rules.sizing.max_exercises);
@@ -1032,6 +1044,62 @@ export function appendToBrief(current: CoachBriefRecord, answer: RevisedBrief, c
 		nudge: current.nudge,
 	};
 	return { brief, skipped };
+}
+
+/**
+ * The recovery rule, applied to the ANSWER.
+ *
+ * The prompt asks for this and the menu no longer offers the movements — but a prompt is a
+ * request, and this is a data rule, so it is enforced here too. Same shape as the append
+ * dedupe above, and for the same reason: what the code refuses, the user is told.
+ *
+ * **It will not empty a training day.** If everything the model offered is off the menu,
+ * the plan stands and the note says so: an empty Do list is the failure `assertUsableBrief`
+ * exists to prevent, and trading one broken plan for another is not a fix. That case means
+ * the menu had nothing legal on it, which is a fact worth seeing in the note rather than
+ * hiding behind an empty page.
+ */
+export function dropRecovering<T extends StorableBrief>(
+	brief: T,
+	inputs: CoachBriefInputs,
+	/**
+	 * The plan as it already stood, when this answer is an append. Those lines are NOT
+	 * gated: *Add to today's plan* promises the plan above stays, they may already be ticked
+	 * off against work the user has done, and a rule that quietly deleted a completed line
+	 * would be a worse bug than the one this fixes. Only work the model is proposing NOW is
+	 * held to the recovery rule.
+	 */
+	keep: readonly { name: string }[] = []
+): { brief: T; dropped: { exercise: string; muscle: string }[] } {
+	const blocked = inputs.rules.off_menu ?? [];
+	if (blocked.length === 0) return { brief, dropped: [] };
+
+	const dropped: { exercise: string; muscle: string }[] = [];
+	const kept = brief.workout.exercises.filter((exercise) => {
+		if (keep.some((line) => sameMovement(line.name, exercise.name))) return true;
+		// `sameMovement` rather than a string compare, so "Deadlifts" and "Deadlift" are one
+		// movement and a qualifier that changes the movement is not swallowed (the log's own
+		// matcher, services/exerciseMatch.ts).
+		const hit = blocked.find((item) => sameMovement(item.exercise, exercise.name));
+		if (!hit) return true;
+		dropped.push({ exercise: exercise.name, muscle: hit.muscle });
+		return false;
+	});
+
+	if (dropped.length === 0) return { brief, dropped: [] };
+	if (kept.length === 0) return { brief, dropped };
+	return { brief: { ...brief, workout: { ...brief.workout, exercises: kept } }, dropped };
+}
+
+/** "Deadlift was left off: hamstrings were trained yesterday." Null when nothing was. */
+export function recoveringNote(dropped: readonly { exercise: string; muscle: string }[]): string | null {
+	if (dropped.length === 0) return null;
+	const names = [...new Set(dropped.map((item) => item.exercise))];
+	const muscles = [...new Set(dropped.map((item) => item.muscle))];
+	const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+	return `${list} ${names.length === 1 ? "was" : "were"} left off: ${muscles.join(" and ")} ${
+		muscles.length === 1 ? "was" : "were"
+	} trained inside 48 hours.`;
 }
 
 /** "Lat Pulldown and Barbell Curl are already on the plan." Null when nothing was dropped. */

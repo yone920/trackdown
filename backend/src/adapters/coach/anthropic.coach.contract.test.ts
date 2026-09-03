@@ -238,4 +238,44 @@ describe.skipIf(!apiKey)("anthropic coach brief (contract)", () => {
 		expect(`${brief.headline} ${brief.why}`.toLowerCase()).toMatch(/lat|pulldown|row|chin|back|pull|this morning|already/);
 		expect(brief.headline.toLowerCase()).not.toMatch(/^rest\b|rest day/);
 	}, 180_000);
+
+	// The field report (2026-09-03, with a screenshot): yesterday was a pull day — deadlift
+	// 3×10 at 115 and good mornings, all completed — and this morning's plan prescribed both
+	// AGAIN, under 24 hours later, while nominally targeting quads, glutes and shoulders.
+	// The rule is enforced in code now (services/coach/coach.ts §dropRecovering); this holds
+	// the PROMPT to it, because a plan that has to be repaired after the fact is a plan the
+	// user briefly saw wrong.
+	it("does not prescribe a movement whose primary muscle was trained yesterday", async () => {
+		const hinge = (exercise: string, muscles: string[], load: number) =>
+			activity(daysAgo(1), {
+				exercise,
+				category: "strength" as const,
+				muscle_groups: muscles,
+				sets: 3,
+				reps: 10,
+				load_lb: load,
+				confidence: "high" as const,
+			});
+
+		const dayFacts = facts({
+			activities: [hinge("Deadlift", ["hamstrings", "lower_back"], 115), hinge("Good Morning", ["hamstrings"], 65)],
+			weights: [weight(TODAY, 193.4)],
+			tdee: 2817,
+		});
+		const features = computeFeatures({ facts: dayFacts, trainingDaysTarget: 4 });
+		const rules = buildRules({
+			features,
+			goals: [],
+			primaryMuscle: { deadlift: "hamstrings", "good morning": "hamstrings" },
+		});
+		// The gate saw them, so the prompt is being asked the right question.
+		expect(rules.off_menu.map((item) => item.exercise).sort()).toEqual(["Deadlift", "Good Morning"]);
+
+		const brief = await coach().brief({ ...inputs(), features, rules });
+		const prescribed = brief.workout.exercises.map((exercise) => exercise.name.toLowerCase());
+		expect(prescribed).not.toContain("deadlift");
+		expect(prescribed).not.toContain("good morning");
+		// And it is not a rest day either: the rest of the body is available.
+		expect(brief.workout.exercises.length).toBeGreaterThan(0);
+	}, 90_000);
 });
