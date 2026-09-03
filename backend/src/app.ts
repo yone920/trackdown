@@ -92,13 +92,61 @@ export const UNEXPECTED_MESSAGE = "Something went wrong on our end.";
  * minor upgrade turns into an outage). Deliberately not `@better-auth/expo` either: that
  * plugin exists to trust an app-scheme Origin, and our failure is a MISSING one.
  */
-export function stripBrowserHintsFromTokenClients(req: Request, _res: Response, next: NextFunction): void {
-	if (!req.headers.cookie) {
-		delete req.headers["sec-fetch-site"];
-		delete req.headers["sec-fetch-mode"];
-		delete req.headers["sec-fetch-dest"];
-		delete req.headers["sec-fetch-user"];
+/**
+ * When an auth request is refused, say what it looked like.
+ *
+ * The TestFlight lockout cost a day mostly because nobody could see what the phone actually
+ * sent: the app showed one sentence, the server logged nothing, and the shape had to be
+ * inferred from the error string. This logs the SHAPE of any auth request the server turns
+ * away — the origin, the referer's origin, the fetch-metadata triple, whether a cookie or a
+ * bearer token was present — and nothing else. No bodies, no emails, no passwords, no
+ * tokens: none of that is a shape.
+ */
+export function logRefusedAuth(req: Request, res: Response, next: NextFunction): void {
+	res.on("finish", () => {
+		if (res.statusCode < 400) return;
+		const header = (name: string) => req.headers[name];
+		const referer = typeof req.headers.referer === "string" ? safeOrigin(req.headers.referer) : undefined;
+		console.warn(
+			`🔒 auth refused ${res.statusCode} ${req.method} ${req.path} · ` +
+				[
+					`origin=${header("origin") ?? "—"}`,
+					`referer_origin=${referer ?? "—"}`,
+					`sec-fetch=${[header("sec-fetch-site"), header("sec-fetch-mode"), header("sec-fetch-dest")].filter(Boolean).join("/") || "—"}`,
+					`cookie=${req.headers.cookie ? "yes" : "no"}`,
+					`bearer=${req.headers.authorization ? "yes" : "no"}`,
+					`ua=${String(header("user-agent") ?? "—").slice(0, 60)}`,
+				].join(" · ")
+		);
+	});
+	next();
+}
+
+/** The origin of a URL, or undefined — never the path, which can carry identifiers. */
+function safeOrigin(url: string): string | undefined {
+	try {
+		return new URL(url).origin;
+	} catch {
+		return undefined;
 	}
+}
+
+export function stripBrowserHintsFromTokenClients(req: Request, _res: Response, next: NextFunction): void {
+	if (req.headers.cookie) return next();
+
+	delete req.headers["sec-fetch-site"];
+	delete req.headers["sec-fetch-mode"];
+	delete req.headers["sec-fetch-dest"];
+	delete req.headers["sec-fetch-user"];
+
+	// A literal `Origin: null` is the same story told a second way: it is not the origin of
+	// a browser session, it is the absence of one, and Better Auth's form-CSRF path treats
+	// its mere presence as grounds to demand a real origin. On a cookie-less request there
+	// is no session to protect, so the honest reading of `null` is "no origin", which is
+	// what this makes it. (The CORS layer above has already decided such a request may
+	// proceed without being given anything to read.)
+	if (req.headers.origin === "null") delete req.headers.origin;
+
 	next();
 }
 
@@ -123,15 +171,33 @@ export function createApp({
 	// First of all, so `total` on a Server-Timing header covers the whole stack.
 	app.use(beginTiming);
 
+	// The delegate form, because the decision needs the REQUEST and not just the origin:
+	// whether it carries a cookie is what separates "a browser with a session" from "a
+	// client holding a bearer token" (see stripBrowserHintsFromTokenClients).
 	app.use(
-		cors({
-			origin: (origin, callback) => {
-				// Native apps, curl and health probes send no Origin
-				if (!origin || allowedOrigins.includes(origin)) callback(null, true);
-				else callback(new Error(`Origin ${origin} not allowed by CORS`));
-			},
-			credentials: true,
-			exposedHeaders: ["set-auth-token", "Server-Timing"],
+		cors((req, done) => {
+			const base = { credentials: true, exposedHeaders: ["set-auth-token", "Server-Timing"] };
+			const origin = req.headers.origin;
+
+			// Native apps, curl and health probes send no Origin at all.
+			if (!origin || allowedOrigins.includes(origin)) {
+				done(null, { ...base, origin: true });
+				return;
+			}
+
+			// A literal `null` origin from a client with NO COOKIE: let the request through,
+			// and give it nothing to read back. Some native stacks and sandboxed contexts
+			// send `Origin: null`, and a locked-out user is a real cost; a browser page in
+			// that state is not, because `origin: false` sends no `Access-Control-Allow-Origin`
+			// and so the browser refuses it the response anyway. A cookie-bearing `null`
+			// origin is still refused outright — that one could be a session being used from
+			// somewhere it should not be.
+			if (origin === "null" && !req.headers.cookie) {
+				done(null, { ...base, origin: false });
+				return;
+			}
+
+			done(new Error(`Origin ${origin} not allowed by CORS`));
 		})
 	);
 
@@ -150,7 +216,7 @@ export function createApp({
 	});
 
 	// Better Auth reads the raw request body itself — must be mounted before express.json
-	app.all("/api/auth/*splat", stripBrowserHintsFromTokenClients, toNodeHandler(auth));
+	app.all("/api/auth/*splat", stripBrowserHintsFromTokenClients, logRefusedAuth, toNodeHandler(auth));
 
 	app.use(express.json({ limit: "256kb" }));
 
