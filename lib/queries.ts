@@ -494,37 +494,47 @@ export function useStartWorkout() {
     };
   }, []);
 
+  /**
+   * Ask for a session, and see it through.
+   *
+   * Returns the outcome as well as setting it: a caller that must decide something —
+   * whether to close a sheet, say — cannot read `note` from the render it started in, and
+   * a stale closure there is a screen that closes on a failure it never showed (caught by
+   * the plan-new sheet, 2026-09-03).
+   */
   const start = useCallback(
-    async (input: AskCoachInput = {}) => {
+    async (input: AskCoachInput = {}): Promise<{ ok: boolean; note: string | null }> => {
       setNote(null);
       try {
         await ask.mutateAsync(input);
-        return;
+        return { ok: true, note: null };
       } catch (error) {
         // A refusal is a refusal: say it, and do not sit there polling for a plan that was
         // never going to be written. Only a lost or slow answer is worth waiting on.
         if (error instanceof ApiError) {
           // The refusal in the app's words, from the code the server sent — the server's
           // own sentence used to go straight into the note (lib/errors.ts).
-          if (!gone.current) setNote(readerLine(error, 'The coach could not start that just now.'));
-          return;
+          const line = readerLine(error, 'The coach could not start that just now.');
+          if (!gone.current) setNote(line);
+          return { ok: false, note: line };
         }
       }
 
-      if (gone.current) return;
+      if (gone.current) return { ok: false, note: null };
       setRecovering(true);
       const found = await pollForPlan({
         checkStatus: () => api<CoachStatus>('/api/coach/status', { query: { tz: tzOffsetMin() } }),
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         cancelled: () => gone.current,
       });
-      if (gone.current) return;
+      if (gone.current) return { ok: false, note: null };
       setRecovering(false);
       if (found) {
         await qc.invalidateQueries({ queryKey: ['coach'] });
-        return;
+        return { ok: true, note: null };
       }
       setNote(LOST_ANSWER_NOTE);
+      return { ok: false, note: LOST_ANSWER_NOTE };
     },
     [ask, qc],
   );

@@ -208,7 +208,7 @@ it('adjusts the plan through the ONE logger, never through a form of its own', a
   expect(asks()).toEqual([]);
 });
 
-it("starts the day's workout with no words, and that is the only generator", async () => {
+it("opens the sheet to ask for a session, and generates nothing by itself", async () => {
   // A failed ask says the app's own line, not the throw's: nothing that arrives from a
   // server or an SDK is printed on this screen any more (lib/errors.ts).
   mockApi.mockRejectedValueOnce(new Error('The coach is unavailable right now.'));
@@ -219,9 +219,11 @@ it("starts the day's workout with no words, and that is the only generator", asy
     fireEvent.press(screen.getByTestId('coach-regenerate'));
   });
 
-  // A plain ask: context is TOLD through the +, not typed into a box that lived here.
-  await waitFor(() => expect(asks()).toHaveLength(1));
-  expect(asks()[0]).toMatchObject({ context: null, revision: null, mode: null });
+  // User decision 2026-09-03: the button is a DOOR. It opens the ONE logger sheet in
+  // plan-new framing so the session can be shaped first, and the generation happens on the
+  // far side of that sheet's own Generate (app/log.tsx §runGeneratePlan).
+  expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { framing: 'plan-new' } });
+  expect(asks()).toEqual([]);
 });
 
 it('keeps the brief on screen while a revision is running, and says it is working', async () => {
@@ -516,20 +518,21 @@ it('draws the ask button over an empty day, and posts nothing until it is presse
   expect(coachCalls()).toHaveLength(1);
   expect(asks()).toEqual([]);
 
-  mockApi.mockResolvedValue(next());
+  // Pressing it opens the sheet where the asking happens (user decision 2026-09-03) — the
+  // page itself still posts nothing, which is what this test has always been about.
   await act(async () => {
     fireEvent.press(screen.getByTestId('coach-regenerate'));
   });
 
-  await screen.findByText('Pull day: back and shoulders');
-  expect(asks()).toEqual([{ tz_offset_min: 0, context: null, revision: null, mode: null }]);
-  // And the button that asked is gone, because there is a plan now.
-  expect(screen.queryByTestId('coach-no-plan')).toBeNull();
+  expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { framing: 'plan-new' } });
+  expect(asks()).toEqual([]);
+  expect(mockApi.mock.calls.every(([, options]) => !options?.method || options.method === 'GET')).toBe(true);
 });
 
 it('offers only the generator when there is no plan — no box, no tiles', async () => {
-  // The empty-day state. What used to be here was a context box above the button; context
-  // is told through the + now, and the button takes no words (user decision 2026-09-01).
+  // The empty-day state. What used to be here was a context box above the button. The box
+  // is not coming back to this page: since 2026-09-03 the button opens the ONE logger
+  // sheet, which is where words about today are said — one input surface, not two.
   mockApi.mockResolvedValue({ date: '2026-08-30', brief: null, stale: false });
   renderCoach();
 
@@ -541,7 +544,8 @@ it('offers only the generator when there is no plan — no box, no tiles', async
   await act(async () => {
     fireEvent.press(screen.getByTestId('coach-regenerate'));
   });
-  expect(asks()).toEqual([{ tz_offset_min: 0, context: null, revision: null, mode: null }]);
+  expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { framing: 'plan-new' } });
+  expect(asks()).toEqual([]);
 });
 
 it('shows no ask button while the first read is still in flight', async () => {
@@ -1080,147 +1084,6 @@ describe('a barbell row says what to put on the bar', () => {
     renderCoach();
     await screen.findByText('Bench Press');
     expect(screen.getByTestId('coach-truth-0').props.children).toContain('35/side + bar');
-  });
-});
-
-// ── the answer that never came back ──────────────────────────────────────────────────
-// Field report 2026-09-02: the user pressed "Start today's workout", watched "Thinking…",
-// and watched the page revert to "Nothing planned yet" — while a five-item brief sat
-// finished on the server. A model call over a phone connection outran the platform's
-// 60-second fetch ceiling, the promise rejected, and the screen said nothing at all.
-
-describe('a generation whose answer is lost', () => {
-  const lost = () => Object.assign(new Error('Network request failed'), { name: 'TypeError' });
-
-  /** No plan yet; the generate call drops; then the server admits it has one. */
-  function serveLostAnswer({ everFinds = true }: { everFinds?: boolean } = {}) {
-    let found = false;
-    mockApi.mockImplementation((path: string, options?: { method?: string }) => {
-      if (path === '/api/coach/next/regenerate' && options?.method === 'POST') {
-        // The generation succeeds server-side; the ANSWER is what is lost.
-        found = everFinds;
-        return Promise.reject(lost());
-      }
-      if (path === '/api/coach/status') {
-        return Promise.resolve({
-          date: '2026-08-30',
-          has_plan: found,
-          headline: found ? 'Pull day: back and shoulders' : null,
-          done_count: 0,
-          total_count: found ? 5 : 0,
-          complete: false,
-        });
-      }
-      if (path === '/api/coach/next') return Promise.resolve(found ? next() : { brief: null, stale: false });
-      return Promise.resolve(null);
-    });
-  }
-
-  // Fake timers go on AFTER the first render has settled: react-query's own scheduling
-  // runs on timers too, and freezing them before the page has loaded leaves the button
-  // disabled and the press a no-op.
-  afterEach(() => jest.useRealTimers());
-
-  async function settleThenFreeze() {
-    renderCoach();
-    await act(async () => {});
-    await waitFor(() => expect(screen.getByTestId('coach-regenerate')).not.toBeDisabled());
-    jest.useFakeTimers();
-  }
-
-  it('goes looking for the plan instead of reverting to nothing, and draws it when it turns up', async () => {
-    serveLostAnswer();
-    await settleThenFreeze();
-
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('coach-regenerate'));
-    });
-
-    // The poll has taken over, and it says so rather than leaving a dead spinner.
-    expect(screen.getByTestId('coach-recovering')).toBeTruthy();
-    // Status is asked — the endpoint that cannot itself generate.
-    await act(async () => {
-      jest.advanceTimersByTime(2_000);
-    });
-    expect(mockApi.mock.calls.some(([path]) => path === '/api/coach/status')).toBe(true);
-
-    // And the plan the server had all along is fetched and drawn.
-    await act(async () => {
-      jest.advanceTimersByTime(1_000);
-    });
-    await act(async () => {});
-    expect(screen.getByText('Pull day: back and shoulders')).toBeTruthy();
-    expect(screen.queryByTestId('coach-recovering')).toBeNull();
-    // Exactly one generation was ever asked for.
-    expect(asks()).toHaveLength(1);
-  });
-
-  it('never ends in silence: it says so in words, with the button back', async () => {
-    serveLostAnswer({ everFinds: false });
-    await settleThenFreeze();
-
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('coach-regenerate'));
-    });
-    // Run the whole recovery window out. Each wait is created only after the previous one
-    // resolves, so the clock has to be advanced with the microtasks flushed between —
-    // one big jump would only ever fire the first sleep.
-    for (const ms of RECOVERY_DELAYS_MS) {
-      await act(async () => {
-        await jest.advanceTimersByTimeAsync(ms);
-      });
-    }
-
-    await act(async () => {});
-    const note = screen.getByTestId('coach-note');
-    expect(note).toHaveTextContent(/didn’t come back/);
-    expect(note).toHaveTextContent(/may still be being written/);
-    // It never claims the plan failed, because it does not know that.
-    expect(note).not.toHaveTextContent(/failed/i);
-    // And the button is pressable again.
-    expect(screen.getByTestId('coach-regenerate')).not.toBeDisabled();
-  });
-
-  it('will not let a second tap start a second generation while the first is in flight', async () => {
-    serveLostAnswer();
-    await settleThenFreeze();
-
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('coach-regenerate'));
-    });
-    // Mid-recovery the button is off, and pressing it changes nothing.
-    expect(screen.getByTestId('coach-regenerate')).toBeDisabled();
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('coach-regenerate'));
-      fireEvent.press(screen.getByTestId('coach-regenerate'));
-    });
-    expect(asks()).toHaveLength(1);
-  });
-
-  it('says a refusal plainly rather than polling for a plan nobody is writing', async () => {
-    // A 503 is an answer. Only a LOST answer is worth waiting on.
-    mockApi.mockImplementation((path: string, options?: { method?: string }) => {
-      if (path === '/api/coach/next/regenerate' && options?.method === 'POST') {
-        // What the server actually sends now: a code, and prose the app does not print.
-        return Promise.reject(
-          new ApiError(503, 'The reader is down right now.', undefined, 'reader_unavailable'),
-        );
-      }
-      if (path === '/api/coach/next') return Promise.resolve({ brief: null, stale: false });
-      return Promise.resolve(null);
-    });
-    await settleThenFreeze();
-
-    await act(async () => {
-      fireEvent.press(screen.getByTestId('coach-regenerate'));
-    });
-
-    await act(async () => {});
-    expect(screen.getByTestId('coach-note')).toHaveTextContent(
-      'The reader is down right now. Your words are kept — try again in a bit.',
-    );
-    expect(screen.queryByTestId('coach-recovering')).toBeNull();
-    expect(mockApi.mock.calls.some(([path]) => path === '/api/coach/status')).toBe(false);
   });
 });
 

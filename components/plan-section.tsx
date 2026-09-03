@@ -173,13 +173,18 @@ export function PlanSection() {
 
   /**
    * The first ask of the day. It is the only thing in the app that writes a plan, and it
-   * is a tap — never a page load (user decision 2026-08-31 §2). No words: what the coach
-   * should know about today is told through the logger, which saves it as context and is
-   * read back by every ask.
+   * is a tap — never a page load (user decision 2026-08-31 §2).
+   *
+   * Since 2026-09-03 the tap opens the ONE logger sheet in `plan-new` framing rather than
+   * generating on the spot. Asking for a whole session is the moment somebody is most
+   * likely to have something to say about it — "only half an hour", "my knee", "something
+   * different" — and there was nowhere to say it without knowing to make a separate trip
+   * through the + first. **Saying nothing still generates**: the sheet's Generate button
+   * with an empty box is exactly the call this used to make (app/log.tsx §runGeneratePlan).
    */
   const askForPlan = () => {
     setReplaceArmed(false);
-    void startWorkout.start({});
+    router.push({ pathname: '/log', params: { framing: 'plan-new' } });
   };
 
   /**

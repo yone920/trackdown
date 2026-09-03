@@ -162,12 +162,20 @@ export default function Home() {
         <IconChevronRight size={18} color={C.mute} />
       </Pressable>
 
-      {/* The one button. It is a DOOR — it opens Today, where the plan lives and where the
-          only generator in the app is. Pressing it here has never written anything. */}
+      {/* The one button, and it is still a DOOR: pressing it here has never written
+          anything and still does not. With a plan it opens Today, where the plan lives.
+          With NO plan it opens the logger in plan-new framing — the same sheet Train's
+          own generate button opens — so the session can be shaped before it is written
+          (user decision 2026-09-03). The generation itself happens on the far side of a
+          second, deliberate tap, either way. */}
       <Pressable
         testID="home-today"
         accessibilityLabel={planLabel(status)}
-        onPress={() => router.push('/train')}
+        onPress={() =>
+          status?.has_plan
+            ? router.push('/train')
+            : router.push({ pathname: '/log', params: { framing: 'plan-new' } })
+        }
         style={({
           marginTop: 16,
           borderRadius: RADIUS.pill,
