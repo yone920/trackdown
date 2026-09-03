@@ -474,20 +474,46 @@ ${claims ? describeVocabulary(context) : ""}`;
  *
  * It is the meal detail call again, with the same message and the same schema, so it costs
  * no grammar and nothing new has to compile.
+ *
+ * `instruction` is the user's own words when the gate fired on a REVISION rather than on a
+ * fresh read, and it inverts who is trusted. A calorie figure the user has just stated is not
+ * a misread label — they were at the meal and the model was not — so reconciling by quietly
+ * putting the old number back is the app overruling its only witness. That is exactly what
+ * the analyze wording ("do not simply scale the kcal up") tells it to do, which is right for a
+ * label read per container and wrong for a person saying "it was twelve hundred". Their figure
+ * is kept, and the macros are re-derived from the foods already listed until the plate reaches
+ * it.
  */
 export function buildMealReconcilePrompt(
 	context: FusionContext,
 	previous: string,
-	discrepancy: string
+	discrepancy: string,
+	instruction?: string | null
 ): string {
-	return `You read this meal out of the user's log and the numbers do not add up.
+	const said = instruction?.trim();
 
-What you answered, as JSON:
-${previous}
+	const opening = said
+		? `The user has just corrected this meal, in their own words:
 
-${discrepancy}
+"${said}"
 
-Read it again and return the whole meal, reconciled.
+That correction is why these numbers no longer agree, and it is the one thing here you may
+not overturn.`
+		: `You read this meal out of the user's log and the numbers do not add up.`;
+
+	const rules = said
+		? `Read it again and return the whole meal, reconciled to what they told you.
+- KEEP what the user stated. If they gave a calorie figure, that figure IS the answer; it is
+  not a reading to be checked again. They ate it and you did not.
+- Move the OTHER numbers to meet it. Re-derive protein, carbs and fat from the foods already
+  in "items", at the serving sizes it would take to reach the calories they stated: a plate
+  that reads hundreds of kcal light is a serving read short, not a calorie count invented.
+- Correct the per-item numbers too, not only the totals — the totals are made of them.
+- Never drop a macro to escape the arithmetic. A blank field is not agreement.
+- Keep everything the correction did not touch — the description, the sitting, the foods.
+- Answer with "confidence" no higher than "medium": the calories are the user's own figure,
+  and the macros under them are now your estimate of how it gets there.`
+		: `Read it again and return the whole meal, reconciled.
 - Start from the SERVING SIZES. This is nearly always a nutrition label read per container
   when the user ate a few servings of it: "four slices" is four × the per-slice row, not the
   loaf. Check every quantity they actually stated against the numbers you gave.
@@ -495,7 +521,16 @@ Read it again and return the whole meal, reconciled.
   the kcal up to match a macro you have not checked.
 - Keep everything you are confident in — the description, the sitting, the foods.
 - Answer with "confidence" no higher than "medium" unless the corrected numbers now add up
-  AND every serving size came from something the user said or a label states outright.
+  AND every serving size came from something the user said or a label states outright.`;
+
+	return `${opening}
+
+What you answered, as JSON:
+${previous}
+
+${discrepancy}
+
+${rules}
 
 ${PART_INTRO.meal}
 

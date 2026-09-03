@@ -1358,11 +1358,16 @@ describe("the arithmetic gate", () => {
 		expect(system).toContain('"carbs_g":398');
 		expect(system).not.toContain("consistency");
 
+		// What the card names is the disagreement that FIRED the gate — 918 against the 2,175
+		// the first reading's macros implied — not the reconciled pair, which by definition
+		// agree. "The numbers didn't add up — 918 kcal against 939" is already a stretch; the
+		// day a re-ask lands exactly on the macros it reads "876 against 876", which is not a
+		// sentence anyone can act on.
 		expect(results[0]).toMatchObject({
 			kind: "meal",
 			carbs_g: 89,
 			confidence: "medium",
-			consistency: { outcome: "adjusted", stated_kcal: 918, implied_kcal: 939 },
+			consistency: { outcome: "adjusted", stated_kcal: 918, implied_kcal: 2175 },
 		});
 	});
 
@@ -1457,6 +1462,71 @@ describe("the arithmetic gate", () => {
 
 		expect(llm.requests.map((request) => request.schemaName)).toEqual(["meal", "meal"]);
 		expect(revised).toMatchObject({ carbs_g: 89, consistency: { outcome: "adjusted" } });
+	});
+
+	// A number the user has just said out loud is not a misread label (services/fusion/prompt.ts
+	// §buildMealReconcilePrompt). The field case: a breakfast that read 876 kcal off macros of
+	// 52/50/52, corrected out loud to "the calorie is 1200" — and put straight back to 876 by a
+	// re-ask that had been told not to scale the kcal up. It is the one flow where the app knows
+	// less than the person using it, and the gate was spending its re-ask arguing with them.
+	it("keeps a calorie the user stated at revise, and moves the macros to meet it", async () => {
+		const llm = createFakeLlm();
+		const saved: FusionResult = {
+			kind: "meal",
+			description: "tuna, two eggs, cheese, onion and pepper in olive oil, four slices of bread",
+			meal_type: "breakfast",
+			kcal: 876,
+			protein_g: 52,
+			carbs_g: 50,
+			fat_g: 52,
+			fiber_g: 7,
+			items: [],
+			confidence: "medium",
+			sources: null,
+			consistency: null,
+		};
+		llm.outputs.push(
+			// The revision moves only what it was told to: 1,200 against the 876 the untouched
+			// macros still imply is 324 out, and trips the gate by 24.
+			mealDetail({ kcal: 1200, protein_g: 52, carbs_g: 50, fat_g: 52 }),
+			// The re-ask re-derives the plate at the size it would have to be to get there.
+			mealDetail({ kcal: 1200, protein_g: 60, carbs_g: 95, fat_g: 60, confidence: "medium" })
+		);
+
+		const [revised] = await createFusionAnalyzer(llm).revise({
+			results: [saved],
+			instruction: "the calorie is 1200",
+			context,
+		});
+
+		const reask = String(llm.requests[1]!.system);
+		// It is told a person said this, and which way the numbers are allowed to move.
+		expect(reask).toContain("the calorie is 1200");
+		expect(reask).toContain("that figure IS the answer");
+		// And NOT told the thing that caused the revert, which is right only for a label.
+		expect(reask).not.toContain("Do not simply scale");
+
+		expect(revised).toMatchObject({
+			kind: "meal",
+			kcal: 1200,
+			protein_g: 60,
+			carbs_g: 95,
+			fat_g: 60,
+			consistency: { outcome: "adjusted", stated_kcal: 1200, implied_kcal: 876 },
+		});
+	});
+
+	// The analyze branch keeps the wording it needs: there, nobody has said anything, and the
+	// 398 g of carbs really is the loaf's row rather than four slices of it.
+	it("still tells a FRESH read not to move the kcal to meet an unchecked macro", async () => {
+		const llm = createFakeLlm();
+		llm.outputs.push(routedMeal(FIELD_MEAL_ANSWER), mealDetail({ carbs_g: 89, confidence: "medium" }));
+
+		await createFusionAnalyzer(llm).analyze({ text: "four slices of this bread", context });
+
+		const reask = String(llm.requests[1]!.system);
+		expect(reask).toContain("Do not simply scale");
+		expect(reask).not.toContain("has just corrected this meal");
 	});
 });
 

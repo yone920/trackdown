@@ -222,7 +222,8 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 	async function gateMeal(
 		result: FusionResult,
 		context: FusionContext,
-		messages: { role: "user"; content: LlmContent[] }[]
+		messages: { role: "user"; content: LlmContent[] }[],
+		instruction?: string | null
 	): Promise<FusionResult> {
 		if (result.kind !== "meal") return result;
 		const first = checkMeal(result);
@@ -233,7 +234,7 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 			// The photo claim is the first read's answer and stays it: which photos a part
 			// was read from is not what this call is being asked to reconsider.
 			const { photo_fields, photo_indexes: _claimed, ...meal } = await llm.parseStructured({
-				system: buildMealReconcilePrompt(context, compactPart(result), discrepancyLine(first)),
+				system: buildMealReconcilePrompt(context, compactPart(result), discrepancyLine(first), instruction),
 				schema: MealDetailOutputSchema,
 				schemaName: MEAL_DETAIL_SCHEMA_NAME,
 				maxTokens: DETAIL_MAX_TOKENS,
@@ -248,6 +249,12 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 		const second = checkMeal(reread);
 		const settled = second.checked && second.ok;
 		if (reread.kind !== "meal") return reread;
+		// Which pair of numbers the card should name. A settled re-ask leaves two figures that
+		// AGREE, and a sentence beginning "the numbers didn't add up" can only be read as
+		// nonsense when it then prints "876 kcal against 876 from the macros" — so what it
+		// reports is the disagreement that fired the gate. A flagged one still disagrees, and
+		// there the numbers on the card are the ones worth naming.
+		const shown = settled ? first : second;
 		return {
 			...reread,
 			// The whole point of the gate: a claim of "high" about numbers that do not add up
@@ -255,8 +262,8 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 			confidence: settled ? reread.confidence : "low",
 			consistency: {
 				outcome: settled ? "adjusted" : "flagged",
-				stated_kcal: second.stated_kcal ?? reread.kcal,
-				implied_kcal: second.implied_kcal,
+				stated_kcal: shown.stated_kcal ?? reread.kcal,
+				implied_kcal: shown.implied_kcal,
 			},
 		};
 	}
@@ -302,7 +309,10 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 		kind: SegmentKind,
 		context: FusionContext,
 		messages: { role: "user"; content: LlmContent[] }[],
-		system: string = buildPartDetailSystemPrompt(context, kind)
+		system: string = buildPartDetailSystemPrompt(context, kind),
+		// Set only on the revise path, where the gate must not overturn a number the user
+		// has just stated (services/fusion/prompt.ts §buildMealReconcilePrompt).
+		instruction?: string | null
 	): Promise<{ result: FusionResult; photos: number[] }> {
 		const ask = <Output>(schema: Parameters<typeof llm.parseStructured<Output>>[0]["schema"], schemaName: string) =>
 			llm.parseStructured({ system, schema, schemaName, maxTokens: DETAIL_MAX_TOKENS, messages });
@@ -325,7 +335,8 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 					result: await gateMeal(
 						toFusionResult({ kind: "meal", ...meal }, { photoFields: photo_fields }),
 						context,
-						messages
+						messages,
+						instruction
 					),
 					photos: photo_indexes,
 				};
@@ -457,7 +468,7 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 					const result =
 						previous.kind === "activities"
 							? await reviseActivities(previous, context, messages, system)
-							: (await fillSegment(kind, context, messages, system)).result;
+							: (await fillSegment(kind, context, messages, system, said)).result;
 					return withRefinements(carryForward(previous, result), context);
 				})
 			);
