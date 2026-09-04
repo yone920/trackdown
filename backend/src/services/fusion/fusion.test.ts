@@ -81,6 +81,18 @@ describe("localDay", () => {
 });
 
 describe("the fusion prompt", () => {
+	// The reader used to invent a rule nobody wrote: told "I had slice of pizza yesterday" it
+	// asked "are you logging this now, or telling me about yesterday? I log today's food" —
+	// which is a question the app can answer itself, and which stopped the log dead (field
+	// report 2026-09-04). Backdating reads the day in code; the prompt has to stop the model
+	// treating a named day as a doubt.
+	it("tells the reader that a day is when, not whether", () => {
+		const prompt = buildFusionSystemPrompt(context);
+		expect(prompt).toContain("A DAY IS NOT A DOUBT");
+		expect(prompt).toMatch(/never return "unclear" because a\s+sentence names a day/);
+		expect(prompt).toMatch(/yesterday/i);
+	});
+
 	it("tells the model what has been logged today and what the user calls things", () => {
 		const prompt = buildFusionSystemPrompt(context);
 		expect(prompt).toContain("16:10 activity — Bench Press, 3×8, 135 lb, 160 kcal");

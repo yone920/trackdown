@@ -643,4 +643,19 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 		expect(results).toHaveLength(1);
 		expect(results[0]!.kind).toBe("activities");
 	}, 90_000);
+
+	// A named day is when, not whether. The reader once answered "I had slice of pizza
+	// yesterday" with a question about which day was meant — the app reads the day itself
+	// (services/fusion/backdate.ts), so asking stops a log it could have written (field
+	// report 2026-09-04). Live, because it is the model's judgement being tested.
+	it("logs a meal that names a past day instead of asking about it", async () => {
+		const { results } = await analyzer().analyze({
+			text: "I had slice of pizza yesterday",
+			context,
+		});
+
+		const asked = results.find((result) => result.kind === "unclear");
+		expect(asked, `asked instead of logging: ${JSON.stringify(asked)}`).toBeUndefined();
+		expect(results.map((result) => result.kind)).toContain("meal");
+	}, 60_000);
 });
