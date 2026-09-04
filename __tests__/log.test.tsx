@@ -1113,3 +1113,71 @@ describe('the adjust door', () => {
     expect(said).toHaveTextContent(/add some core|make it shorter/);
   });
 });
+
+// Backdating (backend services/fusion/backdate.ts). "I said yesterday, but it added in
+// today" — field report 2026-09-04. The day is read from the words, offered on the review
+// step, and only then written.
+describe('a log about a day that has already been', () => {
+  const yesterday = {
+    days_ago: 1,
+    phrase: 'yesterday',
+    label: 'yesterday',
+    date: '2026-08-29',
+  };
+
+  it('says which day it is filing to, and quotes the words that said so', async () => {
+    mockUpload.mockResolvedValue({ ...analyzed([meal]), backdate: yesterday });
+    renderSheet();
+
+    await logIt('yesterday I had two scoops of ice cream');
+
+    expect(screen.getByTestId('backdate-day').props.children).toBe('yesterday · Sat, Aug 29');
+    expect(screen.getByTestId('backdate-why').props.children).toBe('You said “yesterday”.');
+  });
+
+  it('writes it against that day, not against today', async () => {
+    mockUpload.mockResolvedValue({ ...analyzed([meal]), backdate: yesterday });
+    mockApi.mockResolvedValue({ saved: {} });
+    renderSheet();
+
+    await logIt('yesterday I had two scoops of ice cream');
+    fireEvent.press(screen.getByTestId('confirm-save'));
+    await waitFor(() => expect(mockApi).toHaveBeenCalled());
+
+    const body = mockApi.mock.calls[0]![1].body as { logged_at?: string };
+    expect(body.logged_at).toBeTruthy();
+    // A whole day back from the phone's clock: the server maps it to the local day.
+    const gap = Date.now() - new Date(body.logged_at!).getTime();
+    expect(gap).toBeGreaterThan(23 * 60 * 60 * 1000);
+    expect(gap).toBeLessThan(25 * 60 * 60 * 1000);
+  });
+
+  // The offer has to be refusable, or it is not an offer.
+  it('puts it back on today when the reader guessed wrong', async () => {
+    mockUpload.mockResolvedValue({ ...analyzed([meal]), backdate: yesterday });
+    mockApi.mockResolvedValue({ saved: {} });
+    renderSheet();
+
+    await logIt('yesterday I had two scoops of ice cream');
+    fireEvent.press(screen.getByTestId('backdate-toggle'));
+    expect(screen.getByTestId('backdate-day').props.children).toBe('Today');
+
+    fireEvent.press(screen.getByTestId('confirm-save'));
+    await waitFor(() => expect(mockApi).toHaveBeenCalled());
+    expect((mockApi.mock.calls[0]![1].body as { logged_at?: string }).logged_at).toBeUndefined();
+  });
+
+  it('says nothing at all about the day for an ordinary log', async () => {
+    mockUpload.mockResolvedValue(analyzed([meal]));
+    mockApi.mockResolvedValue({ saved: {} });
+    renderSheet();
+
+    await logIt('two scoops of ice cream');
+    expect(screen.queryByTestId('backdate-banner')).toBeNull();
+
+    fireEvent.press(screen.getByTestId('confirm-save'));
+    await waitFor(() => expect(mockApi).toHaveBeenCalled());
+    expect((mockApi.mock.calls[0]![1].body as { logged_at?: string }).logged_at).toBeUndefined();
+  });
+});
+

@@ -813,8 +813,25 @@ export type AnalyzeResponse = {
     unrealistic: boolean;
     standing: boolean;
   };
+  /**
+   * The day the words were about, when they were about one — "yesterday I had two scoops of
+   * ice cream" (backend services/fusion/backdate.ts). An OFFER: the confirm card names it
+   * and the user keeps it or puts the log back on today.
+   */
+  backdate?: Backdate;
   evidence: EvidenceRef[];
   context: { local_date: IsoDate; tz_offset_min: number };
+};
+
+/** A day read out of what was said, and the words that said it. */
+export type Backdate = {
+  /** Whole days before today. Always at least 1. */
+  days_ago: number;
+  /** The words themselves — "yesterday", "3 days ago" — quoted back on the card. */
+  phrase: string;
+  /** How to say it: "yesterday", "3 days ago". */
+  label: string;
+  date: IsoDate;
 };
 
 /** What one part of a confirm became — the ids, in the order the parts were sent. */

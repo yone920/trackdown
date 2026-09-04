@@ -25,7 +25,7 @@ import {
   savableCorrections,
   type EditKind,
 } from '@/lib/edit-record';
-import { correctionLine } from '@/lib/format';
+import { correctionLine, dateLabel } from '@/lib/format';
 import { copyFor, framingOf } from '@/lib/log-framing';
 import { composeMaxHeight, footerLift, keyboardPadding, useKeyboardHeight } from '@/lib/keyboard';
 import { MAX_PHOTOS, pickPhotos, takePhoto, type LocalPhoto } from '@/lib/photos';
@@ -41,7 +41,7 @@ import {
 } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
-import type { FusionResult, PartCorrection } from '@/lib/types';
+import type { Backdate, FusionResult, PartCorrection } from '@/lib/types';
 
 // The log sheet (docs/design-system.md §Log). One screen for everything you can tell the
 // app — an exercise, a plate, a weigh-in, a goal, a constraint, or a sentence for the
@@ -147,6 +147,14 @@ export default function LogSheet() {
   // The last thing the user told a SAVED row to change. Sent with the PATCH so the server
   // can file the correction with its own diff of the row before and after.
   const [told, setTold] = useState<string | null>(null);
+  /**
+   * The day the reader took the words to be about, and whether the user is keeping it
+   * (backend services/fusion/backdate.ts). Null for the ordinary log, which is about now.
+   * Kept as an offer rather than applied: a meal filed on the wrong day is invisible until
+   * a week's totals look wrong, so it is the one reading that has to be said out loud.
+   */
+  const [backdate, setBackdate] = useState<Backdate | null>(null);
+  const [keepBackdate, setKeepBackdate] = useState(true);
   const [listening, setListening] = useState(false);
   // The words already in the box when the current dictation started. A ref, not state: the
   // speech callbacks are handed to the port once and would otherwise close over the value it
@@ -229,6 +237,9 @@ export default function LogSheet() {
         // has been told into the same box.
         setSaid({ text: withText.trim(), transcribed });
       }
+      // A question is not a log yet, so it carries no day with it.
+      setBackdate(question ? null : response.backdate ?? null);
+      setKeepBackdate(true);
       setEvidenceIds(response.evidence.map((item) => item.id));
       setEvidenceParts(response.evidence.map((item) => item.part ?? 0));
       // One id per Save, however many parts it holds: a retry after a timeout must replay,
@@ -474,6 +485,7 @@ export default function LogSheet() {
         // Only the corrections to parts that are still on screen: a part dropped with its
         // ✕ takes its history with it, and the ones after it have moved up an index.
         corrections: savableCorrections(corrections, results),
+        ...(backdate && keepBackdate ? { daysAgo: backdate.days_ago } : {}),
         ...(toSave.some((result) => result.kind === 'goal')
           ? { confirmDate: dateChoice === 'confirm_date', noDate: dateChoice === 'no_date' }
           : {}),
@@ -714,6 +726,51 @@ export default function LogSheet() {
                 ? `${savable.length} things. Drop what you did not mean, then log them all at once.`
                 : 'Log it, or tell me what to change.'}
           </Sub>
+        ) : null}
+
+        {/* WHICH DAY. A backdate is the one reading whose mistake is invisible — a meal on
+            the wrong day looks like nothing until a week's totals are wrong — so it is said
+            out loud on the review step and is one tap from being put back (user decision
+            2026-09-04: "I said yesterday, but it added in today"). */}
+        {step === 'review' && !editing && backdate ? (
+          <Pressable
+            testID="backdate-banner"
+            accessibilityRole="button"
+            accessibilityLabel={
+              keepBackdate
+                ? `Saving to ${backdate.label}, ${dateLabel(backdate.date)}. Tap to move it to today.`
+                : 'Saving to today. Tap to move it back.'
+            }
+            onPress={() => setKeepBackdate((keeping) => !keeping)}
+            style={{
+              marginTop: 12,
+              padding: 12,
+              borderRadius: RADIUS.tile,
+              borderWidth: 1,
+              borderColor: keepBackdate ? C.accent : C.track,
+              backgroundColor: C.card,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 12,
+            }}>
+            <View style={{ flex: 1 }}>
+              <Eyebrow style={{ color: keepBackdate ? C.accent : C.mute }}>
+                {keepBackdate ? 'Saving to' : 'Saving to'}
+              </Eyebrow>
+              <Body testID="backdate-day" style={{ marginTop: 3 }}>
+                {keepBackdate ? `${backdate.label} · ${dateLabel(backdate.date)}` : 'Today'}
+              </Body>
+              <Sub testID="backdate-why" style={{ marginTop: 2 }}>
+                {keepBackdate ? `You said “${backdate.phrase}”.` : `Tap to put it back on ${backdate.label}.`}
+              </Sub>
+            </View>
+            <Chip
+              label={keepBackdate ? 'Use today' : `Use ${backdate.label}`}
+              variant="secondary"
+              onPress={() => setKeepBackdate((keeping) => !keeping)}
+              testID="backdate-toggle"
+            />
+          </Pressable>
         ) : null}
 
         {step === 'review' && !editing ? <LocalThumbs testID="review-photos" photos={photos} /> : null}

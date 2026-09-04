@@ -7,6 +7,7 @@ import type { EvidenceStore } from "../ports/storage.js";
 import { storePhotoEvidence } from "../services/evidence.js";
 import { isAcceptedUploadMime, ACCEPTED_UPLOAD_MIMES } from "../services/images.js";
 import type { FusionAnalyzer, FusionPhoto } from "../services/fusion/analyze.js";
+import { backdateLabel, readBackdate, shiftDate } from "../services/fusion/backdate.js";
 import { buildFusionContext } from "../services/fusion/context.js";
 import { diffResults } from "../services/corrections.js";
 import { llmErrorBody, sendLlmError } from "./llmError.js";
@@ -271,9 +272,25 @@ export function fusionRouter(pool: pg.Pool, analyzer: FusionAnalyzer, store: Evi
 			proposal ??= projected;
 		}
 
+		// The day the words were about, if they were about one (services/fusion/backdate.ts).
+		// An OFFER, not a decision: it rides back with the preview and the confirm card asks.
+		// A revision is an instruction about a record, not a new account of a day, so it is
+		// read from the log's own text only.
+		const spoken = revise ? null : fields.text;
+		const back = readBackdate(spoken, new Date(`${context.localDate}T00:00:00Z`).getUTCDay());
+		const backdate = back
+			? {
+					days_ago: back.days_ago,
+					phrase: back.phrase,
+					label: backdateLabel(back.days_ago),
+					date: shiftDate(context.localDate, back.days_ago),
+				}
+			: null;
+
 		setServerTiming(req, res);
 		res.json({
 			results,
+			...(backdate ? { backdate } : {}),
 			/** Empty for a fresh log; one entry per record a revision moved. */
 			corrections,
 			// One release of app compatibility: a client written before mixed input reads

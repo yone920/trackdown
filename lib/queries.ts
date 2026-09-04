@@ -626,7 +626,21 @@ export type ConfirmInput = {
    * rows the parts turn into (migration 0015).
    */
   corrections?: PartCorrection[];
+  /**
+   * How many days back this log belongs, when the user kept a backdate the reader offered
+   * (lib/types.ts §Backdate). The phone's own clock shifted by whole days, so the time of
+   * day survives and the server's `localDateOf` lands it on the right local day.
+   */
+  daysAgo?: number;
 };
+
+/** The phone's clock, `daysAgo` whole days back. Undefined for a log about now. */
+function loggedAt(daysAgo: number | undefined): string | undefined {
+  if (!daysAgo) return undefined;
+  const at = new Date();
+  at.setDate(at.getDate() - daysAgo);
+  return at.toISOString();
+}
 
 /** POST /api/log/confirm — writes every part of the (edited) preview in one transaction. */
 export function useConfirm() {
@@ -644,6 +658,7 @@ export function useConfirm() {
           text_kind: input.textKind ?? 'text',
           ...(input.source ? { source: input.source } : {}),
           tz_offset_min: tzOffsetMin(),
+          ...(loggedAt(input.daysAgo) ? { logged_at: loggedAt(input.daysAgo) } : {}),
           ...(input.confirmDate === undefined ? {} : { confirm_date: input.confirmDate }),
           ...(input.noDate === undefined ? {} : { no_date: input.noDate }),
           corrections: input.corrections ?? [],
