@@ -30,7 +30,16 @@ describe('the copy each door opens with', () => {
   // things people log says the true thing, which is that it takes any of them.
   it('offers the whole range on the door that implies nothing', () => {
     const copy = copyFor('default');
-    expect(copy.title).toBe('What did you do?');
+    // The title may not presuppose an action: a constraint and a weigh-in are not things
+    // you "did", and this door takes them too.
+    expect(copy.title).toBe('Tell me anything');
+    expect(copy.title).not.toMatch(/did you do/i);
+    // And the hint names every kind that routes from here, the person included.
+    expect(copy.hint).toMatch(/food/i);
+    expect(copy.hint).toMatch(/training/i);
+    expect(copy.hint).toMatch(/weigh-in/i);
+    expect(copy.hint).toMatch(/goal/i);
+    expect(copy.hint).toMatch(/something about you/i);
     expect(copy.placeholder).not.toContain('Shoulder press');
     expect(copy.placeholder).toMatch(/eggs|coffee/i);
     expect(copy.placeholder).toMatch(/press/i);

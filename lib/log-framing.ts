@@ -49,10 +49,15 @@ const COPY: Record<Framing, FramingCopy> = {
    * says the true thing instead, which is that it takes any of them.
    */
   default: {
-    title: 'What did you do?',
+    // Not "What did you do?" — you did not *do* a bad left knee, and this is the one door
+    // that takes all six kinds (field report 2026-09-04: "it should indicate that you can
+    // log anything here"). A question that presupposes an action quietly rules out half of
+    // what the router can read, and the placeholder was carrying the whole burden of saying
+    // otherwise.
+    title: 'Tell me anything',
     placeholder: 'Two eggs and a coffee · shoulder press, three sets of ten · weighed 181…',
     note: null,
-    hint: 'Say it, snap it, or type it — any mix. Food, training, weight, goals.',
+    hint: 'Food, training, a weigh-in, a goal, or something about you — say it, snap it, or type it.',
     submit: null,
   },
   /** The + on Train. The old default, back where it was always describing. */
