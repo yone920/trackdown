@@ -2,12 +2,11 @@ import { describe, expect, it } from "vitest";
 import { attachHealthWorkouts, blockTitle, buildBlocks, healthWorkoutAsActivity } from "./blocks.js";
 import { deltaVsLast, withDeltas } from "./deltas.js";
 import { applyKcalEstimates, estimateWeightKg, FALLBACK_WEIGHT_KG } from "./estimate.js";
-import { eatingPattern, expectedItems, slotForMinutes } from "./narrative.js";
-import type { DayActivity, DayMeal, HealthWorkout } from "./types.js";
-import { buildFacts, computeStatus, summaryLine } from "../day.js";
+import type { DayActivity, HealthWorkout } from "./types.js";
+import { buildFacts, summaryLine } from "../day.js";
 import { boundsOf, datesEndingOn, localDateOf, localDay, localMinutesOf } from "../localTime.js";
-import { computeMeasure, emptyDayFacts } from "../goals/measures.js";
-import { goalInvolvesCalories, judgeDay, verdictWords, type GoalRow } from "../goals/verdict.js";
+import { emptyDayFacts } from "../goals/measures.js";
+import { judgeDay, verdictWords, type GoalRow } from "../goals/verdict.js";
 
 // The pure half of the day model: everything that can be true without a database. The SQL
 // half is exercised end to end in app.test.ts, against real rows in real Postgres.
@@ -39,21 +38,6 @@ function activity(partial: Partial<DayActivity> & { logged_at: string }): DayAct
 		confidence: partial.confidence ?? null,
 		logged_at: partial.logged_at,
 		...(partial.external_id === undefined ? {} : { external_id: partial.external_id }),
-	};
-}
-
-function meal(clock: string, kcal: number, extra: Partial<DayMeal> = {}): DayMeal {
-	return {
-		id: `m-${clock}`,
-		logged_at: at(clock),
-		description: extra.description ?? "food",
-		slot: extra.slot ?? slotForMinutes(localMinutesOf(at(clock), 0)),
-		stated_slot: null,
-		kcal,
-		protein_g: extra.protein_g ?? null,
-		carbs_g: null,
-		fat_g: null,
-		fiber_g: null,
 	};
 }
 
@@ -396,40 +380,11 @@ describe("delta_vs_last", () => {
 	});
 });
 
-describe("status thresholds", () => {
-	const base = { allowance: 2000, safeFloor: 1500, live: false, localMinutes: 1439, judged: true };
-
-	it("is on_track inside the allowance and over only past the tolerance", () => {
-		expect(computeStatus({ ...base, eaten: 1900 })).toBe("on_track");
-		expect(computeStatus({ ...base, eaten: 2080 })).toBe("on_track");
-		expect(computeStatus({ ...base, eaten: 2101 })).toBe("over");
-	});
-
-	it("is under a quarter below the allowance, or under the safe floor", () => {
-		expect(computeStatus({ ...base, eaten: 1600 })).toBe("on_track");
-		expect(computeStatus({ ...base, eaten: 1400 })).toBe("under");
-		expect(computeStatus({ ...base, eaten: 1490, allowance: 1800 })).toBe("under");
-	});
-
-	it("does not call a day under-fed while it is still running", () => {
-		const live = { ...base, live: true };
-		expect(computeStatus({ ...live, eaten: 400, localMinutes: 13 * 60 })).toBe("on_track");
-		expect(computeStatus({ ...live, eaten: 400, localMinutes: 21 * 60 })).toBe("under");
-		// Over is over at any hour: those calories are not coming back out.
-		expect(computeStatus({ ...live, eaten: 2400, localMinutes: 13 * 60 })).toBe("over");
-	});
-
-	it("has no status without an allowance or without a goal about calories", () => {
-		expect(computeStatus({ ...base, eaten: 1900, allowance: null })).toBe("none");
-		expect(computeStatus({ ...base, eaten: 1900, judged: false })).toBe("none");
-	});
-});
-
 describe("the verdict, per goal kind", () => {
 	const goal = (partial: Partial<GoalRow>): GoalRow => ({
 		id: "g1",
-		kind: "lose_fat",
-		title: "Down to 170 lb",
+		kind: "gain_muscle",
+		title: "Build muscle",
 		metrics: [],
 		priority: 1,
 		status: "active",
@@ -439,15 +394,13 @@ describe("the verdict, per goal kind", () => {
 	});
 
 	const facts = (overrides: Partial<ReturnType<typeof emptyDayFacts>> = {}) => ({
-		...emptyDayFacts(DAY, 2800),
+		...emptyDayFacts(DAY),
 		...overrides,
 	});
 
 	const input = {
 		facts: facts(),
-		status: "on_track" as const,
 		logged: true,
-		proteinTarget: 160,
 		trainedToday: true,
 		trainedYesterday: false,
 		sessionsLast7: 3,
@@ -459,39 +412,25 @@ describe("the verdict, per goal kind", () => {
 		expect(judgeDay({ ...input, goal: goal({}), logged: false }).verdict).toBe("unlogged");
 	});
 
-	it("judges fat loss on the calorie status", () => {
-		expect(judgeDay({ ...input, goal: goal({}) }).verdict).toBe("served");
-		expect(judgeDay({ ...input, goal: goal({}), status: "over" }).verdict).toBe("missed");
-		// A deficit day served the goal; the under-eating caution is a health signal, and
-		// the status line already carries it.
-		expect(judgeDay({ ...input, goal: goal({}), status: "under" }).verdict).toBe("served");
-		expect(judgeDay({ ...input, goal: goal({}), status: "none" }).verdict).toBe("none");
-	});
-
-	it("judges muscle and strength on protein plus training, with a rest-day rule", () => {
+	it("judges muscle and strength on training, with a rest-day rule", () => {
 		const muscle = goal({ kind: "gain_muscle" });
-		const fed = facts({ meals: [{ date: DAY, kcal: 2600, protein_g: 170, carbs_g: 200, fat_g: 70, fiber_g: 30 }] });
 
-		expect(judgeDay({ ...input, goal: muscle, facts: fed }).verdict).toBe("served");
-		// Trained, but 60 g of protein is not a muscle day.
-		const underFed = facts({ meals: [{ date: DAY, kcal: 1800, protein_g: 60, carbs_g: 200, fat_g: 70, fiber_g: 20 }] });
-		expect(judgeDay({ ...input, goal: muscle, facts: underFed }).verdict).toBe("missed");
-		// Ate well, did not train — but trained yesterday, so it is a rest day.
+		expect(judgeDay({ ...input, goal: muscle }).verdict).toBe("served");
+		// Did not train — but trained yesterday, so it is a rest day.
 		expect(
-			judgeDay({ ...input, goal: muscle, facts: fed, trainedToday: false, trainedYesterday: true }).verdict
+			judgeDay({ ...input, goal: muscle, trainedToday: false, trainedYesterday: true }).verdict
 		).toBe("served");
-		// Ate well, has not trained all week: not a rest day, just a gap.
+		// Has not trained all week: not a rest day, just a gap.
 		expect(
 			judgeDay({
 				...input,
 				goal: muscle,
-				facts: fed,
 				trainedToday: false,
 				trainedYesterday: false,
 				sessionsLast7: 0,
 			}).verdict
 		).toBe("missed");
-		expect(judgeDay({ ...input, goal: goal({ kind: "build_strength" }), facts: fed }).verdict).toBe("served");
+		expect(judgeDay({ ...input, goal: goal({ kind: "build_strength" }) }).verdict).toBe("served");
 	});
 
 	it("judges endurance on the week's cardio pace", () => {
@@ -524,76 +463,19 @@ describe("the verdict, per goal kind", () => {
 	it("judges a custom goal on its own first metric, and says none when it cannot", () => {
 		const custom = goal({
 			kind: "custom",
-			metrics: [{ measure: "protein_g", target: 150, direction: "at_least" }],
+			metrics: [{ measure: "resting_hr", target: 60, direction: "at_most" }],
 		});
-		const fed = facts({ meals: [{ date: DAY, kcal: 2000, protein_g: 160, carbs_g: 0, fat_g: 0, fiber_g: 0 }] });
+		const fed = facts({ healthSamples: [{ date: DAY, kind: "resting_hr", value: 55 }] });
 		expect(judgeDay({ ...input, goal: custom, facts: fed }).verdict).toBe("served");
 		expect(judgeDay({ ...input, goal: goal({ kind: "custom", metrics: [] }) }).verdict).toBe("none");
 	});
 
-	it("knows which goals the calorie status can speak for", () => {
-		expect(goalInvolvesCalories(goal({}))).toBe(true);
-		expect(goalInvolvesCalories(goal({ kind: "maintain" }))).toBe(true);
-		expect(goalInvolvesCalories(goal({ kind: "gain_muscle" }))).toBe(false);
-		expect(
-			goalInvolvesCalories(goal({ kind: "gain_muscle", metrics: [{ measure: "body_weight", direction: "increase" }] }))
-		).toBe(true);
-		expect(goalInvolvesCalories(null)).toBe(false);
-	});
-
 	it("puts the numbers in the words the Day screen shows", () => {
-		expect(verdictWords("served", "on_track", null)).toBe("Served your goal");
-		expect(verdictWords("missed", "over", 340)).toBe("Over by 340");
-		expect(verdictWords("unlogged", "none", null)).toBe("Not logged");
-		expect(verdictWords("none", "none", null)).toBe("Logged");
-	});
-});
-
-describe("the eating-pattern line", () => {
-	it("says nothing about a day with no meals", () => {
-		expect(eatingPattern([], 0)).toBeNull();
-	});
-
-	it("names a back-loaded day", () => {
-		const line = eatingPattern([meal("08:00", 300), meal("19:00", 1400)], 0) as string;
-		expect(line).toContain("Back-loaded");
-		expect(line).toContain("82%");
-	});
-
-	it("names a front-loaded day", () => {
-		expect(eatingPattern([meal("07:30", 900), meal("12:30", 600), meal("15:00", 300)], 0)).toContain("Front-loaded");
-	});
-
-	it("calls out the long gap on an otherwise even day", () => {
-		const line = eatingPattern([meal("07:00", 600), meal("14:00", 500), meal("17:00", 600)], 0) as string;
-		expect(line).toContain("7-hour gap after 7:00 am");
-	});
-
-	it("describes a single meal as one", () => {
-		expect(eatingPattern([meal("13:00", 900)], 0)).toBe("One meal, at 1:00 pm — all 900 kcal of the day.");
-	});
-});
-
-describe("what the day still expects", () => {
-	it("asks for the next meal slot and a weigh-in", () => {
-		const items = expectedItems({ tzOffsetMin: 0, meals: [meal("08:00", 400)], weights: [], now: at("12:00") });
-		expect(items.map((item) => item.kind)).toEqual(["meal", "weigh_in"]);
-		expect(items[0]).toMatchObject({ slot: "lunch", label: "Lunch" });
-	});
-
-	it("does not expect a meal that has already been logged, or a slot that has closed", () => {
-		const items = expectedItems({
-			tzOffsetMin: 0,
-			meals: [meal("08:00", 400), meal("12:30", 700)],
-			weights: [{ id: "w", logged_at: at("07:00"), weight_lb: 182, source: "manual" }],
-			now: at("13:00"),
-		});
-		expect(items).toHaveLength(1);
-		expect(items[0]).toMatchObject({ slot: "dinner" });
-	});
-
-	it("expects nothing of a day that is over", () => {
-		expect(expectedItems({ tzOffsetMin: 0, meals: [], weights: [], now: null })).toEqual([]);
+		expect(verdictWords("served", true)).toBe("Served your goal");
+		expect(verdictWords("missed", true)).toBe("Missed your goal");
+		expect(verdictWords("unlogged", true)).toBe("Not logged");
+		expect(verdictWords("none", true)).toBe("Logged");
+		expect(verdictWords("none", false)).toBe("No goal set");
 	});
 });
 
@@ -637,25 +519,23 @@ describe("the Days-list summary line", () => {
 		expect(
 			summaryLine({
 				blocks,
-				meals: [meal("08:00", 400), meal("13:00", 700)],
-				eaten: 1100,
 				earned: 120,
 				weight: { day: 182.4, avg_7d: 183, trend_per_week: -0.6 },
 			})
-		).toBe("Chest · 1,100 kcal in 2 meals · 120 earned · 182.4 lb");
+		).toBe("Chest · 120 earned · 182.4 lb");
 	});
 
 	it("says so when there is nothing to say", () => {
-		expect(summaryLine({ blocks: [], meals: [], eaten: 0, earned: 0, weight: { day: null, avg_7d: null, trend_per_week: null } })).toBe(
+		expect(summaryLine({ blocks: [], earned: 0, weight: { day: null, avg_7d: null, trend_per_week: null } })).toBe(
 			"Nothing logged"
 		);
 	});
 });
 
 describe("the facts window carries the same estimates the day view shows", () => {
-	// The bug this closes: `calorie_balance` and the coach summed the rows' own kcal, which
-	// is 0 for every lift, while the ring showed the block's estimate. One session, two
-	// numbers. buildFacts now runs the same blocks → Health merge → estimate path.
+	// The bug this closes: a lift that reported no calories of its own left every reader
+	// (the ring, the goal calculators, the coach) summing 0 unless it ran the same
+	// blocks → Health merge → estimate path. buildFacts does, so they agree.
 	const row = (clock: string, extra: Record<string, unknown> = {}) => ({
 		id: `a-${clock}`,
 		logged_at: at(clock),
@@ -681,8 +561,6 @@ describe("the facts window carries the same estimates the day view shows", () =>
 		buildFacts({
 			date: DAY,
 			tzOffsetMin: 0,
-			tdee: 2800,
-			mealRows: [],
 			activityRows: [row("08:00"), row("08:12"), row("08:25"), row("08:39")],
 			weightRows: [{ id: "w1", logged_at: at("07:00"), weight_lb: 190 }],
 			healthRows: [],
@@ -696,23 +574,15 @@ describe("the facts window carries the same estimates the day view shows", () =>
 		for (const activity of facts.activities) expect(activity.kcal_estimated).toBe(true);
 	});
 
-	it("makes calorie_balance agree with the day's earned", () => {
-		// TDEE 2,800 + 264 earned − nothing eaten.
-		expect(computeMeasure("calorie_balance", built())).toBe(3064);
-	});
-
 	it("leaves a row that reported its own calories exactly as it is", () => {
 		const facts = buildFacts({
 			date: DAY,
 			tzOffsetMin: 0,
-			tdee: 2800,
-			mealRows: [],
 			activityRows: [row("08:00", { kcal: 150 }), row("08:12", { kcal: 130 })],
 			weightRows: [],
 			healthRows: [],
 		});
 		expect(facts.activities.map((a) => a.kcal)).toEqual([150, 130]);
 		for (const activity of facts.activities) expect(activity.kcal_estimated).toBe(false);
-		expect(computeMeasure("calorie_balance", facts)).toBe(2800 + 280);
 	});
 });

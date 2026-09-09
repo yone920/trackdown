@@ -2,7 +2,6 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect } from 'react';
 import { Pressable, ScrollView, Share, View } from 'react-native';
 
-import { DayEating } from '@/components/day-eating';
 import { DayTraining } from '@/components/day-training';
 import {
   IconAlertCircle,
@@ -25,11 +24,11 @@ import { OFFLINE_MESSAGE, readerLine } from '@/lib/errors';
 // A closed day (docs/design-system.md §Day; concept-v2 §The two day views: "Day is a
 // reading, not a replay"). The verdict against the goal that was active *that* day, the
 // paragraph written when the day closed, training by muscle group with each lift's delta,
-// eating as macros and meals, the body, and the coach ask if there was one.
+// the body, and the coach ask if there was one.
 //
 // Nothing here is computed: `GET /api/day/:date` returns the verdict, the reading, the
-// muscle summary, the macros, the pattern line and the brief. The raw rows live one tap
-// further in, behind "See the log as recorded".
+// muscle summary and the brief. The raw rows live one tap further in, behind "See the log
+// as recorded".
 
 const VERDICT_COLOR: Record<Verdict, string> = {
   served: C.good,
@@ -148,7 +147,7 @@ function DayBody({
 }: {
   view: DayView;
   onOpenLog: () => void;
-  onCorrect: (kind: 'activity' | 'meal', id: string) => void;
+  onCorrect: (kind: 'activity', id: string) => void;
 }) {
   const color = VERDICT_COLOR[view.verdict] ?? C.mute;
   const Mark = view.verdict === 'served' ? IconCheckCircle : IconAlertCircle;
@@ -194,25 +193,21 @@ function DayBody({
         </View>
       ) : null}
 
-      {/* Eaten · Earned · Allowance */}
+      {/* Earned */}
       <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-        <Stat label="Eaten" value={kcal(view.eaten)} />
         <Stat
           label="Earned"
           value={kcal(view.earned)}
           unit={earnedEstimated ? 'estimated' : undefined}
           color={view.earned > 0 ? C.good : C.ink}
         />
-        <Stat label="Allowance" value={view.allowance == null ? '—' : kcal(view.allowance)} />
       </View>
 
-      {/* Training and Eating are components now, shared with the domain-scoped readings
-          behind the Train and Eat calendars (user decision 2026-09-02). Nothing about
-          either changed in the move; two copies of this JSX is how two doors onto one
-          workout would start disagreeing about it. */}
+      {/* Training is a component, shared with the domain-scoped reading behind the Train
+          calendar (user decision 2026-09-02). Nothing about it changed in the move; two
+          copies of this JSX is how two doors onto one workout would start disagreeing
+          about it. */}
       <DayTraining view={view} onCorrect={onCorrect} />
-
-      <DayEating view={view} onCorrect={onCorrect} />
 
       {/* Body */}
       <Section title="Body">

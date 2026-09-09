@@ -7,33 +7,31 @@ import { IconAvatar, IconChevronRight } from '@/components/icons';
 import { Card, Section } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { ReadingCard } from '@/components/reading-card';
-import { dateEyebrow, dateLabel, kcal } from '@/lib/format';
+import { dateEyebrow, dateLabel } from '@/lib/format';
 import { localDateKey, useCoachStatus, useDay, useGoals, useTrainingBoard } from '@/lib/queries';
 import { useScreenInsets } from '@/lib/screen';
 import { C, FONT, RADIUS, SPACE, TABULAR } from '@/lib/theme';
-import type { CoachStatus, DayView, TrainingBoard } from '@/lib/types';
+import type { CoachStatus, TrainingBoard, Verdict } from '@/lib/types';
 
 // HOME — the morning glance, and the ONLY page that thinks in whole days (user decision
-// 2026-09-01: every other tab owns one verb — Train the session, Eat the food, Progress the
-// long view).
+// 2026-09-01: every other tab owns one verb — Train the session, Progress the long view).
 //
 // So the whole-day framing lives here and nowhere else: the day number and its verdict, the
-// goal, the Right-now reading that reads food and training together, one line of calories,
-// and the button into the session. Everything on it is either a fact about the day or a
-// door to the tab that owns the detail — the calories line goes to Eat, the button goes to
+// goal, the Right-now reading, and the button into the session. Everything on it is either
+// a fact about the day or a door to the tab that owns the detail — the button goes to
 // Train, the weight and the week go to Progress.
 //
 // Two rules it inherits unchanged:
-//   * **An empty day carries no verdict.** 0 eaten is trivially "under allowance", and a
-//     green "on track" at 6 am judges a day that has not happened.
+//   * **An empty day carries no verdict.** `served`/`missed` are the only judgements
+//     coloured; `unlogged`/`none` read as a plain day number, never a false "on track".
 //   * **Nothing here can generate a plan.** `/api/coach/status` is an exists-check that
 //     cannot write, and `/api/day/:date` is a read. The button is a door.
 
-const STATUS_WORDS: Record<DayView['status'], { text: string; color: string }> = {
-  on_track: { text: 'on track', color: C.good },
-  over: { text: 'over', color: C.accent },
-  under: { text: 'under', color: C.accent },
-  none: { text: '—', color: C.mute },
+const VERDICT_COLOR: Record<Verdict, string> = {
+  served: C.good,
+  missed: C.accent,
+  unlogged: C.mute,
+  none: C.mute,
 };
 
 export default function Home() {
@@ -61,13 +59,10 @@ export default function Home() {
   const body = board.data?.body ?? null;
   const status = coach.data ?? null;
   const view = day.data ?? null;
-  const verdict = view ? STATUS_WORDS[view.status] : null;
-  // An empty day carries NO verdict: 0 eaten is trivially "under allowance", and a green
-  // "on track" at 6 am judges a day that has not happened (user report). The rule came with
-  // the header when it moved here from Train, and it comes unchanged.
-  const dayHappened =
-    !!view && view.items.meals.length + view.items.activities.length + view.items.weights.length > 0;
-  const left = view?.allowance == null ? null : Math.round(view.allowance - view.eaten);
+  // An empty day carries NO verdict: `served`/`missed` are real judgements, `unlogged`/
+  // `none` are not, so only the first two ever colour the header (user report — a green
+  // "on track" at 6 am used to judge a day that had not happened).
+  const judged = view?.verdict === 'served' || view?.verdict === 'missed';
 
   return (
     <ScrollView
@@ -85,11 +80,11 @@ export default function Home() {
           <Disp size={30} style={{ marginTop: 6 }}>
             {!view ? (
               <>Where you are</>
-            ) : dayHappened && verdict ? (
+            ) : judged ? (
               <>
                 Day {view.day_number} ·{' '}
-                <Text testID="home-verdict" style={{ color: verdict.color, fontFamily: FONT.disp }}>
-                  {verdict.text}
+                <Text testID="home-verdict" style={{ color: VERDICT_COLOR[view.verdict], fontFamily: FONT.disp }}>
+                  {view.verdict_words}
                 </Text>
               </>
             ) : (
@@ -134,33 +129,6 @@ export default function Home() {
           <ReadingCard eyebrow="Right now" text={view.reading.text} live={view.is_today} />
         </View>
       ) : null}
-
-      {/* A GLANCE at the food, not a second copy of the Eat page: one line, and a tap that
-          opens the tab that owns it. */}
-      <Pressable
-        testID="home-eat"
-        accessibilityRole="button"
-        accessibilityLabel="Eating today"
-        onPress={() => router.push('/eat')}
-        style={({
-          marginTop: 12,
-          flexDirection: 'row',
-          alignItems: 'center',
-          borderRadius: RADIUS.card,
-          backgroundColor: C.card,
-          paddingVertical: 14,
-          paddingHorizontal: SPACE.card,
-          opacity: 1,
-        })}>
-        <Sub testID="home-eat-line" style={[{ flex: 1 }, TABULAR]}>
-          {!view
-            ? 'Eating'
-            : left == null
-              ? `${kcal(view.eaten)} eaten`
-              : `${kcal(view.eaten)} eaten · ${kcal(Math.abs(left))} ${left < 0 ? 'over' : 'left'}`}
-        </Sub>
-        <IconChevronRight size={18} color={C.mute} />
-      </Pressable>
 
       {/* The one button, and it is still a DOOR: pressing it here has never written
           anything and still does not. With a plan it opens Today, where the plan lives.
@@ -303,7 +271,6 @@ export function cardioEquivalent(board: TrainingBoard): number {
 /** Green when the trend is going the way the goal wants it to, quiet when there is no goal. */
 function trendColor(trend: number | null, kind: string | null): string {
   if (trend == null || !kind) return C.ink;
-  if (kind === 'lose_fat') return trend < 0 ? C.good : C.ink;
   if (kind === 'gain_muscle') return trend > 0 ? C.good : C.ink;
   return C.ink;
 }

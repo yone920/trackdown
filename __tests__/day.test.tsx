@@ -6,8 +6,8 @@ import Day from '@/app/day/[date]';
 import { makeDay } from './fixtures';
 import { C } from '@/lib/theme';
 
-// The Day screen against a fixture day: the verdict, the reading, the three stats, and
-// each of the four sections built from what `GET /api/day/:date` returned.
+// The Day screen against a fixture day: the verdict, the reading, the Earned stat, and
+// each of the sections built from what `GET /api/day/:date` returned.
 
 const mockApi = jest.fn();
 jest.mock('@/lib/api', () => ({
@@ -38,11 +38,11 @@ const CLOSED = makeDay({
   closed_at: '2026-08-30T00:05:00.000Z',
   verdict: 'served',
   verdict_words: 'Served your goal',
-  verdict_why: '340 under your allowance',
+  verdict_why: 'Trained today.',
   day_number: 11,
   goal: {
     id: 'g1',
-    kind: 'lose_fat',
+    kind: 'custom',
     title: 'Get to 170 lb',
     metrics: [],
     priority: 1,
@@ -52,7 +52,7 @@ const CLOSED = makeDay({
   },
   reading: {
     kind: 'in_short',
-    text: 'A solid push day and you stayed under the allowance.',
+    text: 'A solid push day, chest and triceps, with a weigh-in this morning.',
     next_action: null,
     actions: [],
     inputs_hash: 'x',
@@ -62,21 +62,6 @@ const CLOSED = makeDay({
   muscle_summary: [{ muscle: 'chest', sets: 6, exercises: ['Bench Press'] }],
   weight: { day: 181.4, avg_7d: 181.9, trend_per_week: -0.9 },
   items: {
-    meals: [
-      {
-        id: 'm1',
-        logged_at: '2026-08-29T12:30:00.000Z',
-        description: 'chicken and rice',
-        slot: 'lunch',
-        stated_slot: null,
-        kcal: 700,
-        protein_g: 55,
-        carbs_g: 70,
-        fat_g: 18,
-        fiber_g: 6,
-        evidence: [],
-      },
-    ],
     activities: [
       {
         id: 'a1',
@@ -161,18 +146,16 @@ describe('Day', () => {
   it('shows the verdict, the goal that was active and the day number', async () => {
     renderDay();
     await waitFor(() => expect(screen.getByText('Served your goal')).toBeTruthy());
-    expect(screen.getByText(/340 under your allowance/)).toBeTruthy();
+    expect(screen.getByText(/Trained today/)).toBeTruthy();
     expect(screen.getByText(/Goal · Get to 170 lb/)).toBeTruthy();
     expect(screen.getByText(/Day 11/)).toBeTruthy();
   });
 
-  it('reads the In short paragraph and the three stats', async () => {
+  it('reads the In short paragraph and the Earned stat', async () => {
     renderDay();
     await waitFor(() => expect(screen.getByText('In short')).toBeTruthy());
     expect(screen.getByText(/solid push day/)).toBeTruthy();
-    expect(screen.getByText('Eaten')).toBeTruthy();
     expect(screen.getByText('Earned')).toBeTruthy();
-    expect(screen.getByText('Allowance')).toBeTruthy();
   });
 
   it('groups training by muscle group, with the delta and the evidence', async () => {
@@ -260,104 +243,6 @@ describe('Day', () => {
     expect(screen.getByText(/160 kcal from Health/)).toBeTruthy();
   });
 
-  it('shows eating as macros against targets, the pattern line and the meals by slot', async () => {
-    renderDay();
-    await waitFor(() => expect(screen.getByText('Eating')).toBeTruthy());
-    expect(screen.getByText('Protein')).toBeTruthy();
-    expect(screen.getByText('120 of 160 g · under')).toBeTruthy();
-    expect(screen.getByText(/Back-loaded/)).toBeTruthy();
-    expect(screen.getByText('Lunch')).toBeTruthy();
-    expect(screen.getByText('chicken and rice')).toBeTruthy();
-  });
-
-  // The field report (2026-08-31): after the profile was wiped the protein, carb and fat
-  // bars all drew a full-width empty groove — grams ÷ a target nobody set is a zero-width
-  // fill, which reads as broken rather than as unset.
-  describe('a macro with no target', () => {
-    const withMacros = (macros: Partial<(typeof CLOSED)['macros']>) => {
-      const day = JSON.parse(JSON.stringify(CLOSED)) as typeof CLOSED;
-      day.macros = { ...day.macros, ...macros };
-      mockApi.mockImplementation((path: string) =>
-        path.startsWith('/api/day/') ? Promise.resolve(day) : Promise.resolve(null),
-      );
-    };
-
-    it('draws the bar as it always did when a target exists', async () => {
-      withMacros({
-        protein_g: { eaten: 120, target: 160, note: 'under' },
-        carbs_g: { eaten: 130, target: 200, note: 'under' },
-        fat_g: { eaten: 55, target: 70, note: 'under' },
-      });
-      renderDay();
-      await waitFor(() => expect(screen.getByText('Protein')).toBeTruthy());
-      expect(screen.getByTestId('macro-track-Protein')).toBeTruthy();
-      expect(screen.getByTestId('macro-track-Carbs')).toBeTruthy();
-      expect(screen.queryByTestId('macro-hint')).toBeNull();
-    });
-
-    it('draws no track at all, and says why once, when nothing is set', async () => {
-      withMacros({
-        protein_g: { eaten: 120, target: null, note: null },
-        carbs_g: { eaten: 130, target: null, note: null },
-        fat_g: { eaten: 55, target: null, note: null },
-      });
-      renderDay();
-      await waitFor(() => expect(screen.getByText('Protein')).toBeTruthy());
-      expect(screen.queryByTestId('macro-track-Protein')).toBeNull();
-      expect(screen.queryByTestId('macro-track-Carbs')).toBeNull();
-      expect(screen.queryByTestId('macro-track-Fat')).toBeNull();
-      // The grams are still drawn: they are measured.
-      expect(screen.getByText('120 g')).toBeTruthy();
-      expect(screen.getByTestId('macro-hint').props.children).toBe(
-        'No targets set — tell me your protein and carb aims and these become bars.',
-      );
-    });
-
-    it('mixes: the one with a target keeps its bar, and the line names the rest', async () => {
-      withMacros({
-        protein_g: { eaten: 120, target: 160, note: 'under' },
-        carbs_g: { eaten: 130, target: null, note: null },
-        fat_g: { eaten: 55, target: null, note: null },
-      });
-      renderDay();
-      await waitFor(() => expect(screen.getByText('Protein')).toBeTruthy());
-      expect(screen.getByTestId('macro-track-Protein')).toBeTruthy();
-      expect(screen.queryByTestId('macro-track-Carbs')).toBeNull();
-      expect(screen.getByTestId('macro-hint').props.children).toBe(
-        'No target for carbs and fat — tell me what you are aiming for and these become bars.',
-      );
-    });
-  });
-
-  describe('a day with nothing eaten', () => {
-    // Field report 2026-09-01: "PROTEIN 0 g / CARBS 0 g / FAT 0 g" before breakfast
-    // helps nobody. An empty day prints one line; the macros return with the first bite.
-    const empty = (isToday: boolean) => {
-      const day = JSON.parse(JSON.stringify(CLOSED)) as typeof CLOSED;
-      day.items.meals = [];
-      day.is_today = isToday;
-      if (isToday) day.closed_at = null;
-      mockApi.mockImplementation((path: string) =>
-        path.startsWith('/api/day/') ? Promise.resolve(day) : Promise.resolve(null),
-      );
-    };
-
-    it('live: one line with a wink, no zero macro rows, no 0 kcal summary', async () => {
-      empty(true);
-      renderDay();
-      await waitFor(() => expect(screen.getByTestId('eating-empty')).toBeTruthy());
-      expect(screen.queryByText('Protein')).toBeNull();
-      expect(screen.queryByText('0 kcal')).toBeNull();
-    });
-
-    it('closed: says it plainly, without the joke', async () => {
-      empty(false);
-      renderDay();
-      await waitFor(() => expect(screen.getByText('Nothing eaten was logged.')).toBeTruthy());
-      expect(screen.queryByText('Protein')).toBeNull();
-    });
-  });
-
   it('shows the body numbers and the footer', async () => {
     renderDay();
     await waitFor(() => expect(screen.getByText('Body')).toBeTruthy());
@@ -375,16 +260,9 @@ describe('Day', () => {
       pathname: '/log',
       params: { editDate: '2026-08-29', editId: 'a1', editKind: 'activity' },
     });
-
-    mockPush.mockReset();
-    fireEvent.press(screen.getByTestId('row-meal-m1-open'));
-    expect(mockPush).toHaveBeenCalledWith({
-      pathname: '/log',
-      params: { editDate: '2026-08-29', editId: 'm1', editKind: 'meal' },
-    });
   });
 
-  it('deletes a lift and a meal from a closed day, asking in the row first', async () => {
+  it('deletes a lift from a closed day, asking in the row first', async () => {
     renderDay();
     await waitFor(() => expect(screen.getByText('Bench Press')).toBeTruthy());
 
@@ -393,12 +271,6 @@ describe('Day', () => {
     fireEvent.press(screen.getByTestId('row-activity-a1-delete-confirm'));
     await waitFor(() =>
       expect(mockApi).toHaveBeenCalledWith('/api/entries/movement/a1', { method: 'DELETE' }),
-    );
-
-    fireEvent.press(screen.getByTestId('row-meal-m1-delete'));
-    fireEvent.press(screen.getByTestId('row-meal-m1-delete-confirm'));
-    await waitFor(() =>
-      expect(mockApi).toHaveBeenCalledWith('/api/entries/meals/m1', { method: 'DELETE' }),
     );
   });
 });

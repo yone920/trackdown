@@ -58,12 +58,7 @@ export const HOW_IT_WORKS: HowItWorksSection[] = [
   {
     title: 'Calories',
     body:
-      'Machines report their own figure and it is taken as read. Lifts report nothing, so their calories are a MET-based estimate from the time and your body weight, and anything estimated is marked "est." rather than presented as measured. The day’s allowance is your target plus a share of what you earned.',
-  },
-  {
-    title: 'When the app is not sure',
-    body:
-      'Every meal is checked against its own arithmetic — four calories a gram of protein and carbohydrate, nine for fat, against the calories claimed. A meal that does not add up is read a second time, and if it still does not, it is saved anyway and marked low confidence. Being confidently wrong about a number you cannot check is the one thing worth avoiding.',
+      'Machines report their own figure and it is taken as read. Lifts report nothing, so their calories are a MET-based estimate from the time and your body weight, and anything estimated is marked "est." rather than presented as measured.',
   },
   {
     title: 'Corrections',

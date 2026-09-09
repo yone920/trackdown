@@ -4,7 +4,6 @@
 
 export type ActivitySource = "manual" | "fused" | "health";
 export type ActivityCategory = "cardio" | "strength" | "mobility" | "other";
-export type MealSlot = "breakfast" | "lunch" | "dinner" | "snack";
 
 /** One activity row, as the day model reads it. `logged_at` is an absolute instant. */
 export interface DayActivity {
@@ -38,20 +37,6 @@ export interface DayActivity {
 	confidence: "low" | "medium" | "high" | null;
 	/** The Health sample this row came from, when it did. */
 	external_id?: string | null;
-}
-
-export interface DayMeal {
-	id: string;
-	logged_at: string;
-	description: string;
-	/** The stored slot, or the one derived from the clock when nobody said. */
-	slot: MealSlot;
-	stated_slot: MealSlot | null;
-	kcal: number;
-	protein_g: number | null;
-	carbs_g: number | null;
-	fat_g: number | null;
-	fiber_g: number | null;
 }
 
 export interface DayWeight {

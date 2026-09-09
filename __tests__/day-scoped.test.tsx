@@ -2,20 +2,17 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
-import EatDay from '@/app/day/[date]/eat';
 import TrainDay from '@/app/day/[date]/train';
-import type { DayActivity, DayMeal, DayView } from '@/lib/types';
+import type { DayActivity, DayView } from '@/lib/types';
 import { makeDay } from './fixtures';
 
 // History is domain-scoped (user decision 2026-09-02, on the shipped calendar: "in train it
 // should show me only the train … they have their own page — the historic data should also
 // have their own page").
 //
-// Three doors, three shapes, and this file holds the two new ones to their scope:
-// `/day/<date>/train` is the session and nothing else, `/day/<date>/eat` is the meals and
-// nothing else, and neither carries a verdict — a verdict is a judgement about a whole day,
-// and half a day cannot be judged. The whole-day archive behind Progress is unchanged and
-// is tested by day.test.tsx.
+// This file holds `/day/<date>/train` to its scope: the session and nothing else, and it
+// carries no verdict — a verdict is a judgement about a whole day, and half a day cannot be
+// judged. The whole-day archive behind Progress is unchanged and is tested by day.test.tsx.
 
 const mockApi = jest.fn();
 jest.mock('@/lib/api', () => ({
@@ -80,21 +77,7 @@ const ROW: DayActivity = {
   kcal: 180,
 };
 
-const MEAL: DayMeal = {
-  id: 'm1',
-  logged_at: '2026-08-29T07:30:00.000Z',
-  description: 'eggs and toast',
-  slot: 'breakfast',
-  stated_slot: null,
-  kcal: 480,
-  protein_g: 32,
-  carbs_g: 40,
-  fat_g: 18,
-  fiber_g: 4,
-  evidence: [],
-};
-
-/** A closed day with one lift and one meal on it — enough for either scope to show, or hide. */
+/** A closed day with two lifts on it — enough for the scope to show, or hide. */
 function day(overrides: Partial<DayView> = {}): DayView {
   return makeDay({
     date: '2026-08-29',
@@ -102,10 +85,9 @@ function day(overrides: Partial<DayView> = {}): DayView {
     closed_at: '2026-08-30T05:00:00.000Z',
     verdict: 'served',
     verdict_words: 'Served your goal',
-    reading: { text: 'A steady day: chest and triceps, and the eating held.', at: '2026-08-30T05:00:00.000Z' },
-    eaten: 480,
+    reading: { text: 'A steady day: chest and triceps, and a weigh-in this morning.', at: '2026-08-30T05:00:00.000Z' },
     earned: 264,
-    items: { meals: [MEAL], activities: [LIFT, ROW], weights: [] },
+    items: { activities: [LIFT, ROW], weights: [] },
     muscle_summary: [{ muscle: 'chest', sets: 6, exercises: ['Bench Press', 'Seated Row'] }],
     blocks: [{ id: 'b1', kind: 'strength', started_at: '2026-08-29T17:15:00.000Z', ended_at: '2026-08-29T18:05:00.000Z', kcal: 264, kcal_estimated: true }],
     ...overrides,
@@ -132,7 +114,7 @@ beforeEach(() => {
 });
 
 describe('a past day, in Train', () => {
-  it('shows the session and not one crumb of the eating', async () => {
+  it('shows the session and not one crumb of the whole day', async () => {
     serve(day());
     show(<TrainDay />);
 
@@ -140,12 +122,7 @@ describe('a past day, in Train', () => {
     expect(screen.getByText('Bench Press')).toBeTruthy();
     expect(screen.getByText('chest')).toBeTruthy();
 
-    // No meals, no macros, no body, no verdict, no In short.
-    expect(screen.queryByTestId('row-meal-m1')).toBeNull();
-    expect(screen.queryByText('eggs and toast')).toBeNull();
-    expect(screen.queryByTestId('day-macros')).toBeNull();
-    expect(screen.queryByTestId('macro-Protein')).toBeNull();
-    expect(screen.queryByText('Eating')).toBeNull();
+    // No body, no verdict, no In short.
     expect(screen.queryByText('Body')).toBeNull();
     expect(screen.queryByText('Served your goal')).toBeNull();
     expect(screen.queryByText('In short')).toBeNull();
@@ -179,37 +156,9 @@ describe('a past day, in Train', () => {
   });
 
   it('says the quiet true thing on a day with no session on it', async () => {
-    serve(day({ items: { meals: [MEAL], activities: [], weights: [] }, earned: 0, blocks: [] }));
+    serve(day({ items: { activities: [], weights: [] }, earned: 0, blocks: [] }));
     show(<TrainDay />);
     await waitFor(() => expect(screen.getByTestId('training-empty')).toBeTruthy());
-    expect(screen.queryByText('eggs and toast')).toBeNull();
-  });
-});
-
-describe('a past day, in Eat', () => {
-  it('shows the meals and the macros and not one rep of the training', async () => {
-    serve(day());
-    show(<EatDay />);
-
-    await waitFor(() => expect(screen.getByTestId('day-meals')).toBeTruthy());
-    expect(screen.getByText('eggs and toast')).toBeTruthy();
-    expect(screen.getByTestId('day-macros')).toBeTruthy();
-    expect(screen.getByTestId('macro-Protein')).toBeTruthy();
-
-    // No activities, no training section, no verdict.
-    expect(screen.queryByTestId('day-training')).toBeNull();
-    expect(screen.queryByText('Bench Press')).toBeNull();
-    expect(screen.queryByText('Training')).toBeNull();
-    expect(screen.queryByText('Served your goal')).toBeNull();
-    expect(screen.queryByText('Body')).toBeNull();
-  });
-
-  it('heads the page with the date and what was eaten', async () => {
-    serve(day());
-    show(<EatDay />);
-    await waitFor(() => expect(screen.getByTestId('eat-day-line')).toBeTruthy());
-    expect(screen.getByTestId('eat-day-eyebrow').props.children).toBe('Eating');
-    expect(screen.getByTestId('eat-day-line').props.children).toBe('480 kcal eaten');
   });
 });
 
@@ -224,15 +173,6 @@ describe('browsing stays in its own domain', () => {
 
     fireEvent.press(screen.getByTestId('train-day-next'));
     expect(mockReplace).toHaveBeenCalledWith('/day/2026-08-30/train');
-  });
-
-  it('does the same in Eat', async () => {
-    serve(day());
-    show(<EatDay />);
-    await waitFor(() => expect(screen.getByTestId('eat-day-prev')).toBeTruthy());
-
-    fireEvent.press(screen.getByTestId('eat-day-prev'));
-    expect(mockReplace).toHaveBeenCalledWith('/day/2026-08-28/eat');
   });
 
   // The scope is a scope, not a wall: the whole-day reading is one tap away.
@@ -255,14 +195,5 @@ describe('browsing stays in its own domain', () => {
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/train'));
     expect(screen.queryByTestId('train-day-scroll')).toBeNull();
     expect(mockApi.mock.calls.filter(([path]) => String(path).startsWith('/api/day/'))).toHaveLength(0);
-  });
-
-  it('sends today to Eat from the eating scope', async () => {
-    const now = new Date();
-    mockRouteDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    serve(day());
-    show(<EatDay />);
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/eat'));
   });
 });

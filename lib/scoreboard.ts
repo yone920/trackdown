@@ -52,7 +52,7 @@ export type GoalRowView = {
   unit: string | null;
   /** "−2.0 lb since Aug 31" — the last move, dated, so the number can be checked. */
   delta: { text: string; tone: Tone } | null;
-  /** False for maintain/custom goals: no green, no orange (concept-v2 §Goals). */
+  /** False for custom goals: no green, no orange (concept-v2 §Goals). */
   judge: boolean;
 };
 
@@ -65,7 +65,7 @@ export function goalRow(
   goal: GoalWithProgress,
   { today, weighIns = [] }: { today: IsoDate; weighIns?: readonly { date: IsoDate; value: number }[] },
 ): GoalRowView {
-  const judge = goal.kind !== 'maintain' && goal.kind !== 'custom';
+  const judge = goal.kind !== 'custom';
   const metric = goal.progress.metrics[0] ?? null;
   const spec = goal.metrics[0];
   const unit = metric?.unit ?? spec?.unit ?? null;

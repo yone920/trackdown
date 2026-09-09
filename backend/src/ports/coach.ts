@@ -27,7 +27,6 @@ export interface CoachPlace {
 
 export interface CoachPlan {
 	goal_pace: string | null;
-	diet_style: string | null;
 	/** Days per week the user says they train. */
 	training_days: number | null;
 	environment: string | null;
@@ -35,7 +34,6 @@ export interface CoachPlan {
 	/** Injuries and exercises to avoid. Never overridden by anything computed. */
 	constraints: string[];
 	preferences: string[];
-	eatback: string;
 	/**
 	 * The training background the user stated (migration 0011). Without it a cold start
 	 * has no way to tell a first-timer from a three-year lifter, and used to assume the
@@ -59,25 +57,11 @@ export interface CoachPlan {
 	 */
 	place: CoachPlace | null;
 	units: "lb";
-	targets: {
-		kcal: number | null;
-		protein_g: number | null;
-		carbs_max_g: number | null;
-		fat_g: number | null;
-		/** True when the profile excludes the user from deficit advice (age, BMI, pregnancy). */
-		tracking_only: boolean;
-	};
 }
 
 /** What has happened on the day the user is asking about, so far. */
 export interface CoachToday {
-	eaten: number;
 	earned: number;
-	target: number | null;
-	allowance: number | null;
-	remaining: number | null;
-	protein_g: number | null;
-	status: string;
 	/** Block titles logged today — "already trained" is the first thing the answer turns on. */
 	trained: string[];
 	/**
@@ -98,8 +82,6 @@ export interface CoachToday {
 		duration_min?: number | null;
 		kcal?: number | null;
 	}[];
-	/** Protein target for the day, so the model can talk about what is LEFT rather than the total. */
-	protein_target_g: number | null;
 }
 
 export interface CoachBriefInputs {

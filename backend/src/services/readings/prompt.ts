@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { FIBER_BAND, PROTEIN_PER_LB, type EatingWeek, type MacroAverage } from "../eating/features.js";
 import { formatClock, localMinutesOf } from "../localTime.js";
 import type { DayView } from "../day.js";
 import type { IsoDate } from "../localTime.js";
@@ -18,18 +17,19 @@ import type { CoachFeatures } from "../coach/features.js";
 const VOICE = `VOICE
 - Second person, plain, calm. No exclamation marks, no emoji, no coaching clichés
   ("crushing it", "let's go"), no praise for existing.
-- Never scold. A gap or a meal nobody ate is information, not a failing.
+- Never scold. A gap is information, not a failing.
 - NOTHING IS OWED. The user logs what happened; the app never keeps a list of what they
-  were supposed to do. Never write that a meal is "due" or "expected", that anything is
-  "missing", or that the user "still needs to" or "should" log something. An empty slot is
-  not a debt and the day is not waiting for anything.
-  - Not this: "Dinner is due." / "You still need to log dinner." / "Lunch is missing."
-  - This: "A ~650 kcal, 45 g-protein dinner would close today's targets." / "You are
-    620 kcal and 45 g of protein short of the day's numbers."
+  were supposed to do. Never write that a workout or a weigh-in is "due" or "expected", that
+  anything is "missing", or that the user "still needs to" or "should" log something. An
+  empty slot is not a debt and the day is not waiting for anything.
+  - Not this: "A workout is due." / "You still need to log today's session." / "A weigh-in
+    is missing."
+  - This: "Two more sets of hamstrings would close this week's coverage." / "You are
+    15 minutes short of this week's cardio target."
   Arithmetic about what would close the gap is a fact and is welcome. An instruction to go
-  and eat is not.
-- Use the numbers you are given and no others. Do not invent a food, an exercise or a
-  target that is not on the sheet. If a number is missing, say what you do know instead.
+  and do it is not.
+- Use the numbers you are given and no others. Do not invent an exercise or a target that is
+  not on the sheet. If a number is missing, say what you do know instead.
 - Pounds and miles. Round calories to whole numbers.`;
 
 const RIGHT_NOW = `You are writing the "Right now" line on TrackDown's Today screen: the one thing the user
@@ -38,21 +38,21 @@ should read before deciding what to do next.
 - Exactly one or two sentences. The first says where the day stands; the second, if there is
   one, says what is left of the day's numbers — as arithmetic, not as an instruction. Never
   more.
-- Then pick ONE next action from: log_meal, weigh_in, workout, coach (ask for a plan — the
+- Then pick ONE next action from: weigh_in, workout, coach (ask for a plan — the
   right answer when the day is on track and the next move is a workout choice). The chip is
   a shortcut to a screen, not a reminder: pick the one that fits where the day stands. The
   OPEN SLOTS list says which screens are still worth a tap.
 - actions: up to two more chips the user might reasonably tap instead. Never repeat the
   next action's kind.
-- The chip's label is a place, not an order: "Log a meal", not "You need to eat".
+- The chip's label is a place, not an order: "Log a workout", not "You need to train".
 
 ${VOICE}`;
 
 const IN_SHORT = `You are writing the "In short" paragraph for a day that has closed. It is read days later,
 when the user has forgotten the day itself.
 
-- Two or three sentences, past tense. What was trained, how the eating went against the
-  goal, and the one thing worth remembering (a load that went up, a gap, a weigh-in).
+- Two or three sentences, past tense. What was trained against the goal, and the one thing
+  worth remembering (a load that went up, a gap, a weigh-in).
 - Judge only against the goal that was active that day, which is on the sheet. If there was
   no goal, describe the day without a verdict.
 - No advice and no next action: the day is over. This is a record, not a nudge.
@@ -60,8 +60,8 @@ when the user has forgotten the day itself.
 ${VOICE}`;
 
 const DOSSIER = `You are writing "What I know about you" — the two paragraphs at the top of TrackDown's You
-screen. They replaced a grid of rows ("Days a week — 4", "Diet style — keto"), every one of
-which was true and none of which read as a person.
+screen. They replaced a grid of rows ("Days a week — 4", "Experience — intermediate"), every
+one of which was true and none of which read as a person.
 
 - EXACTLY TWO PARAGRAPHS, two or three sentences each. No headings, no bullet points, no
   dashes standing in for bullets, no lists of any kind. Prose the user could have said out
@@ -90,35 +90,6 @@ which was true and none of which read as a person.
 
 ${VOICE}`;
 
-
-const EATING_DIRECTION = `You are writing "The direction" on TrackDown's Eat page: a short paragraph telling the user
-which way to steer their NUTRIENTS over the coming days, from a week of their own numbers.
-
-- Two or three sentences. Nutrients only — protein, carbohydrate, fat, fibre, calories — and
-  the direction to move each one.
-- **NEVER PRESCRIBE A DISH, A MEAL OR A FOOD.** Not "have salmon and quinoa", not "try Greek
-  yoghurt", not a breakfast idea, not an example plate. The user was explicit about this:
-  "it doesn't have to be a dish… general direction of nutrients." Naming foods is the one
-  thing this paragraph is not for. Say "another 30 g of protein a day, spread across the
-  meals you already eat" — never what to cook.
-- Lead with whatever is furthest from where it should be. If everything is in range, say so
-  plainly in one sentence and stop; a paragraph that manufactures a concern to justify its
-  own existence is worse than a short one.
-- The numbers are averages over CLOSED days that had food logged — **today is not in them**,
-  because a day still being lived cannot be judged and has its own live layer elsewhere on
-  the page. Never write about today in the past tense, and never say what today "came in
-  at". The sheet says how many closed days there were; an average over two of them is a thin
-  week and the paragraph should hedge accordingly rather than treating it as a trend.
-- A guideline is not something they said. The sheet marks which targets were stated, which
-  were derived from body weight and which are standing guidelines; never hand a default back
-  to the user as their own aim.
-- Respect what they have told you about how they eat — the diet style and preferences on the
-  sheet are constraints, not suggestions to reconsider. If their carb aim is on file, steer
-  within it rather than arguing with it.
-- Say nothing about training. Another page has that.
-
-${VOICE}`;
-
 /**
  * What these prompts currently say, in eight characters.
  *
@@ -128,14 +99,14 @@ ${VOICE}`;
  * which is how a day that had been told never to say "left to log" went on saying it.
  * Hashing the prompts themselves means no future edit can forget to bump a version number.
  *
- * All four prompts share ONE fingerprint, which is deliberately blunt: editing the dossier's
+ * All three prompts share ONE fingerprint, which is deliberately blunt: editing the dossier's
  * wording rewrites every cached *day* reading once as well, on the next read of each. One
  * model call per active day is the price of never having to remember which hash covers which
  * prompt, and the alternative — a fingerprint each — is three things to get wrong instead of
  * one.
  */
 export const PROMPT_FINGERPRINT = createHash("sha256")
-	.update(`${RIGHT_NOW} ${IN_SHORT} ${DOSSIER} ${EATING_DIRECTION}`)
+	.update(`${RIGHT_NOW} ${IN_SHORT} ${DOSSIER}`)
 	.digest("hex")
 	.slice(0, 8);
 
@@ -165,28 +136,7 @@ export function buildDaySheet(view: DayView): string {
 			.join("\n")
 	);
 
-	sections.push(
-		[
-			"CALORIES",
-			line("Eaten", kcal(view.eaten)),
-			line("Earned from activity", kcal(view.earned)),
-			line("Target", kcal(view.target)),
-			line("Allowance (target + eat-back)", kcal(view.allowance)),
-			line("Left", kcal(view.remaining)),
-			line("Status", view.status),
-		]
-			.filter(Boolean)
-			.join("\n")
-	);
-
-	const macros = Object.entries(view.macros)
-		.map(([name, macro]) =>
-			macro.eaten == null
-				? null
-				: `${name.replace("_g", "")}: ${Math.round(macro.eaten)} g${macro.target ? ` of ${Math.round(macro.target)} g (${macro.note})` : ""}`
-		)
-		.filter(Boolean);
-	if (macros.length > 0) sections.push(["MACROS", ...macros].join("\n"));
+	sections.push(["EARNED", line("Earned from activity", kcal(view.earned))].filter(Boolean).join("\n"));
 
 	if (view.blocks.length > 0 || view.items.activities.length > 0) {
 		const lines: string[] = ["TRAINING"];
@@ -217,11 +167,6 @@ export function buildDaySheet(view: DayView): string {
 		sections.push("TRAINING\nNothing logged.");
 	}
 
-	const meals = view.items.meals.map(
-		(meal) => `${at(meal.logged_at)} ${meal.slot}: ${meal.description} — ${Math.round(meal.kcal)} kcal${meal.protein_g ? `, ${Math.round(meal.protein_g)} g protein` : ""}`
-	);
-	sections.push(["EATING", ...(meals.length > 0 ? meals : ["Nothing logged."]), view.eating_pattern ?? ""].filter(Boolean).join("\n"));
-
 	sections.push(
 		[
 			"BODY",
@@ -237,17 +182,6 @@ export function buildDaySheet(view: DayView): string {
 			.filter(Boolean)
 			.join("\n")
 	);
-
-	// Which screens are still worth a chip. Deliberately not called "expected": the day is
-	// not waiting for these and the reading must not say it is (see VOICE above).
-	if (view.is_today && view.expected.length > 0) {
-		sections.push(
-			[
-				"OPEN SLOTS (nothing logged here yet — a fact about the log, not something the user owes)",
-				...view.expected.map((item) => `${item.label} (${item.kind})`),
-			].join("\n")
-		);
-	}
 
 	return sections.join("\n\n");
 }
@@ -282,10 +216,8 @@ export interface DossierInputs {
 		training_days: number | null;
 		session_minutes: number | null;
 		cardio_minutes_target: number | null;
-		diet_style: string | null;
 		environment: string | null;
 		equipment: string[];
-		eatback: string | null;
 		experience: string | null;
 		background: string | null;
 		reference_loads: { exercise: string; load_lb: number; reps: number | null }[];
@@ -294,16 +226,6 @@ export interface DossierInputs {
 		place: { name: string; kind: string; equipment_count: number } | null;
 		/** Which plan fields a human actually said, and when (profiles.stated_at). */
 		stated_at: Record<string, string>;
-	};
-	targets: {
-		tdee: number | null;
-		eat_target: number | null;
-		protein_g: number | null;
-		carbs_g: number | null;
-		/** derived / stated / default / none — provenance, not arithmetic (services/tdee.ts). */
-		source: string;
-		eatback: string;
-		weight_lb: number | null;
 	};
 	goals: {
 		title: string;
@@ -334,7 +256,7 @@ function said(stated: Record<string, string>, field: string): string {
  * default back as a statement is the `daily_calorie_target` bug in prose.
  */
 export function buildDossierSheet(inputs: DossierInputs): string {
-	const { plan, targets, features } = inputs;
+	const { plan, features } = inputs;
 	const sections: string[] = [];
 
 	sections.push(`WHAT THEY HAVE SAID ABOUT HOW THEY TRAIN (a bracket means a human stated it; anything absent, nobody has said)
@@ -361,30 +283,6 @@ ${[
 	]
 		.filter(Boolean)
 		.join("\n") || "Nothing stated yet."}`);
-
-	sections.push(
-		[
-			"WHAT THEY HAVE SAID ABOUT EATING",
-			line(`Diet style${said(plan.stated_at, "diet_style")}`, plan.diet_style),
-			line("Eat back what they earn", targets.eatback),
-			line(
-				"Daily calorie target",
-				targets.eat_target == null
-					? null
-					: `${Math.round(targets.eat_target)} kcal (${
-							targets.source === "stated"
-								? "a number they gave"
-								: targets.source === "derived"
-									? "worked out from their stats, not stated"
-									: "a column default nobody chose — do NOT present it as theirs"
-						})`
-			),
-			line("Maintenance (TDEE)", targets.tdee == null ? null : `${Math.round(targets.tdee)} kcal, computed`),
-			line("Protein target", targets.protein_g == null ? null : `${Math.round(targets.protein_g)} g`),
-		]
-			.filter(Boolean)
-			.join("\n")
-	);
 
 	sections.push(
 		inputs.goals.length === 0
@@ -451,8 +349,6 @@ ${[
 				features.weight.trend_per_week == null ? null : `${features.weight.trend_per_week > 0 ? "+" : ""}${features.weight.trend_per_week} lb/week`
 			),
 			line("Days logged in the last week", `${features.adherence.day7.logged_days} of 7`),
-			line("Average calories eaten", features.adherence.day7.kcal_avg == null ? null : `${features.adherence.day7.kcal_avg} kcal/day`),
-			line("Average protein", features.adherence.day7.protein_avg == null ? null : `${features.adherence.day7.protein_avg} g/day`),
 		]
 			.filter(Boolean)
 			.join("\n")
@@ -467,56 +363,4 @@ export function buildDossierPrompt(inputs: DossierInputs): string {
 Today is ${inputs.date} in the user's timezone.
 
 ${buildDossierSheet(inputs)}`;
-}
-
-/**
- * The Eat page's written layer, handed the computed week rather than the meals. The model
- * never sees a row: it is given averages, targets and where each target came from, which is
- * the whole of `EatingWeek` plus what the user has said about how they eat.
- */
-export function buildEatingDirectionPrompt(sheet: EatingDirectionSheet): string {
-	const macro = (label: string, macro: MacroAverage): string | null => {
-		if (macro.avg_per_day === null) return null;
-		const aim =
-			macro.target === null
-				? "no target set"
-				: `${macro.direction === "at_most" ? "aim at most" : "aim at least"} ${macro.target} g (${macro.source})`;
-		return `${label}: ${macro.avg_per_day} g/day average · ${aim}`;
-	};
-	const facts = [
-		`Closed days with food logged in the last 7 (today is NOT counted): ${sheet.week.days_logged}`,
-		sheet.week.avg_kcal === null ? null : `Calories: ${sheet.week.avg_kcal}/day average`,
-		macro("Protein", sheet.week.protein),
-		macro("Carbohydrate", sheet.week.carbs),
-		macro("Fat", sheet.week.fat),
-		macro("Fibre", sheet.week.fiber),
-		sheet.week.outliers.length > 0 ? `Stood out most recently: ${sheet.week.outliers.join("; ")}` : null,
-		line("Goal", sheet.goal),
-		line("Body weight", sheet.weight_lb === null ? null : `${sheet.weight_lb} lb`),
-		line("Diet style", sheet.diet_style),
-		sheet.preferences.length > 0 ? `They have said: ${sheet.preferences.join("; ")}` : null,
-		sheet.constraints.length > 0 ? `Constraints: ${sheet.constraints.join("; ")}` : null,
-	]
-		.filter((entry): entry is string => Boolean(entry))
-		.join("\n");
-
-	return `${EATING_DIRECTION}
-
-THE WEEK, AS COMPUTED
-${facts}
-
-GUARDRAILS — the science this steers by, not numbers to quote back:
-- Protein around ${PROTEIN_PER_LB.low}–${PROTEIN_PER_LB.high} g per pound of body weight protects muscle in a deficit.
-- Fibre ${FIBER_BAND.low}–${FIBER_BAND.high} g a day is the guideline band.
-- Carbohydrate is sized to training: more on days with hard sessions, less on quiet ones.`;
-}
-
-/** Everything the direction paragraph is written from. */
-export interface EatingDirectionSheet {
-	week: EatingWeek;
-	goal: string | null;
-	weight_lb: number | null;
-	diet_style: string | null;
-	preferences: string[];
-	constraints: string[];
 }

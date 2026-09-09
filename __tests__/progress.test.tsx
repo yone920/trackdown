@@ -80,8 +80,10 @@ function todayKey(): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
 
+// `build_strength` stands in for "a judged kind" — there is no dedicated weight-loss goal
+// kind any more (gain_muscle / build_strength / improve_endurance / custom).
 const weightGoal = () => ({
-  ...makeGoal('lose_fat', [
+  ...makeGoal('build_strength', [
     makeMetric({
       measure: 'body_weight',
       unit: 'lb',

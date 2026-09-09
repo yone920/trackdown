@@ -63,16 +63,10 @@ jest.mock('@/lib/photos', () => ({
   pickPhotos: async () => [{ uri: 'file:///b.jpg', filename: 'b.jpg', type: 'image/jpeg' }],
 }));
 
-const meal: FusionResult = {
-  kind: 'meal',
-  description: 'Chicken, rice and broccoli',
-  meal_type: 'dinner',
-  kcal: 620,
-  protein_g: 45,
-  carbs_g: 60,
-  fat_g: 18,
-  fiber_g: 6,
-  items: [],
+/** A second example kind, distinct from `workout`, for mixed-input and correction tests. */
+const secondary: FusionResult = {
+  kind: 'weight',
+  weight_lb: 181.4,
   confidence: 'medium',
   sources: null,
 };
@@ -159,7 +153,7 @@ describe('the log sheet', () => {
     mockSpeech.start.mockImplementation(async (events: typeof heard) => {
       heard = events;
     });
-    mockUpload.mockResolvedValue(analyzed([meal]));
+    mockUpload.mockResolvedValue(analyzed([secondary]));
     renderSheet();
 
     fireEvent.changeText(screen.getByTestId('log-text'), 'chicken and rice');
@@ -198,7 +192,7 @@ describe('the log sheet', () => {
     mockSpeech.start.mockImplementation(async (events: typeof heard) => {
       heard = events;
     });
-    mockUpload.mockResolvedValue(analyzed([meal]));
+    mockUpload.mockResolvedValue(analyzed([secondary]));
     renderSheet();
 
     await act(async () => {
@@ -261,7 +255,7 @@ describe('the log sheet', () => {
   });
 
   it('calls its primary button Log, and shows a review page when it has read something', async () => {
-    mockUpload.mockResolvedValue(analyzed([meal]));
+    mockUpload.mockResolvedValue(analyzed([secondary]));
     renderSheet();
     expect(screen.getByTestId('log-submit')).toHaveTextContent('Log');
 
@@ -289,8 +283,8 @@ describe('the log sheet', () => {
   });
 
   it('saves what the user approved, on one client id', async () => {
-    mockUpload.mockResolvedValue(analyzed([meal]));
-    mockApi.mockResolvedValue({ kind: 'meal', kinds: ['meal'], replayed: false });
+    mockUpload.mockResolvedValue(analyzed([secondary]));
+    mockApi.mockResolvedValue({ kind: 'weight', kinds: ['weight'], replayed: false });
 
     renderSheet();
     await logIt('chicken, rice and broccoli');
@@ -305,7 +299,7 @@ describe('the log sheet', () => {
     expect(path).toBe('/api/log/confirm');
     // The uuid is minted once per Save, so a retry replays rather than logging twice.
     expect(options.body.client_id).toBe('00000000-0000-4000-8000-000000000000');
-    expect(options.body.results).toMatchObject([{ kind: 'meal', kcal: 620 }]);
+    expect(options.body.results).toMatchObject([{ kind: 'weight', weight_lb: 181.4 }]);
     expect(options.body.tz_offset_min).toBe(0);
   });
 
@@ -352,27 +346,27 @@ describe('the log sheet', () => {
   });
 
   it('confirms with the words that were said, not with the instruction that changed them', async () => {
-    mockUpload.mockResolvedValueOnce(analyzed([meal]));
-    mockApi.mockResolvedValue({ kind: 'meal', kinds: ['meal'], replayed: false });
+    mockUpload.mockResolvedValueOnce(analyzed([secondary]));
+    mockApi.mockResolvedValue({ kind: 'weight', kinds: ['weight'], replayed: false });
     renderSheet();
-    await logIt('chicken and rice');
+    await logIt('weighed in this morning');
 
     fireEvent.press(screen.getByTestId('log-make-change'));
-    mockUpload.mockResolvedValueOnce(analyzed([{ ...meal, kcal: 700 }]));
-    fireEvent.changeText(screen.getByTestId('log-text'), 'make it 700 calories');
+    mockUpload.mockResolvedValueOnce(analyzed([{ ...secondary, weight_lb: 185 }]));
+    fireEvent.changeText(screen.getByTestId('log-text'), 'make it 185');
     fireEvent.press(screen.getByTestId('log-submit'));
 
-    await waitFor(() => expect(screen.getByTestId('meal-kcal')).toHaveTextContent('700'));
+    await waitFor(() => expect(screen.getByTestId('weight-lb')).toHaveTextContent('185'));
     fireEvent.press(screen.getByTestId('confirm-save'));
 
     await waitFor(() => expect(mockApi).toHaveBeenCalled());
     const [, options] = mockApi.mock.calls[0] as [string, { body: Record<string, unknown> }];
     // The DayLog quotes this back at the user. It is the log, not the correction.
-    expect(options.body.text).toBe('chicken and rice');
+    expect(options.body.text).toBe('weighed in this morning');
   });
 
   it('lets a change be abandoned without losing what was read', async () => {
-    mockUpload.mockResolvedValue(analyzed([meal]));
+    mockUpload.mockResolvedValue(analyzed([secondary]));
     renderSheet();
     await logIt('chicken and rice');
 
@@ -418,20 +412,21 @@ describe('the log sheet', () => {
         },
       ],
     };
+    const context: FusionResult = { kind: 'coach_context', text: 'my knee is sore' };
     const weight: FusionResult = { kind: 'weight', weight_lb: 181, confidence: 'high', sources: null };
     mockUpload.mockResolvedValue(
       analyzed(
-        [meal, run, weight],
+        [context, run, weight],
         [
           { id: 'e1', kind: 'photo', mime: 'image/jpeg', width: 10, height: 10, url: '/x', part: 0 },
           { id: 'e2', kind: 'photo', mime: 'image/jpeg', width: 10, height: 10, url: '/y', part: 1 },
         ],
       ),
     );
-    mockApi.mockResolvedValue({ kind: 'meal', kinds: ['meal', 'weight'], replayed: false });
+    mockApi.mockResolvedValue({ kind: 'coach_context', kinds: ['coach_context', 'weight'], replayed: false });
 
     renderSheet();
-    await logIt('ate this, ran 5k, weighed 181');
+    await logIt('my knee is sore, ran 5k, weighed 181');
 
     expect(screen.getByTestId('confirm-card-1')).toBeTruthy();
     expect(screen.getByTestId('confirm-card-2')).toBeTruthy();
@@ -444,9 +439,9 @@ describe('the log sheet', () => {
     fireEvent.press(screen.getByTestId('confirm-save'));
     await waitFor(() => expect(mockApi).toHaveBeenCalled());
     const [, options] = mockApi.mock.calls[0] as [string, { body: Record<string, unknown> }];
-    // One call, one client_id, the two parts that are left — the meal and the weigh-in.
+    // One call, one client_id, the two parts that are left — the context and the weigh-in.
     expect(mockApi).toHaveBeenCalledTimes(1);
-    expect(options.body.results).toMatchObject([{ kind: 'meal' }, { kind: 'weight' }]);
+    expect(options.body.results).toMatchObject([{ kind: 'coach_context' }, { kind: 'weight' }]);
     expect(options.body.evidence_ids).toEqual(['e1']);
     expect(options.body.evidence_parts).toEqual([0]);
   });
@@ -484,7 +479,7 @@ describe('the log sheet', () => {
   });
 
   it('sends no clarify round on an ordinary log', async () => {
-    mockUpload.mockResolvedValue(analyzed([meal]));
+    mockUpload.mockResolvedValue(analyzed([secondary]));
     renderSheet();
     await logIt('chicken and rice');
     const parts = mockUpload.mock.calls[0]![1] as { name: string }[];
@@ -534,12 +529,12 @@ describe('the primary action is the biggest thing on the sheet', () => {
     expect(screen.getByTestId('log-submit').props.style).toMatchObject({ height: 56 });
 
     await waitFor(() => expect(resolve).not.toBeNull());
-    resolve!(analyzed([meal]));
+    resolve!(analyzed([secondary]));
     await waitFor(() => expect(screen.getByTestId('confirm-card')).toBeTruthy());
   });
 
   it('lives in a bar pinned below the scroller, so it is reachable with the keyboard up', async () => {
-    mockUpload.mockResolvedValue(analyzed([meal]));
+    mockUpload.mockResolvedValue(analyzed([secondary]));
     renderSheet();
     expect(screen.getByTestId('log-actions')).toBeTruthy();
     // "From library" is beside it and stays a small chip.
@@ -584,44 +579,44 @@ describe('an attached photo is removed by its badge and by nothing else', () => 
 // the sheet gives it straight back on the confirm — which writes it against the rows the
 // parts turn into.
 describe('a change told to a pending log ends up in the record', () => {
-  const carbsFixed = { part: 0, item: null, instruction: 'the carbs look wrong', changes: [{ field: 'carbs_g', from: 398, to: 89 }] };
+  const weightFixed = { part: 0, item: null, instruction: 'that was not the right weight', changes: [{ field: 'weight_lb', from: 181.4, to: 185 }] };
 
   it('relays every correction the server measured, in the order they were told', async () => {
-    mockUpload.mockResolvedValueOnce(analyzed([meal]));
-    mockApi.mockResolvedValue({ kind: 'meal', kinds: ['meal'], replayed: false });
+    mockUpload.mockResolvedValueOnce(analyzed([secondary]));
+    mockApi.mockResolvedValue({ kind: 'weight', kinds: ['weight'], replayed: false });
     renderSheet();
-    await logIt('tuna, eggs and four slices of this bread');
+    await logIt('weighed in this morning');
 
     fireEvent.press(screen.getByTestId('log-make-change'));
-    mockUpload.mockResolvedValueOnce({ ...analyzed([{ ...meal, carbs_g: 89 }]), corrections: [carbsFixed] });
-    fireEvent.changeText(screen.getByTestId('log-text'), 'the carbs look wrong');
+    mockUpload.mockResolvedValueOnce({ ...analyzed([{ ...secondary, weight_lb: 185 }]), corrections: [weightFixed] });
+    fireEvent.changeText(screen.getByTestId('log-text'), 'that was not the right weight');
     fireEvent.press(screen.getByTestId('log-submit'));
     await waitFor(() => expect(screen.getByTestId('confirm-save')).toBeTruthy());
 
     // A second told change, on the same preview.
     fireEvent.press(screen.getByTestId('log-make-change'));
     mockUpload.mockResolvedValueOnce({
-      ...analyzed([{ ...meal, carbs_g: 89, kcal: 880 }]),
-      corrections: [{ part: 0, item: null, instruction: 'about 880 calories', changes: [{ field: 'kcal', from: 620, to: 880 }] }],
+      ...analyzed([{ ...secondary, weight_lb: 190 }]),
+      corrections: [{ part: 0, item: null, instruction: 'actually 190', changes: [{ field: 'weight_lb', from: 185, to: 190 }] }],
     });
-    fireEvent.changeText(screen.getByTestId('log-text'), 'about 880 calories');
+    fireEvent.changeText(screen.getByTestId('log-text'), 'actually 190');
     fireEvent.press(screen.getByTestId('log-submit'));
-    await waitFor(() => expect(screen.getByTestId('meal-kcal')).toHaveTextContent('880'));
+    await waitFor(() => expect(screen.getByTestId('weight-lb')).toHaveTextContent('190'));
 
     fireEvent.press(screen.getByTestId('confirm-save'));
     await waitFor(() => expect(mockApi).toHaveBeenCalled());
     const [, options] = mockApi.mock.calls[0] as [string, { body: Record<string, unknown> }];
     expect(options.body.corrections).toEqual([
-      carbsFixed,
-      { part: 0, item: null, instruction: 'about 880 calories', changes: [{ field: 'kcal', from: 620, to: 880 }] },
+      weightFixed,
+      { part: 0, item: null, instruction: 'actually 190', changes: [{ field: 'weight_lb', from: 185, to: 190 }] },
     ]);
   });
 
   it('sends none at all for a log nobody corrected', async () => {
-    mockUpload.mockResolvedValue(analyzed([meal]));
-    mockApi.mockResolvedValue({ kind: 'meal', kinds: ['meal'], replayed: false });
+    mockUpload.mockResolvedValue(analyzed([secondary]));
+    mockApi.mockResolvedValue({ kind: 'weight', kinds: ['weight'], replayed: false });
     renderSheet();
-    await logIt('chicken and rice');
+    await logIt('weighed in this morning');
     fireEvent.press(screen.getByTestId('confirm-save'));
 
     await waitFor(() => expect(mockApi).toHaveBeenCalled());
@@ -630,22 +625,22 @@ describe('a change told to a pending log ends up in the record', () => {
   });
 
   it('drops the history of a part the user then removed with its ✕', async () => {
-    mockUpload.mockResolvedValueOnce(analyzed([workout, meal]));
-    mockApi.mockResolvedValue({ kind: 'meal', kinds: ['meal'], replayed: false });
+    mockUpload.mockResolvedValueOnce(analyzed([workout, secondary]));
+    mockApi.mockResolvedValue({ kind: 'weight', kinds: ['weight'], replayed: false });
     renderSheet();
-    await logIt('rows, then dinner');
+    await logIt('rows, then a weigh-in');
 
     fireEvent.press(screen.getByTestId('log-make-change'));
     mockUpload.mockResolvedValueOnce({
-      ...analyzed([workout, { ...meal, carbs_g: 89 }]),
-      // The meal is part 1 here.
-      corrections: [{ ...carbsFixed, part: 1 }],
+      ...analyzed([workout, { ...secondary, weight_lb: 185 }]),
+      // The weigh-in is part 1 here.
+      corrections: [{ ...weightFixed, part: 1 }],
     });
-    fireEvent.changeText(screen.getByTestId('log-text'), 'the carbs look wrong');
+    fireEvent.changeText(screen.getByTestId('log-text'), 'that was not the right weight');
     fireEvent.press(screen.getByTestId('log-submit'));
     await waitFor(() => expect(screen.getByTestId('confirm-card-1')).toBeTruthy());
 
-    // Drop the meal. Its history goes with it rather than sliding onto the workout.
+    // Drop the weigh-in. Its history goes with it rather than sliding onto the workout.
     fireEvent.press(screen.getByTestId('confirm-card-1-remove'));
     fireEvent.press(screen.getByTestId('confirm-save'));
 
@@ -843,11 +838,11 @@ describe('the plan-new door', () => {
     expect(mockBack).toHaveBeenCalled();
   });
 
-  it('writes no meal, no set and no weigh-in — this door logs nothing', async () => {
+  it('writes no set and no weigh-in — this door logs nothing', async () => {
     mockParams = { framing: 'plan-new' };
-    // The reader classifies a meal out of the words; the generate door must not save it.
+    // The reader classifies a record out of the words; the generate door must not save it.
     const calls = serveGeneration([
-      { kind: 'meal', description: 'eggs', kcal: 200, protein_g: 12, carbs_g: 2, fat_g: 14, fiber_g: 0, items: [], meal_type: null, confidence: 'high', sources: {}, consistency: null } as unknown as FusionResult,
+      { kind: 'weight', weight_lb: 181, confidence: 'high', sources: {} } as unknown as FusionResult,
     ]);
     renderSheet();
 
@@ -1126,7 +1121,7 @@ describe('a log about a day that has already been', () => {
   };
 
   it('says which day it is filing to, and quotes the words that said so', async () => {
-    mockUpload.mockResolvedValue({ ...analyzed([meal]), backdate: yesterday });
+    mockUpload.mockResolvedValue({ ...analyzed([secondary]), backdate: yesterday });
     renderSheet();
 
     await logIt('yesterday I had two scoops of ice cream');
@@ -1136,7 +1131,7 @@ describe('a log about a day that has already been', () => {
   });
 
   it('writes it against that day, not against today', async () => {
-    mockUpload.mockResolvedValue({ ...analyzed([meal]), backdate: yesterday });
+    mockUpload.mockResolvedValue({ ...analyzed([secondary]), backdate: yesterday });
     mockApi.mockResolvedValue({ saved: {} });
     renderSheet();
 
@@ -1154,7 +1149,7 @@ describe('a log about a day that has already been', () => {
 
   // The offer has to be refusable, or it is not an offer.
   it('puts it back on today when the reader guessed wrong', async () => {
-    mockUpload.mockResolvedValue({ ...analyzed([meal]), backdate: yesterday });
+    mockUpload.mockResolvedValue({ ...analyzed([secondary]), backdate: yesterday });
     mockApi.mockResolvedValue({ saved: {} });
     renderSheet();
 
@@ -1168,7 +1163,7 @@ describe('a log about a day that has already been', () => {
   });
 
   it('says nothing at all about the day for an ordinary log', async () => {
-    mockUpload.mockResolvedValue(analyzed([meal]));
+    mockUpload.mockResolvedValue(analyzed([secondary]));
     mockApi.mockResolvedValue({ saved: {} });
     renderSheet();
 

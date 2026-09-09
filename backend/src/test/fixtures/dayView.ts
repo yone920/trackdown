@@ -1,12 +1,12 @@
 import type { DayView } from "../../services/day.js";
 
 // One computed day, complete enough that the sheet the model is given is a real sheet:
-// a gym block with a delta on it, a meal, a weigh-in, a goal and an open dinner slot.
+// a gym block with a delta on it and a weigh-in.
 //
 // It lives here rather than in readings.test.ts because the contract test needs the same
 // day: pinning the *prompt's* wording against a hand-written sheet would pin nothing.
 
-/** A day with one gym block, one meal and a weigh-in — enough for the sheet to be real. */
+/** A day with one gym block and a weigh-in — enough for the sheet to be real. */
 export function dayViewFixture(overrides: Partial<DayView> = {}): DayView {
 	const base: DayView = {
 		date: "2026-08-29",
@@ -15,21 +15,6 @@ export function dayViewFixture(overrides: Partial<DayView> = {}): DayView {
 		closed_at: null,
 		day_number: 12,
 		items: {
-			meals: [
-				{
-					id: "m1",
-					logged_at: "2026-08-29T07:30:00.000Z",
-					description: "eggs and toast",
-					slot: "breakfast",
-					stated_slot: null,
-					kcal: 480,
-					protein_g: 32,
-					carbs_g: 40,
-					fat_g: 20,
-					fiber_g: 4,
-					evidence: [],
-				},
-			],
 			activities: [
 				{
 					id: "a1",
@@ -82,35 +67,18 @@ export function dayViewFixture(overrides: Partial<DayView> = {}): DayView {
 				health: null,
 			},
 		],
-		eaten: 480,
 		earned: 120,
-		target: 2260,
-		allowance: 2320,
-		remaining: 1840,
-		eatback: "half",
-		tdee: 2828,
-		balance: 2468,
-		status: "on_track",
-		over_by: null,
-		macros: {
-			protein_g: { eaten: 32, target: 159, note: "under" },
-			carbs_g: { eaten: 40, target: 265, note: "on target" },
-			fat_g: { eaten: 20, target: 63, note: "under" },
-			fiber_g: { eaten: 4, target: 32, note: "under" },
-		},
 		weight: { day: 182.4, avg_7d: 183.1, trend_per_week: -0.7 },
 		muscle_groups: ["chest"],
 		muscle_summary: [{ muscle: "chest", sets: 3, exercises: ["Bench Press"] }],
 		health: { active_energy: null, steps: null },
-		eating_pattern: "One meal, at 7:30 am — all 480 kcal of the day.",
 		arc: [],
-		expected: [{ kind: "meal", slot: "dinner", label: "Dinner" }],
 		verdict: "served",
 		verdict_words: "Served your goal",
-		verdict_why: "Ate inside the allowance (+2,468 kcal).",
+		verdict_why: "Trained chest and logged a weigh-in.",
 		goal: {
 			id: "g1",
-			kind: "lose_fat",
+			kind: "custom",
 			title: "Down to 170 lb",
 			metrics: [],
 			priority: 1,
@@ -118,9 +86,8 @@ export function dayViewFixture(overrides: Partial<DayView> = {}): DayView {
 			active_from: "2026-08-01",
 			active_to: null,
 		},
-		goal_involves_calories: true,
-		summary_line: "Chest · 480 kcal in 1 meal · 120 earned · 182.4 lb",
-		facts: { date: "2026-08-29", tdee: 2828, meals: [], activities: [], weights: [], healthSamples: [] },
+		summary_line: "Chest · 120 earned · 182.4 lb",
+		facts: { date: "2026-08-29", activities: [], weights: [], healthSamples: [] },
 	};
 	return { ...base, ...overrides };
 }

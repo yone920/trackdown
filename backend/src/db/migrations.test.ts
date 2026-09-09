@@ -89,6 +89,7 @@ describe("upgrading a database that is already carrying v1 data", () => {
 			"0018_correction_splits.sql",
 			"0019_eating_direction.sql",
 			"0020_weight_confidence.sql",
+			"0021_drop_meals.sql",
 		]);
 		const { rows } = await db.pool.query<{ name: string }>(`SELECT name FROM schema_migrations ORDER BY name`);
 		expect(rows.map((r) => r.name)).toEqual([
@@ -112,6 +113,7 @@ describe("upgrading a database that is already carrying v1 data", () => {
 			"0018_correction_splits.sql",
 			"0019_eating_direction.sql",
 			"0020_weight_confidence.sql",
+			"0021_drop_meals.sql",
 		]);
 	});
 
@@ -141,39 +143,44 @@ describe("upgrading a database that is already carrying v1 data", () => {
 		});
 	});
 
-	it("gives the existing profile the plan defaults", async () => {
+	it("gives the existing profile the plan defaults, with the calorie-budget columns gone", async () => {
 		const { rows } = await db.pool.query(`SELECT * FROM profiles WHERE id = $1`, [userId]);
 		expect(rows[0]).toMatchObject({
 			display_name: "Old User",
-			daily_calorie_target: 2100,
-			eatback: "half",
 			equipment: [],
 			constraints: [],
 			preferences: [],
 			stated_at: {},
-			diet_style: null,
-			protein_g: null,
-			carbs_max_g: null,
 			training_days: null,
 			environment: null,
 		});
+		// 0021 dropped the meal-goal plan columns entirely — they are not just null, they
+		// are not columns any more.
+		expect(rows[0]).not.toHaveProperty("daily_calorie_target");
+		expect(rows[0]).not.toHaveProperty("diet_style");
+		expect(rows[0]).not.toHaveProperty("protein_g");
+		expect(rows[0]).not.toHaveProperty("carbs_max_g");
+		expect(rows[0]).not.toHaveProperty("eatback");
 	});
 
-	it("leaves the existing daily summary intact with empty v2 columns", async () => {
+	it("leaves the existing daily summary intact, with the calorie-budget columns gone", async () => {
 		const { rows } = await db.pool.query(`SELECT * FROM daily_summaries WHERE user_id = $1`, [userId]);
 		expect(rows[0]).toMatchObject({
-			kcal_consumed: 2000,
-			kcal_burned: 420,
-			eaten: null,
+			weight_lb: null,
 			earned: null,
-			allowance: null,
-			status: null,
 			verdict: null,
 			blocks: null,
 			muscle_groups: null,
 			in_short: null,
 			closed_at: null,
 		});
+		// 0021 dropped the whole eaten/allowance/status side, and kcal_consumed/kcal_burned
+		// with it — the v1 row's own numbers go with the columns that held them.
+		expect(rows[0]).not.toHaveProperty("kcal_consumed");
+		expect(rows[0]).not.toHaveProperty("kcal_burned");
+		expect(rows[0]).not.toHaveProperty("eaten");
+		expect(rows[0]).not.toHaveProperty("allowance");
+		expect(rows[0]).not.toHaveProperty("status");
 	});
 
 	it("enforces the new checks on new rows", async () => {
@@ -183,10 +190,15 @@ describe("upgrading a database that is already carrying v1 data", () => {
 		await expect(
 			db.pool.query(`INSERT INTO goals (user_id, kind, title) VALUES ($1, 'become_taller', 'Grow')`, [userId])
 		).rejects.toThrow(/goals_kind_check/);
-		// Evidence belongs to at most one record.
+		// A goal kind the app dropped along with meal tracking is refused just as hard.
+		await expect(
+			db.pool.query(`INSERT INTO goals (user_id, kind, title) VALUES ($1, 'lose_fat', 'Down to 170')`, [userId])
+		).rejects.toThrow(/goals_kind_check/);
+		// Evidence belongs to at most one record — activity and plan together, now that
+		// meal_id is gone as a third possible owner.
 		await expect(
 			db.pool.query(
-				`INSERT INTO evidence (user_id, activity_id, meal_id, kind) VALUES ($1, $2, gen_random_uuid(), 'photo')`,
+				`INSERT INTO evidence (user_id, activity_id, plan_id, kind) VALUES ($1, $2, gen_random_uuid(), 'photo')`,
 				[userId, movementId]
 			)
 		).rejects.toThrow(/evidence_one_owner|violates foreign key/);
@@ -260,6 +272,7 @@ describe("a database that has never been migrated", () => {
 			"0018_correction_splits.sql",
 			"0019_eating_direction.sql",
 			"0020_weight_confidence.sql",
+			"0021_drop_meals.sql",
 		]);
 
 		const client = new pg.Client({ connectionString: freshUrl() });
@@ -268,8 +281,6 @@ describe("a database that has never been migrated", () => {
 			for (const table of [
 				"user",
 				"profiles",
-				"meals",
-				"meal_items",
 				"activities",
 				"weight_logs",
 				"daily_summaries",
@@ -286,6 +297,9 @@ describe("a database that has never been migrated", () => {
 				expect({ table, exists: await tableExists(client, table) }).toEqual({ table, exists: true });
 			}
 			expect(await tableExists(client, "calorie_expenditure")).toBe(false);
+			// 0021 dropped the meal tables entirely — a fresh database never has them.
+			expect(await tableExists(client, "meals")).toBe(false);
+			expect(await tableExists(client, "meal_items")).toBe(false);
 
 			const catalog = await loadExerciseCatalog();
 			const { rows } = await client.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM exercise_catalog`);

@@ -65,8 +65,8 @@ export function weekdayLabel(date: IsoDate): string {
 const kcal = (value: number) => Math.round(Math.abs(value)).toLocaleString('en-US');
 
 /** "−3,100": a positive balance is a deficit, which is what the minus sign means here. */
-function deficitWords(total: number): string {
-  return `${total >= 0 ? '−' : '+'}${kcal(total)}`;
+function earnedWords(total: number): string {
+  return `${kcal(total)} earned`;
 }
 
 /**
@@ -103,12 +103,12 @@ export function tallyFor(days: DayRow[], week?: WeekView | null): string | null 
   const judged = week ? week.judged : days.filter((day) => day.verdict === 'served' || day.verdict === 'missed').length;
   const served = week ? week.served : days.filter((day) => day.verdict === 'served').length;
 
-  const balances = days.map((day) => day.balance).filter((value): value is number => value != null);
-  const deficit = week?.weekly_deficit ?? (balances.length > 0 ? balances.reduce((a, b) => a + b, 0) : null);
+  const earnedValues = days.map((day) => day.earned).filter((value): value is number => value != null);
+  const earned = week?.weekly_earned ?? (earnedValues.length > 0 ? earnedValues.reduce((a, b) => a + b, 0) : null);
 
   const parts: string[] = [];
   if (judged > 0) parts.push(`${served} of ${judged} served`);
-  if (deficit != null) parts.push(deficitWords(deficit));
+  if (earned != null && earned > 0) parts.push(earnedWords(earned));
   const weight = weightWords(days);
   if (weight) parts.push(weight);
   return parts.length === 0 ? null : parts.join(' · ');

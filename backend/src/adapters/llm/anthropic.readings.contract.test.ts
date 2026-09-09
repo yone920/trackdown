@@ -34,25 +34,19 @@ const coach = () =>
 	});
 
 const DAY_SHEET = `DAY 12 — 2026-08-29 (today, still running)
-Goal: Down to 170 lb (lose_fat)
+Goal: Down to 170 lb (custom)
 
-CALORIES
-Eaten: 1,180 kcal
+EARNED
 Earned from activity: 310 kcal
-Allowance (target + eat-back): 2,409 kcal
-Left: 1,229 kcal
-Status: on_track
 
 TRAINING
 Back & Chest — 1:10 pm to 2:05 pm, 3 exercises, 310 kcal
   · Bench Press, 3×8, 135 lb, vs last time: +5 lb
 
-EATING
-7:30 am breakfast: eggs and toast — 480 kcal
-12:30 pm lunch: chicken and rice — 700 kcal
-
-OPEN SLOTS (nothing logged here yet — a fact about the log, not something the user owes)
-Dinner (meal)`;
+BODY
+Weight today: 181.4 lb
+7-day average: 182.1 lb
+Trend: -0.6 lb/week`;
 
 /**
  * The phrasings this app does not use about a person's own log (concept-v2 §Principles 8,
@@ -86,8 +80,8 @@ next action. Use only the numbers on the sheet.\n\n${DAY_SHEET}`,
 		// Two sentences is the design constraint, and the reason the card is one paragraph.
 		const sentences = answer.text.split(/[.!?]+\s/).filter((part) => part.trim() !== "");
 		expect(sentences.length).toBeLessThanOrEqual(2);
-		// Dinner is the slot with nothing in it, so the action should be about eating.
-		expect(["log_meal", "coach", "workout", "weigh_in"]).toContain(answer.next_action.kind);
+		// A weigh-in, a workout, or asking the coach are the only chips the app can offer.
+		expect(["weigh_in", "coach", "workout"]).toContain(answer.next_action.kind);
 		expect(answer.actions.length).toBeLessThanOrEqual(3);
 	}, 90_000);
 

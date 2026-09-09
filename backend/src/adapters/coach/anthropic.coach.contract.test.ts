@@ -3,7 +3,7 @@ import { config } from "../../config/index.js";
 import type { CoachBriefInputs } from "../../ports/coach.js";
 import { computeFeatures } from "../../services/coach/features.js";
 import { buildRules } from "../../services/coach/rules.js";
-import { activity, daysAgo, facts, meal, TODAY, weight } from "../../test/fixtures/facts.js";
+import { activity, daysAgo, facts, TODAY, weight } from "../../test/fixtures/facts.js";
 import { createAnthropicLlm } from "../llm/anthropic.js";
 import { createLlmCoach } from "./llm.js";
 
@@ -55,20 +55,14 @@ function inputs(): CoachBriefInputs {
 			lift(daysAgo(11), "Bench Press", 135, ["chest", "triceps"]),
 			lift(daysAgo(11), "Lat Pulldown", 110, ["back", "lats"], 10),
 		],
-		meals: [meal(TODAY, { kcal: 620, protein_g: 42, carbs_g: 48 }), meal(daysAgo(1), { kcal: 2380, protein_g: 150, carbs_g: 300 })],
 		weights: [weight(TODAY, 193.4), weight(daysAgo(3), 194.2), weight(daysAgo(6), 195)],
-		tdee: 2817,
 	});
 
-	const features = computeFeatures({
-		facts: dayFacts,
-		trainingDaysTarget: 4,
-		targets: { kcal: 2254, protein_g: 160, carbs_max_g: 250 },
-	});
+	const features = computeFeatures({ facts: dayFacts, trainingDaysTarget: 4 });
 	const goals = [
 		{
 			id: "goal-1",
-			kind: "lose_fat",
+			kind: "custom",
 			title: "Down to 170 lb",
 			priority: 1,
 			metrics: [{ measure: "body_weight", target: 170, unit: "lb", direction: "decrease" }],
@@ -85,32 +79,22 @@ function inputs(): CoachBriefInputs {
 		goals,
 		plan: {
 			goal_pace: "standard",
-			diet_style: "higher protein",
 			training_days: 4,
 			environment: "gym",
 			equipment: ["barbell", "dumbbell", "machine"],
 			place: null,
 			constraints: ["bad left knee — no deep squats or lunges"],
 			preferences: ["prefers free weights"],
-			eatback: "half",
 			experience: null,
 			background: null,
 			session_minutes: rules.sizing.minutes,
 			session_minutes_stated: rules.sizing.stated,
 			units: "lb",
-			targets: { kcal: 2254, protein_g: 160, carbs_max_g: 250, fat_g: 63, tracking_only: false },
 		},
 		features,
 		rules,
 		today: {
-			eaten: 620,
 			earned: 0,
-			target: 2254,
-			allowance: 2254,
-			remaining: 1634,
-			protein_g: 42,
-			protein_target_g: 160,
-			status: "on_track",
 			trained: [],
 			logged: [],
 		},
@@ -126,7 +110,6 @@ describe.skipIf(!apiKey)("anthropic coach brief (contract)", () => {
 		expect(brief.headline.length).toBeGreaterThan(3);
 		expect(["strength", "cardio", "rest", "mixed"]).toContain(brief.workout.type);
 		expect(brief.workout.exercises.length).toBeLessThanOrEqual(6);
-		expect(brief.nutrition.ideas.length).toBeLessThanOrEqual(3);
 
 		// Every exercise it picked from the prescription list carries that prescription's
 		// numbers. This is the claim the whole rules module exists to make true.
@@ -139,15 +122,11 @@ describe.skipIf(!apiKey)("anthropic coach brief (contract)", () => {
 			expect({ name: exercise.name, load: exercise.load_lb }).toEqual({ name: exercise.name, load: match.load_lb });
 			if (match.sets != null) expect(exercise.sets).toBe(match.sets);
 		}
-
-		// The eating numbers are the ones it was given, not ones it worked out.
-		expect(brief.nutrition.kcal).toBe(2254);
-		expect(brief.nutrition.protein_g).toBe(160);
 	}, 120_000);
 
 	// The revision path, against the real model. Two claims a fake cannot make: the model
 	// can actually count past the old ceiling of six when it is asked to, and it returns a
-	// WHOLE brief rather than a patch — a revision that dropped the nutrition card or came
+	// WHOLE brief rather than a patch — a revision that dropped the headline or came
 	// back with an empty Do list is the failure this whole fix is about.
 	it("revises the brief it is handed, up to the number of exercises the user asked for", async () => {
 		const request = inputs();
@@ -168,7 +147,6 @@ describe.skipIf(!apiKey)("anthropic coach brief (contract)", () => {
 		// The rest of the brief came back filled in, not dropped.
 		expect(revised.headline.length).toBeGreaterThan(3);
 		expect(revised.why.length).toBeGreaterThan(3);
-		expect(revised.nutrition.kcal).toBe(2254);
 		expect(revised.nudge.length).toBeGreaterThan(3);
 		// And the constraint still binds: the knee does not stop mattering because the
 		// user asked for a longer session.
@@ -260,7 +238,6 @@ describe.skipIf(!apiKey)("anthropic coach brief (contract)", () => {
 		const dayFacts = facts({
 			activities: [hinge("Deadlift", ["hamstrings", "lower_back"], 115), hinge("Good Morning", ["hamstrings"], 65)],
 			weights: [weight(TODAY, 193.4)],
-			tdee: 2817,
 		});
 		const features = computeFeatures({ facts: dayFacts, trainingDaysTarget: 4 });
 		const rules = buildRules({

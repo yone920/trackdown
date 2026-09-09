@@ -99,8 +99,8 @@ describe('the dot under a date', () => {
   });
 
   it('is a quiet mark for a day that was logged but not judged', () => {
-    expect(dotTone(makeDayRow({ verdict: 'none', closed: false, eaten: 1200 }))).toBe('mute');
-    expect(dotTone(makeDayRow({ verdict: 'unlogged', closed: false, eaten: null, earned: 250 }))).toBe('mute');
+    expect(dotTone(makeDayRow({ verdict: 'none', closed: false }))).toBe('mute');
+    expect(dotTone(makeDayRow({ verdict: 'unlogged', closed: false, earned: 250 }))).toBe('mute');
   });
 
   it('is nothing at all on a day with nothing on it', () => {
@@ -110,7 +110,6 @@ describe('the dot under a date', () => {
         makeDayRow({
           verdict: 'none',
           closed: false,
-          eaten: null,
           earned: null,
           weight_lb: null,
           muscle_groups: [],

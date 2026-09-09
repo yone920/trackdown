@@ -109,15 +109,9 @@ export function dotTone(row: DayRow | undefined): DotTone | null {
   return hasSomething(row) ? 'mute' : null;
 }
 
-/** Did anything happen on this day? A number logged, food, training, or a weigh-in. */
+/** Did anything happen on this day? Training or a weigh-in. */
 function hasSomething(row: DayRow): boolean {
-  return (
-    (row.eaten ?? 0) > 0 ||
-    (row.earned ?? 0) > 0 ||
-    row.weight_lb != null ||
-    row.muscle_groups.length > 0 ||
-    row.closed
-  );
+  return (row.earned ?? 0) > 0 || row.weight_lb != null || row.muscle_groups.length > 0 || row.closed;
 }
 
 /** The month's rows, by date, ignoring anything the window spilled from a neighbouring month. */

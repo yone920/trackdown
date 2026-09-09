@@ -10,18 +10,7 @@ import { makeDay, makeGoal, makeMetric, makeWeek } from './fixtures';
 const keys = (cards: { key: string }[]) => cards.map((card) => card.key);
 
 describe('todayCards', () => {
-  it('fat loss gets the calories ring, the week and the weight trend', () => {
-    const cards = todayCards({
-      day: makeDay(),
-      week: makeWeek(),
-      goal: makeGoal('lose_fat'),
-    });
-    expect(keys(cards)).toEqual(['calories-left', 'weekly-deficit', 'weight-trend']);
-    expect(cards[0].full).toBe(true);
-    expect(cards[0].chart?.kind).toBe('ring');
-  });
-
-  it('muscle gets protein, weekly sets and the coverage strip', () => {
+  it('muscle gets weekly sets, the coverage strip and the weight trend', () => {
     const cards = todayCards({
       day: makeDay(),
       week: makeWeek(),
@@ -29,7 +18,7 @@ describe('todayCards', () => {
         makeMetric({ measure: 'weekly_sets', label: 'Weekly sets', unit: 'sets', target: 12, current: 6, scope: 'chest' }),
       ]),
     });
-    expect(keys(cards)).toEqual(['protein', 'weekly_sets', 'coverage']);
+    expect(keys(cards)).toEqual(['weekly_sets', 'coverage', 'weight-trend']);
   });
 
   it('endurance hides the cards it has no number for', () => {
@@ -47,7 +36,6 @@ describe('todayCards', () => {
   it('endurance shows a pace card once the day has a run', () => {
     const day = makeDay({
       items: {
-        meals: [],
         weights: [],
         activities: [
           {
@@ -112,19 +100,13 @@ describe('todayCards', () => {
     }
   });
 
-  it('maintain is judged as gently as no goal at all', () => {
-    const cards = todayCards({ day: makeDay(), week: makeWeek(), goal: makeGoal('maintain') });
+  it('custom is judged as gently as no goal at all', () => {
+    const cards = todayCards({ day: makeDay(), week: makeWeek(), goal: makeGoal('custom') });
     expect(keys(cards)).toEqual(['workouts-week', 'cardio-today', 'coverage']);
   });
 
-  it('drops the calories card when the profile cannot produce an allowance', () => {
-    const day = makeDay({ allowance: null, remaining: null, target: null });
-    const cards = todayCards({ day, week: makeWeek(), goal: makeGoal('lose_fat') });
-    expect(keys(cards)).not.toContain('calories-left');
-  });
-
   it('drops the week card when the week has not loaded', () => {
-    const cards = todayCards({ day: makeDay(), week: null, goal: makeGoal('lose_fat') });
-    expect(keys(cards)).toEqual(['calories-left', 'weight-trend']);
+    const cards = todayCards({ day: makeDay(), week: null, goal: makeGoal('custom') });
+    expect(keys(cards)).toEqual(['cardio-today', 'coverage']);
   });
 });

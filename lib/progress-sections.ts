@@ -101,7 +101,7 @@ export function goalSections(
   dailyWeights?: { date: IsoDate; value: number }[] | null,
 ): ProgressSection[] {
   const kind: GoalKind = goal.kind;
-  const judge = kind !== 'maintain' && kind !== 'custom';
+  const judge = kind !== 'custom';
 
   return goal.progress.metrics
     .map((metric) => sectionFor(metric, judge, dailyWeights ?? null))
@@ -233,9 +233,6 @@ const SMOOTHED_MEASURES = new Set(['body_weight']);
  */
 const MEASURE_WORDS: Record<string, { one: string; ask: string; start: string }> = {
   body_weight: { one: 'weigh-in', ask: 'Weigh in a few mornings and your trend appears.', start: 'Log a weigh-in' },
-  calorie_balance: { one: 'day', ask: 'Log a few more days and your trend appears.', start: 'Log a day of eating' },
-  protein_g: { one: 'day', ask: 'Log a few more days and your trend appears.', start: 'Log a day of eating' },
-  carbs_g: { one: 'day', ask: 'Log a few more days and your trend appears.', start: 'Log a day of eating' },
   weekly_sets: { one: 'session', ask: 'Log a few more sessions and your trend appears.', start: 'Log a session' },
   exercise_load: { one: 'session', ask: 'Log a few more sessions and your trend appears.', start: 'Log a session' },
   weekly_cardio_min: { one: 'session', ask: 'Log a few more sessions and your trend appears.', start: 'Log a session' },
@@ -318,7 +315,7 @@ export function goalCard(
   },
 ): GoalCardView {
   const kind: GoalKind = goal.kind;
-  const judge = kind !== 'maintain' && kind !== 'custom';
+  const judge = kind !== 'custom';
   const metric = goal.progress.metrics[0] ?? null;
   const spec = goal.metrics[0];
   const unit = metric?.unit ?? spec?.unit ?? null;

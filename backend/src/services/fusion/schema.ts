@@ -15,14 +15,14 @@ import { MEASURE_IDS } from "../goals/measures.js";
 // MODEL-FACING — `FusionRouteOutputSchema`, the per-kind detail schemas, and
 // `GoalDetailOutputSchema`: what is actually sent to the provider. They exist because
 // Anthropic compiles a structured-output schema into a decoding grammar and refuses one
-// that gets too big ("The compiled grammar is too large"): the eight-branch public union
-// does not compile, on Haiku or Sonnet, and it is 8.9 KB. So the model is asked for a
+// that gets too big ("The compiled grammar is too large"): the seven-branch public union
+// does not compile, on Haiku or Sonnet. So the model is asked for a
 // leaner shape and the service widens it back (see {@link toFusionResult}):
-//   * six branches, not eight — constraint / preference / coach_context share one
+//   * five branches, not seven — constraint / preference / coach_context share one
 //     `statement` branch with a `scope`, since they have the same shape anyway;
 //   * a goal is routed as a title only, and a constraint/preference as its text; the spec
 //     and the plan fields come from a second, focused call. Those two are stated maybe
-//     once a month; logging a workout or a meal is the hot path and stays one call. The
+//     once a month; logging a workout is the hot path and stays one call. The
 //     spec's *timeline* is not asked for at all — WP4 projects it from the user's own
 //     facts at the safe rates (services/goals/proposal.ts), because a date is arithmetic
 //     and the row, the confirm card and the Goals screen all have to show the same one.
@@ -70,21 +70,9 @@ const ActivitySources = z
 	})
 	.nullable();
 
-const MealSources = z
-	.object({
-		description: FieldSource,
-		kcal: FieldSource,
-		protein_g: FieldSource,
-		carbs_g: FieldSource,
-		fat_g: FieldSource,
-		fiber_g: FieldSource,
-	})
-	.nullable();
-
 const WeightSources = z.object({ weight_lb: FieldSource }).nullable();
 
 const kcal = z.number().int().min(0).max(20_000).nullable();
-const grams = z.number().min(0).max(5000).nullable();
 
 /**
  * "Was it a Chest-Supported Row?" — one tap that upgrades a best-guess movement to a
@@ -134,48 +122,7 @@ export const ActivityItemSchema = z.object({
 });
 export type ActivityItem = z.infer<typeof ActivityItemSchema>;
 
-export const MealItemSchema = z.object({
-	name: z.string().trim().min(1).max(200),
-	kcal,
-	protein_g: grams,
-	carbs_g: grams,
-	fat_g: grams,
-	fiber_g: grams,
-	serving_amount: z.string().trim().max(80).nullable(),
-});
-export type MealItem = z.infer<typeof MealItemSchema>;
-
-export const MEAL_TYPES = ["breakfast", "lunch", "dinner", "snack"] as const;
-
-/**
- * What the arithmetic gate had to say about a meal (services/fusion/arithmetic.ts). Present
- * only when the first reading did NOT add up — a meal that was consistent first time has
- * nothing to report and carries null.
- *
- *   "adjusted" — the one re-ask reconciled it, and these are the numbers before and after.
- *   "flagged"  — it still does not add up. The confidence was forced to low regardless of
- *                what the model claimed, and the card says so.
- *
- * Derived, never asked for: it is a fact about our own reading, so no model-facing schema
- * pays a byte for it. Defaulted, so a client written before this still confirms.
- */
-export const MEAL_CONSISTENCY_OUTCOMES = ["adjusted", "restated", "flagged"] as const;
-export const MealConsistencySchema = z.object({
-	outcome: z.enum(MEAL_CONSISTENCY_OUTCOMES),
-	/** The kcal as stated, and the 4P+4C+9F they implied, as the reading finally stands. */
-	stated_kcal: z.number().nullable(),
-	implied_kcal: z.number().nullable(),
-});
-export type MealConsistency = z.infer<typeof MealConsistencySchema>;
-
-export const GOAL_KINDS = [
-	"lose_fat",
-	"gain_muscle",
-	"build_strength",
-	"improve_endurance",
-	"maintain",
-	"custom",
-] as const;
+export const GOAL_KINDS = ["gain_muscle", "build_strength", "improve_endurance", "custom"] as const;
 
 /** How the measure should move. `maintain` is the standing-intention direction. */
 export const GOAL_DIRECTIONS = ["decrease", "increase", "maintain", "at_least", "at_most"] as const;
@@ -267,9 +214,6 @@ export type PlaceKind = (typeof PLACE_KINDS)[number];
 /** Plan fields a spoken constraint or preference may set on the profile. */
 export const ProfileFieldsSchema = z
 	.object({
-		diet_style: z.string().trim().max(80).nullable(),
-		protein_g: z.number().int().min(0).max(1000).nullable(),
-		carbs_max_g: z.number().int().min(0).max(2000).nullable(),
 		training_days: z.number().int().min(0).max(7).nullable(),
 		/**
 		 * How long a normal session is (migration 0014). "I've only got 45 minutes in the
@@ -287,7 +231,6 @@ export const ProfileFieldsSchema = z
 		cardio_minutes_target: z.number().int().min(0).max(2000).nullable().default(null),
 		environment: z.string().trim().max(80).nullable(),
 		equipment: z.array(z.string().trim().min(1).max(60)).max(30).nullable(),
-		eatback: z.enum(["none", "half", "all"]).nullable(),
 		// The training background (migration 0011). Stated once, usually on day one, and
 		// the reason a cold start does not have to assume a beginner.
 		experience: z.enum(EXPERIENCE_LEVELS).nullable(),
@@ -326,22 +269,6 @@ export const FusionResultSchema = z.discriminatedUnion("kind", [
 	z.object({
 		kind: z.literal("activities"),
 		items: z.array(ActivityItemSchema).min(1).max(20),
-	}),
-	z.object({
-		kind: z.literal("meal"),
-		description: z.string().trim().min(1).max(500),
-		meal_type: z.enum(MEAL_TYPES).nullable(),
-		kcal,
-		protein_g: grams,
-		carbs_g: grams,
-		fat_g: grams,
-		fiber_g: grams,
-		/** The plate broken down, when the photo or the words support it. May be empty. */
-		items: z.array(MealItemSchema).max(30),
-		confidence: FieldConfidence,
-		sources: MealSources,
-		/** Null unless the arithmetic gate had something to say — see the schema's note. */
-		consistency: MealConsistencySchema.nullable().default(null),
 	}),
 	z.object({
 		kind: z.literal("weight"),
@@ -430,35 +357,11 @@ const ModelActivityItem = z.object({
 	confidence: FieldConfidence,
 });
 
-const ModelMeal = z.object({
-	kind: z.literal("meal"),
-	description: z.string(),
-	meal_type: z.enum(MEAL_TYPES).nullable(),
-	kcal: z.number().nullable(),
-	protein_g: z.number().nullable(),
-	carbs_g: z.number().nullable(),
-	fat_g: z.number().nullable(),
-	fiber_g: z.number().nullable(),
-	items: z.array(
-		z.object({
-			name: z.string(),
-			kcal: z.number().nullable(),
-			protein_g: z.number().nullable(),
-			carbs_g: z.number().nullable(),
-			fat_g: z.number().nullable(),
-			fiber_g: z.number().nullable(),
-			serving_amount: z.string().nullable(),
-		})
-	).max(30),
-	confidence: FieldConfidence,
-});
-
 /** constraint, preference and coach_context are one shape; `scope` says which it is. */
 export const STATEMENT_SCOPES = ["constraint", "preference", "coach_context"] as const;
 
 export const FusionRouteSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("activities"), items: z.array(ModelActivityItem).min(1).max(20) }),
-	ModelMeal,
 	z.object({ kind: z.literal("weight"), weight_lb: z.number(), confidence: FieldConfidence }),
 	// The routing decision only; the spec comes from a second call (GoalDetailOutputSchema).
 	z.object({ kind: z.literal("goal"), title: z.string() }),
@@ -480,15 +383,15 @@ export const MAX_PARTS = 6;
  * same prompt call all three "statement", so that is the word it answers with. The scope
  * comes back from the statement's own follow-up call instead, where there is room for it.
  */
-export const SEGMENT_KINDS = ["activities", "meal", "weight", "goal", "statement"] as const;
+export const SEGMENT_KINDS = ["activities", "weight", "goal", "statement"] as const;
 export type SegmentKind = (typeof SEGMENT_KINDS)[number];
 
 /**
  * Wrapped in an object because structured outputs want an object at the root — a bare
  * union is not a JSON-schema root either provider accepts.
  *
- * One input is not one kind: "ate two eggs, ran 5k, weighed in at 181" is a meal, an
- * activity and a weigh-in, and the single-`result` shape used to drop two of them. So the
+ * One input is not one kind: "ran 5k, weighed in at 181" is an
+ * activity and a weigh-in, and the single-`result` shape used to drop one of them. So the
  * router answers with the FIRST thing they said, in full, plus `more_kinds` — the bare list
  * of what else is in there, in the order they said it. Each of those is then filled in by a
  * focused call carrying only its own kind's schema.
@@ -576,12 +479,6 @@ export const ActivitiesRevisionOutputSchema = z.object({
 });
 export const ACTIVITIES_REVISION_SCHEMA_NAME = "activities_revision";
 
-export const MealDetailOutputSchema = ModelMeal.omit({ kind: true }).extend({
-	photo_fields: photoFields,
-	photo_indexes: photoIndexes,
-});
-export const MEAL_DETAIL_SCHEMA_NAME = "meal";
-
 export const WeightDetailOutputSchema = z.object({
 	weight_lb: z.number(),
 	confidence: FieldConfidence,
@@ -654,7 +551,6 @@ export interface FusionDetail {
 /** Which fields each kind can carry a source for, in the order the card shows them. */
 const SOURCE_FIELDS = {
 	activity: ["exercise", "equipment", "sets", "reps", "load_lb", "duration_min", "distance_mi", "kcal"],
-	meal: ["description", "kcal", "protein_g", "carbs_g", "fat_g", "fiber_g"],
 	weight: ["weight_lb"],
 } as const;
 
@@ -739,24 +635,6 @@ export function toFusionResult(route: FusionRoute, detail: FusionDetail = {}): F
 					// Offered by services/fusion/refine.ts once the catalogue is to hand.
 					refine: null,
 				})),
-			};
-
-		case "meal":
-			return {
-				kind: "meal",
-				description: route.description,
-				meal_type: route.meal_type,
-				kcal: whole(route.kcal),
-				protein_g: route.protein_g,
-				carbs_g: route.carbs_g,
-				fat_g: route.fat_g,
-				fiber_g: route.fiber_g,
-				items: route.items.map((item) => ({ ...item, kcal: whole(item.kcal) })),
-				confidence: route.confidence,
-				sources: expandSources(SOURCE_FIELDS.meal, photoFieldNames, route),
-				// Filled in by services/fusion/arithmetic.ts once the numbers have been
-				// checked; the translation itself has no opinion about them.
-				consistency: null,
 			};
 
 		case "weight":

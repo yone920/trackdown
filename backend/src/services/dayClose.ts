@@ -50,9 +50,7 @@ async function unclosedDates(db: Queryable, userId: string, tzOffsetMin: number,
 	const end = new Date(Date.parse(`${today}T00:00:00Z`) - tzOffsetMin * 60_000).toISOString();
 
 	const { rows } = await db.query<{ logged_at: string }>(
-		`SELECT logged_at FROM meals WHERE user_id = $1 AND logged_at >= $2 AND logged_at < $3
-		 UNION ALL
-		 SELECT logged_at FROM activities WHERE user_id = $1 AND logged_at >= $2 AND logged_at < $3
+		`SELECT logged_at FROM activities WHERE user_id = $1 AND logged_at >= $2 AND logged_at < $3
 		 UNION ALL
 		 SELECT logged_at FROM weight_logs WHERE user_id = $1 AND logged_at >= $2 AND logged_at < $3`,
 		[userId, start, end]
@@ -88,47 +86,19 @@ export async function closeDay(
 	const view = await computeDay(pool, { userId, date, tzOffsetMin, now });
 	if (view.closed_at) return null;
 
-	const macros = view.macros;
 	const inserted = await pool.query<{ date: IsoDate }>(
 		`INSERT INTO daily_summaries (
-			user_id, date, kcal_consumed, kcal_burned, protein_g, carbs_g, fat_g, fiber_g, weight_lb,
-			eaten, earned, allowance, status, verdict, blocks, muscle_groups, summary_line, meal_count, tdee, closed_at
-		 ) VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16::text[], $17, $18, $19, NOW())
+			user_id, date, weight_lb, earned, verdict, blocks, muscle_groups, summary_line, closed_at
+		 ) VALUES ($1, $2::date, $3, $4, $5, $6::jsonb, $7::text[], $8, NOW())
 		 ON CONFLICT (user_id, date) DO UPDATE SET
-			kcal_consumed = EXCLUDED.kcal_consumed, kcal_burned = EXCLUDED.kcal_burned,
-			protein_g = EXCLUDED.protein_g, carbs_g = EXCLUDED.carbs_g, fat_g = EXCLUDED.fat_g,
-			fiber_g = EXCLUDED.fiber_g, weight_lb = EXCLUDED.weight_lb, eaten = EXCLUDED.eaten,
-			earned = EXCLUDED.earned, allowance = EXCLUDED.allowance, status = EXCLUDED.status,
-			verdict = EXCLUDED.verdict, blocks = EXCLUDED.blocks, muscle_groups = EXCLUDED.muscle_groups,
-			summary_line = EXCLUDED.summary_line, meal_count = EXCLUDED.meal_count, tdee = EXCLUDED.tdee,
-			closed_at = NOW()
+			weight_lb = EXCLUDED.weight_lb, earned = EXCLUDED.earned, verdict = EXCLUDED.verdict,
+			blocks = EXCLUDED.blocks, muscle_groups = EXCLUDED.muscle_groups,
+			summary_line = EXCLUDED.summary_line, closed_at = NOW()
 		 -- The idempotency guard: a day that has closed is a record, not a cache. Re-running
 		 -- the close (a retry, a second request at 00:01, the admin endpoint) touches nothing.
 		 WHERE daily_summaries.closed_at IS NULL
 		 RETURNING date`,
-		[
-			userId,
-			date,
-			view.eaten,
-			view.earned,
-			macros.protein_g.eaten ?? 0,
-			macros.carbs_g.eaten ?? 0,
-			macros.fat_g.eaten ?? 0,
-			macros.fiber_g.eaten ?? 0,
-			view.weight.day,
-			view.eaten,
-			view.earned,
-			view.allowance,
-			// The column allows on_track | over | under only: "none" is the absence of a
-			// judgement, which is a NULL, not a fourth verdict.
-			view.status === "none" ? null : view.status,
-			view.verdict,
-			JSON.stringify(view.blocks),
-			view.muscle_groups,
-			view.summary_line,
-			view.items.meals.length,
-			view.tdee,
-		]
+		[userId, date, view.weight.day, view.earned, view.verdict, JSON.stringify(view.blocks), view.muscle_groups, view.summary_line]
 	);
 
 	// Lost the race with a concurrent close: the other one owns the reading too.

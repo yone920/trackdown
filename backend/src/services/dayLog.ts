@@ -19,7 +19,7 @@ import { boundsOf, type IsoDate } from "./localTime.js";
 
 type Queryable = pg.Pool | pg.PoolClient;
 
-export type DayLogKind = "activity" | "meal" | "weight" | "goal" | "statement";
+export type DayLogKind = "activity" | "weight" | "goal" | "statement";
 
 /** Which of the four icons the row draws (docs/design-system.md §DayLog). */
 export type DayLogIcon = "camera" | "mic" | "keyboard" | "heart";
@@ -50,16 +50,6 @@ export type DayLogRecord =
 			duration_min: number | null;
 			distance_mi: number | null;
 			kcal: number;
-	  }
-	| {
-			kind: "meal";
-			description: string;
-			meal_type: string | null;
-			kcal: number;
-			protein_g: number | null;
-			carbs_g: number | null;
-			fat_g: number | null;
-			fiber_g: number | null;
 	  }
 	| { kind: "weight"; weight_lb: number }
 	| { kind: "goal"; title: string; goal_kind: string; metrics: unknown[] }
@@ -107,7 +97,6 @@ interface EvidenceRow {
 	height: number | null;
 	created_at: string;
 	activity_id: string | null;
-	meal_id: string | null;
 	weight_id: string | null;
 	plan_id: string | null;
 }
@@ -151,12 +140,6 @@ function activityUnderstood(record: Extract<DayLogRecord, { kind: "activity" }>)
 	return parts.join(" · ");
 }
 
-function mealUnderstood(record: Extract<DayLogRecord, { kind: "meal" }>): string {
-	const parts: string[] = [record.description, `${Math.round(record.kcal)} kcal`];
-	if (record.protein_g != null) parts.push(`${Math.round(record.protein_g)} g protein`);
-	return parts.join(" · ");
-}
-
 interface ActivityRow {
 	id: string;
 	logged_at: string;
@@ -174,18 +157,6 @@ interface ActivityRow {
 	kcal: number | null;
 	source: string | null;
 	confidence: string | null;
-}
-
-interface MealRow {
-	id: string;
-	logged_at: string;
-	description: string;
-	meal_type: string | null;
-	kcal: number;
-	protein_g: number | null;
-	carbs_g: number | null;
-	fat_g: number | null;
-	fiber_g: number | null;
 }
 
 interface WeightRow {
@@ -219,11 +190,6 @@ export async function dayLog(db: Queryable, { userId, date, tzOffsetMin }: DayLo
 		   FROM activities WHERE user_id = $1 AND logged_at >= $2 AND logged_at < $3`,
 		window
 	);
-	const meals = await db.query<MealRow>(
-		`SELECT id, logged_at, description, meal_type, kcal, protein_g, carbs_g, fat_g, fiber_g
-		   FROM meals WHERE user_id = $1 AND logged_at >= $2 AND logged_at < $3`,
-		window
-	);
 	const weights = await db.query<WeightRow>(
 		`SELECT id, logged_at, weight_lb FROM weight_logs
 		  WHERE user_id = $1 AND logged_at >= $2 AND logged_at < $3`,
@@ -238,22 +204,16 @@ export async function dayLog(db: Queryable, { userId, date, tzOffsetMin }: DayLo
 
 	// Evidence by owner rather than by created_at: a log confirmed after midnight, or
 	// backdated by the phone, belongs to the record's day and not to the upload's.
-	const ownerIds = [
-		activities.rows.map((row) => row.id),
-		meals.rows.map((row) => row.id),
-		weights.rows.map((row) => row.id),
-		goals.rows.map((row) => row.id),
-	];
+	const ownerIds = [activities.rows.map((row) => row.id), weights.rows.map((row) => row.id), goals.rows.map((row) => row.id)];
 	const evidence = await db.query<EvidenceRow>(
-		`SELECT id, kind, text, mime, width, height, created_at, activity_id, meal_id, weight_id, plan_id
+		`SELECT id, kind, text, mime, width, height, created_at, activity_id, weight_id, plan_id
 		   FROM evidence
 		  WHERE user_id = $1
 		    AND (
 		         activity_id = ANY($4::uuid[])
-		      OR meal_id     = ANY($5::uuid[])
-		      OR weight_id   = ANY($6::uuid[])
-		      OR plan_id     = ANY($7::uuid[])
-		      OR (activity_id IS NULL AND meal_id IS NULL AND weight_id IS NULL AND plan_id IS NULL
+		      OR weight_id   = ANY($5::uuid[])
+		      OR plan_id     = ANY($6::uuid[])
+		      OR (activity_id IS NULL AND weight_id IS NULL AND plan_id IS NULL
 		          AND confirmed_at IS NOT NULL AND created_at >= $2 AND created_at < $3)
 		    )
 		  ORDER BY created_at`,
@@ -263,14 +223,13 @@ export async function dayLog(db: Queryable, { userId, date, tzOffsetMin }: DayLo
 	// One query for the day's whole correction history, keyed by the record it is about.
 	const corrections = await correctionsByRecord(db, userId, {
 		activityIds: activities.rows.map((row) => row.id),
-		mealIds: meals.rows.map((row) => row.id),
 		weightIds: weights.rows.map((row) => row.id),
 	});
 
 	const byOwner = new Map<string, DayLogEvidence[]>();
 	const orphans: EvidenceRow[] = [];
 	for (const row of evidence.rows) {
-		const owner = row.activity_id ?? row.meal_id ?? row.weight_id ?? row.plan_id;
+		const owner = row.activity_id ?? row.weight_id ?? row.plan_id;
 		if (!owner) {
 			orphans.push(row);
 			continue;
@@ -309,34 +268,6 @@ export async function dayLog(db: Queryable, { userId, date, tzOffsetMin }: DayLo
 			source: row.source,
 			confidence: row.confidence,
 			understood: activityUnderstood(record),
-			editable: true,
-			corrections: corrections.get(row.id) ?? [],
-			record,
-		});
-	}
-
-	for (const row of meals.rows) {
-		const record: DayLogRecord = {
-			kind: "meal",
-			description: row.description,
-			meal_type: row.meal_type,
-			kcal: row.kcal,
-			protein_g: row.protein_g,
-			carbs_g: row.carbs_g,
-			fat_g: row.fat_g,
-			fiber_g: row.fiber_g,
-		};
-		const own = byOwner.get(row.id) ?? [];
-		entries.push({
-			id: row.id,
-			kind: "meal",
-			logged_at: row.logged_at,
-			raw_text: rawTextOf(own),
-			icon: iconOf(own, null),
-			evidence: own,
-			source: null,
-			confidence: null,
-			understood: mealUnderstood(record),
 			editable: true,
 			corrections: corrections.get(row.id) ?? [],
 			record,

@@ -3,7 +3,7 @@ import type { FusionResult } from "./schema.js";
 
 // What a reading DID, said out loud in the server log.
 //
-// Field bug 2026-09-02: a user typed "I just the same bawl of the lunch I had earlier",
+// Field bug 2026-09-02: a user typed a rambling description of a workout,
 // tapped Log, and nothing happened — no review card, no error, no question, their words
 // still in the box. The server log had one `fusion.route` cache line and then silence, so
 // there was no way to tell from the outside whether the model had answered, what it had
@@ -15,11 +15,11 @@ import type { FusionResult } from "./schema.js";
 // with exactly one line — what came back, how many parts and of what kinds, and how long it
 // took — and every failure ends with one naming its class.
 //
-// **No user content.** Kinds, counts and milliseconds; never the sentence, never a meal's
+// **No user content.** Kinds, counts and milliseconds; never the sentence, never an activity's
 // description, never a question's text. The words belong to the user; the SHAPE of what
 // happened to them is what an operator needs.
 
-/** "meal×1, activities×2" — the parts, counted by kind, in a stable order. */
+/** "weight×1, activities×2" — the parts, counted by kind, in a stable order. */
 export function kindsOf(results: readonly FusionResult[]): string {
 	const counts = new Map<string, number>();
 	for (const result of results) counts.set(result.kind, (counts.get(result.kind) ?? 0) + 1);

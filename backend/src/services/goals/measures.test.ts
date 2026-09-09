@@ -11,7 +11,6 @@ import {
 	type DayFacts,
 	type FactActivity,
 	type FactHealthSample,
-	type FactMeal,
 	type MeasureId,
 } from "./measures.js";
 
@@ -24,10 +23,6 @@ function daysAgo(n: number): string {
 
 function facts(partial: Partial<DayFacts> = {}): DayFacts {
 	return { ...emptyDayFacts(TODAY), ...partial };
-}
-
-function meal(date: string, values: Partial<FactMeal> = {}): FactMeal {
-	return { date, kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0, ...values };
 }
 
 function activity(date: string, values: Partial<FactActivity> = {}): FactActivity {
@@ -118,42 +113,6 @@ describe("body_weight", () => {
 	});
 });
 
-describe("calorie_balance", () => {
-	it("is TDEE plus what was earned minus what was eaten, so a deficit is positive", () => {
-		const value = compute(
-			"calorie_balance",
-			facts({
-				tdee: 2400,
-				meals: [meal(TODAY, { kcal: 1800 }), meal(daysAgo(1), { kcal: 3000 })],
-				activities: [activity(TODAY, { kcal: 300 }), activity(daysAgo(1), { kcal: 900 })],
-			})
-		);
-		expect(value).toBe(900);
-	});
-
-	it("is null without a TDEE, rather than pretending the profile is complete", () => {
-		expect(compute("calorie_balance", facts({ meals: [meal(TODAY, { kcal: 1800 })] }))).toBeNull();
-	});
-});
-
-describe("protein_g and carbs_g", () => {
-	it("sum the day's meals", () => {
-		const f = facts({
-			meals: [
-				meal(TODAY, { protein_g: 40, carbs_g: 30 }),
-				meal(TODAY, { protein_g: 25.5, carbs_g: 12 }),
-				meal(daysAgo(1), { protein_g: 100, carbs_g: 100 }),
-			],
-		});
-		expect(compute("protein_g", f)).toBe(65.5);
-		expect(compute("carbs_g", f)).toBe(42);
-	});
-
-	it("is null on a day with no meals logged — an unlogged day is not a zero-protein day", () => {
-		expect(compute("protein_g", facts({ meals: [meal(daysAgo(1), { protein_g: 90 })] }))).toBeNull();
-	});
-});
-
 describe("weekly_sets", () => {
 	const f = facts({
 		activities: [
@@ -241,7 +200,6 @@ describe("weekly_cardio_min, distance_mi and pace", () => {
 describe("the Health-derived measures", () => {
 	it("are null for a user with no samples — Health is optional and nothing may depend on it", () => {
 		const logsOnly = facts({
-			meals: [meal(TODAY, { kcal: 2000, protein_g: 120 })],
 			activities: [activity(TODAY, { category: "cardio", duration_min: 40, kcal: 300 })],
 			weights: [{ date: TODAY, weight_lb: 181 }],
 		});

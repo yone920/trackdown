@@ -1,22 +1,13 @@
 import type pg from "pg";
 import type { LoadDirection } from "../db/exercises.js";
-import {
-	addDays,
-	boundsOf,
-	daysBetween,
-	localDateOf,
-	localDay,
-	localMinutesOf,
-	type IsoDate,
-} from "./localTime.js";
+import { addDays, boundsOf, daysBetween, localDateOf, localDay, type IsoDate } from "./localTime.js";
 import { attachHealthWorkouts, buildBlocks, healthWorkoutAsActivity } from "./day/blocks.js";
 import { applyKcalEstimates, estimateWeightKg } from "./day/estimate.js";
 import { withDeltas, type DeltaVsLast } from "./day/deltas.js";
-import { buildArc, eatingPattern, expectedItems, slotForMinutes, type ArcEvent, type ExpectedItem } from "./day/narrative.js";
-import type { Block, DayActivity, DayMeal, DayWeight, HealthWorkout, MealSlot } from "./day/types.js";
-import { computeMeasure, type DayFacts, type FactActivity, type FactHealthSample, type FactMeal, type FactWeight } from "./goals/measures.js";
-import { goalInvolvesCalories, judgeDay, verdictWords, type DayStatus, type GoalRow, type Verdict } from "./goals/verdict.js";
-import { computeDayTargets, type DayTargets, type TdeeProfile } from "./tdee.js";
+import { buildArc, type ArcEvent } from "./day/narrative.js";
+import type { Block, DayActivity, DayWeight, HealthWorkout } from "./day/types.js";
+import { computeMeasure, type DayFacts, type FactActivity, type FactHealthSample, type FactWeight } from "./goals/measures.js";
+import { judgeDay, verdictWords, type GoalRow, type Verdict } from "./goals/verdict.js";
 
 // The day model (docs/build-plan.md §WP3). One function answers "what happened on this
 // day, and was it any good" — for the live Today screen, the closed Day screen, the week
@@ -35,19 +26,6 @@ type Queryable = pg.Pool | pg.PoolClient;
 
 /** The trailing window the measure calculators may read (the longest is exercise_load's). */
 const FACTS_WINDOW_DAYS = 28;
-
-/** Over the allowance by less than this is rounding, not a failure. */
-export const OVER_TOLERANCE_KCAL = 100;
-/** Below this share of the allowance is under-eating, which is a caution of its own. */
-export const UNDER_FRACTION = 0.75;
-/**
- * A live day is not called under-fed at lunchtime. Before this hour, a day that is short
- * is simply a day that is not finished; after it, the shortfall is real.
- */
-export const UNDER_JUDGED_FROM_MINUTES = 20 * 60;
-
-const EATBACK_FRACTION = { none: 0, half: 0.5, all: 1 } as const;
-export type Eatback = keyof typeof EATBACK_FRACTION;
 
 /** A stored photo, as a row that owns it lists it. The bytes come from GET /api/evidence/:id. */
 export interface EvidencePhoto {
@@ -72,17 +50,6 @@ export interface DayItemActivity extends DayActivity {
 	 * because it is a fact about the catalogue, not about the row that was logged.
 	 */
 	media_count: number;
-}
-
-export interface DayItemMeal extends DayMeal {
-	evidence: EvidencePhoto[];
-}
-
-export interface MacroLine {
-	eaten: number | null;
-	target: number | null;
-	/** "under" / "over" / "on target" / null when there is no target to be either side of. */
-	note: "under" | "over" | "on target" | null;
 }
 
 export interface DayWeightSummary {
@@ -111,51 +78,26 @@ export interface DayView {
 	day_number: number;
 
 	items: {
-		meals: DayItemMeal[];
 		activities: DayItemActivity[];
 		weights: DayWeight[];
 	};
 	blocks: Block[];
 
-	eaten: number;
+	/** Calories earned from activity today (services/day/estimate.ts fills in the estimate). */
 	earned: number;
-	/** TDEE − the goal pace's deficit. null when the profile cannot produce one. */
-	target: number | null;
-	/** target + eatback × earned — what the ring is drawn against. */
-	allowance: number | null;
-	/** allowance − eaten, the ring's "left". */
-	remaining: number | null;
-	eatback: Eatback;
-	tdee: number | null;
-	/** TDEE + earned − eaten. Positive is a deficit (concept-v2 §Calories). */
-	balance: number | null;
-	status: DayStatus;
-	/** How far over the allowance, when over. */
-	over_by: number | null;
 
-	macros: { protein_g: MacroLine; carbs_g: MacroLine; fat_g: MacroLine; fiber_g: MacroLine };
 	weight: DayWeightSummary;
 	muscle_groups: string[];
 	muscle_summary: MuscleSummary[];
 	/** Health's own daily figures. Never added to `earned` — see the note on `earned` below. */
 	health: { active_energy: number | null; steps: number | null };
 
-	eating_pattern: string | null;
 	arc: ArcEvent[];
-	/**
-	 * The slots today has nothing in. No screen renders it (user decision 2026-08-31 — the
-	 * app logs reality, not expectations); it is here because the Right-now reading is
-	 * written from the computed day and this is the fact behind "a ~650 kcal dinner would
-	 * close today's targets". See services/day/narrative.ts §ExpectedItem.
-	 */
-	expected: ExpectedItem[];
 
 	verdict: Verdict;
 	verdict_words: string;
 	verdict_why: string;
 	goal: GoalRow | null;
-	/** True when the active goal is one the calorie status actually speaks to. */
-	goal_involves_calories: boolean;
 
 	/** One line for the Days list: what the day was, without opening it. */
 	summary_line: string;
@@ -171,18 +113,6 @@ export interface ComputeDayOptions {
 	tzOffsetMin: number;
 	/** "Now", for deciding whether this is the live day. Defaults to the server clock. */
 	now?: Date;
-}
-
-interface MealRow {
-	id: string;
-	logged_at: string;
-	description: string;
-	meal_type: MealSlot | null;
-	kcal: number;
-	protein_g: number | null;
-	carbs_g: number | null;
-	fat_g: number | null;
-	fiber_g: number | null;
 }
 
 interface ActivityRow {
@@ -245,21 +175,6 @@ function toActivity(row: ActivityRow): DayActivity {
 	};
 }
 
-function toMeal(row: MealRow, tzOffsetMin: number): DayMeal {
-	return {
-		id: row.id,
-		logged_at: row.logged_at,
-		description: row.description,
-		slot: row.meal_type ?? slotForMinutes(localMinutesOf(row.logged_at, tzOffsetMin)),
-		stated_slot: row.meal_type,
-		kcal: row.kcal,
-		protein_g: row.protein_g,
-		carbs_g: row.carbs_g,
-		fat_g: row.fat_g,
-		fiber_g: row.fiber_g,
-	};
-}
-
 /**
  * A Health `workout` sample as the merge rules see it. The sample's own numbers are
  * preferred, with `raw` filling in the name and the distance a platform put there.
@@ -317,50 +232,6 @@ function activityAsHealthWorkout(activity: DayActivity): HealthWorkout {
 	};
 }
 
-export function eatbackFraction(eatback: Eatback): number {
-	return EATBACK_FRACTION[eatback] ?? 0.5;
-}
-
-export interface StatusInput {
-	eaten: number;
-	allowance: number | null;
-	safeFloor: number | null;
-	/** Whether the day is still running, and how far into it we are locally. */
-	live: boolean;
-	localMinutes: number;
-	/** No goal about calories means no calorie judgement at all. */
-	judged: boolean;
-}
-
-/**
- * `on_track | over | under | none` (docs/build-plan.md §WP3). `none` is the honest answer
- * whenever there is nothing to judge against: no allowance, or a goal the calorie number
- * says nothing about (a strength goal is not served by eating less).
- */
-export function computeStatus({ eaten, allowance, safeFloor, live, localMinutes, judged }: StatusInput): DayStatus {
-	if (!judged || allowance == null) return "none";
-	if (eaten > allowance + OVER_TOLERANCE_KCAL) return "over";
-
-	const short = eaten < allowance * UNDER_FRACTION || (safeFloor != null && eaten > 0 && eaten < safeFloor);
-	// Before the evening, a day that is short is a day that is not over yet.
-	if (short && (!live || localMinutes >= UNDER_JUDGED_FROM_MINUTES)) return "under";
-	return "on_track";
-}
-
-function macroLine(eaten: number | null, target: number | null, kind: "max" | "target"): MacroLine {
-	if (target == null || target <= 0) return { eaten, target: null, note: null };
-	if (eaten == null) return { eaten: null, target, note: null };
-	const ratio = eaten / target;
-	if (kind === "max") return { eaten, target, note: ratio > 1.05 ? "over" : "on target" };
-	return { eaten, target, note: ratio < 0.9 ? "under" : ratio > 1.15 ? "over" : "on target" };
-}
-
-/** Sum of a macro across the day's meals; null when nothing was logged (never zero). */
-function macroTotal(meals: DayMeal[], key: "protein_g" | "carbs_g" | "fat_g" | "fiber_g"): number | null {
-	if (meals.length === 0) return null;
-	return Math.round(meals.reduce((total, meal) => total + (meal[key] ?? 0), 0) * 10) / 10;
-}
-
 function muscleSummary(activities: DayActivity[]): MuscleSummary[] {
 	const groups = new Map<string, { sets: number; exercises: Set<string> }>();
 	for (const activity of activities) {
@@ -379,20 +250,11 @@ function muscleSummary(activities: DayActivity[]): MuscleSummary[] {
 }
 
 /** The Days-list one-liner: what the day was, in the fewest words that are still true. */
-export function summaryLine(view: {
-	blocks: Block[];
-	meals: DayMeal[];
-	eaten: number;
-	earned: number;
-	weight: DayWeightSummary;
-}): string {
+export function summaryLine(view: { blocks: Block[]; earned: number; weight: DayWeightSummary }): string {
 	const parts: string[] = [];
 	if (view.blocks.length > 0) {
 		const titles = view.blocks.map((block) => block.title);
 		parts.push(titles.length <= 2 ? titles.join(" + ") : `${titles[0]} +${titles.length - 1} more`);
-	}
-	if (view.meals.length > 0) {
-		parts.push(`${view.eaten.toLocaleString("en-US")} kcal in ${view.meals.length} meal${view.meals.length === 1 ? "" : "s"}`);
 	}
 	if (view.earned > 0) parts.push(`${view.earned.toLocaleString("en-US")} earned`);
 	if (view.weight.day != null) parts.push(`${view.weight.day} lb`);
@@ -410,11 +272,8 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 	// Sequential rather than concurrent: `db` may be one transaction client, which cannot
 	// run queries in parallel. These are small indexed reads.
 	const profile = (
-		await db.query<TdeeProfile & { eatback: Eatback; training_days: number | null }>(
-			`SELECT sex, birth_year, height_cm, activity_level, goal_pace, goal_weight_lb,
-			        pregnant_or_lactating, health_concern, daily_calorie_target, protein_g,
-			        carbs_max_g, eatback, training_days, stated_at
-			   FROM profiles WHERE id = $1`,
+		await db.query<{ goal_weight_lb: number | null; training_days: number | null }>(
+			`SELECT goal_weight_lb, training_days FROM profiles WHERE id = $1`,
 			[userId]
 		)
 	).rows[0] ?? null;
@@ -441,13 +300,6 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 		).rows[0] ?? null;
 
 	const window = [windowStart.toISOString(), endUtc.toISOString()];
-	const mealRows = (
-		await db.query<MealRow>(
-			`SELECT id, logged_at, description, meal_type, kcal, protein_g, carbs_g, fat_g, fiber_g
-			   FROM meals WHERE user_id = $1 AND logged_at >= $2 AND logged_at < $3 ORDER BY logged_at`,
-			[userId, ...window]
-		)
-	).rows;
 	const activityRows = (
 		await db.query<ActivityRow>(
 			`SELECT id, logged_at, description, exercise, exercise_id, equipment, category, muscle_groups, sets, reps,
@@ -475,7 +327,6 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 	const inDay = <T extends { logged_at: string }>(rows: T[]): T[] =>
 		rows.filter((row) => localDateOf(row.logged_at, tzOffsetMin) === date);
 
-	const meals = inDay(mealRows).map((row) => toMeal(row, tzOffsetMin));
 	const dayActivities = inDay(activityRows).map(toActivity);
 	const weights: DayWeight[] = inDay(weightRows).map((row) => ({
 		id: row.id,
@@ -569,24 +420,19 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 	// under an exercise is part of the design (docs/design-system.md §Day) and N+1 of them
 	// is not. The bytes themselves are only ever served by GET /api/evidence/:id.
 	const photosByActivity = new Map<string, EvidencePhoto[]>();
-	const photosByMeal = new Map<string, EvidencePhoto[]>();
 	const ownerActivityIds = items.map((item) => item.id).filter((id): id is string => id !== null);
-	const ownerMealIds = meals.map((meal) => meal.id);
-	if (ownerActivityIds.length > 0 || ownerMealIds.length > 0) {
-		const { rows: evidenceRows } = await db.query<EvidencePhoto & { activity_id: string | null; meal_id: string | null }>(
-			`SELECT id, kind, mime, width, height, activity_id, meal_id
+	if (ownerActivityIds.length > 0) {
+		const { rows: evidenceRows } = await db.query<EvidencePhoto & { activity_id: string | null }>(
+			`SELECT id, kind, mime, width, height, activity_id
 			   FROM evidence
-			  WHERE user_id = $1 AND kind = 'photo'
-			    AND (activity_id = ANY($2::uuid[]) OR meal_id = ANY($3::uuid[]))
+			  WHERE user_id = $1 AND kind = 'photo' AND activity_id = ANY($2::uuid[])
 			  ORDER BY created_at`,
-			[userId, ownerActivityIds, ownerMealIds]
+			[userId, ownerActivityIds]
 		);
 		for (const row of evidenceRows) {
 			const photo: EvidencePhoto = { id: row.id, kind: row.kind, mime: row.mime, width: row.width, height: row.height };
-			const bucket = row.activity_id ? photosByActivity : row.meal_id ? photosByMeal : null;
-			const key = row.activity_id ?? row.meal_id;
-			if (!bucket || !key) continue;
-			bucket.set(key, [...(bucket.get(key) ?? []), photo]);
+			if (!row.activity_id) continue;
+			photosByActivity.set(row.activity_id, [...(photosByActivity.get(row.activity_id) ?? []), photo]);
 		}
 	}
 	// Whether the sheet behind each name has pictures in it. One query for the day, keyed by
@@ -607,48 +453,24 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 		evidence: item.id ? (photosByActivity.get(item.id) ?? []) : [],
 		media_count: item.exercise_id ? (mediaCounts.get(item.exercise_id) ?? 0) : 0,
 	}));
-	const mealItems: DayItemMeal[] = meals.map((meal) => ({
-		...meal,
-		evidence: photosByMeal.get(meal.id) ?? [],
-	}));
 
-	// --- the calorie model ----------------------------------------------------------
-	const eaten = meals.reduce((total, meal) => total + meal.kcal, 0);
 	// Blocks already carry the overlap rules' answer (a Health workout attached to a block
 	// fills in its calories rather than adding a second figure) and the MET estimate for
 	// the lifts that reported none; standalone Health items are the only activities counted
-	// outside a block. Daily active energy is deliberately NOT added: it is the baseline the
-	// TDEE already accounts for.
+	// outside a block.
 	const earned =
 		blocks.reduce((total, block) => total + block.kcal, 0) +
 		standaloneActivities.reduce((total, activity) => total + activity.kcal, 0);
-
-	const targets: DayTargets = computeDayTargets(profile, lastKnownWeight, startUtc);
-	const eatback: Eatback = profile?.eatback ?? "half";
-	const allowance =
-		targets.target == null ? null : Math.round(targets.target + eatbackFraction(eatback) * earned);
-
-	const judged = goalInvolvesCalories(goal);
-	const status = computeStatus({
-		eaten,
-		allowance,
-		safeFloor: targets.safeFloor,
-		live: isToday,
-		localMinutes: isToday ? localMinutesOf(now, tzOffsetMin) : 24 * 60,
-		judged,
-	});
 
 	// --- facts for the measure catalog ----------------------------------------------
 	const facts = buildFacts({
 		date,
 		tzOffsetMin,
-		tdee: targets.tdee,
-		mealRows,
 		activityRows,
 		weightRows,
 		healthRows,
 		// So the facts window's calories are the same numbers the day view shows: the
-		// measures and the coach must not read a raw sum while the ring reads an estimate.
+		// measures and the coach must not read a raw sum while the block reads an estimate.
 		dayWeightLb: lastKnownWeight,
 		goalWeightLb: profile?.goal_weight_lb ?? null,
 	});
@@ -663,7 +485,7 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 	};
 
 	// --- verdict --------------------------------------------------------------------
-	const logged = meals.length > 0 || items.length > 0 || weights.length > 0;
+	const logged = items.length > 0 || weights.length > 0;
 	const trainedToday = items.length > 0;
 	const yesterday = addDays(date, -1);
 	const trainedYesterday = facts.activities.some((a) => a.date === yesterday);
@@ -673,20 +495,15 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 	const verdictResult = judgeDay({
 		goal,
 		facts,
-		status,
 		logged,
-		proteinTarget: targets.macros?.protein_g ?? null,
 		trainedToday,
 		trainedYesterday,
 		sessionsLast7: sessionDates.size,
 		trainingDaysTarget: profile?.training_days ?? null,
 	});
 
-	const overBy = allowance == null ? null : Math.max(0, eaten - allowance);
-	const expected = expectedItems({ tzOffsetMin, meals, weights, now: isToday ? now.toISOString() : null });
 	const arc = buildArc({
 		tzOffsetMin,
-		meals,
 		activities: items,
 		weights,
 		blocks,
@@ -707,26 +524,10 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 		closed_at: closedAt,
 		day_number: await dayNumber(db, userId, date, tzOffsetMin),
 
-		items: { meals: mealItems, activities: activityItems, weights },
+		items: { activities: activityItems, weights },
 		blocks,
 
-		eaten,
 		earned,
-		target: targets.target,
-		allowance,
-		remaining: allowance == null ? null : allowance - eaten,
-		eatback,
-		tdee: targets.tdee,
-		balance: targets.tdee == null ? null : Math.round(targets.tdee + earned - eaten),
-		status,
-		over_by: overBy && overBy > 0 ? overBy : null,
-
-		macros: {
-			protein_g: macroLine(macroTotal(meals, "protein_g"), targets.macros?.protein_g ?? null, "target"),
-			carbs_g: macroLine(macroTotal(meals, "carbs_g"), targets.macros?.carbs_g ?? null, "max"),
-			fat_g: macroLine(macroTotal(meals, "fat_g"), targets.macros?.fat_g ?? null, "target"),
-			fiber_g: macroLine(macroTotal(meals, "fiber_g"), targets.macros?.fiber_g ?? null, "target"),
-		},
 		weight,
 		muscle_groups: muscleSummary(dayActivities).map((entry) => entry.muscle),
 		muscle_summary: muscleSummary(dayActivities),
@@ -735,17 +536,14 @@ export async function computeDay(db: Queryable, options: ComputeDayOptions): Pro
 			steps: sumHealth(dayHealth, "steps"),
 		},
 
-		eating_pattern: eatingPattern(meals, tzOffsetMin),
 		arc,
-		expected,
 
 		verdict: verdictResult.verdict,
-		verdict_words: verdictWords(verdictResult.verdict, status, overBy),
+		verdict_words: verdictWords(verdictResult.verdict, logged),
 		verdict_why: verdictResult.why,
 		goal,
-		goal_involves_calories: judged,
 
-		summary_line: summaryLine({ blocks, meals, eaten, earned, weight }),
+		summary_line: summaryLine({ blocks, earned, weight }),
 		facts,
 	};
 }
@@ -766,8 +564,6 @@ function round1(value: number): number {
 interface FactsInput {
 	date: IsoDate;
 	tzOffsetMin: number;
-	tdee: number | null;
-	mealRows: MealRow[];
 	activityRows: ActivityRow[];
 	weightRows: WeightRow[];
 	healthRows: HealthRow[];
@@ -780,8 +576,9 @@ interface FactsInput {
 /**
  * The MET estimate for every day in the facts window, per activity id. Built by running
  * each day's rows through the same blocks → Health merge → estimate path `computeDay` uses,
- * so a lift that is worth 63 kcal on the Today screen is worth 63 kcal to `calorie_balance`
- * and to the coach. Nothing is written anywhere: this is a map, held for one request.
+ * so a lift that is worth 63 kcal on the Today screen is worth 63 kcal to the goal
+ * calculators and to the coach. Nothing is written anywhere: this is a map, held for one
+ * request.
  */
 function estimatesForWindow({
 	date,
@@ -826,17 +623,9 @@ function estimatesForWindow({
  * where the user's midnight is applied, once.
  */
 export function buildFacts(input: FactsInput): DayFacts {
-	const { date, tzOffsetMin, tdee, mealRows, activityRows, weightRows, healthRows } = input;
+	const { date, tzOffsetMin, activityRows, weightRows, healthRows } = input;
 	const on = (instant: string) => localDateOf(instant, tzOffsetMin);
 	const estimates = estimatesForWindow(input);
-	const meals: FactMeal[] = mealRows.map((row) => ({
-		date: on(row.logged_at),
-		kcal: row.kcal,
-		protein_g: row.protein_g,
-		carbs_g: row.carbs_g,
-		fat_g: row.fat_g,
-		fiber_g: row.fiber_g,
-	}));
 	const activities: FactActivity[] = activityRows.map((row) => ({
 		date: on(row.logged_at),
 		exercise: row.exercise,
@@ -847,11 +636,11 @@ export function buildFacts(input: FactsInput): DayFacts {
 		load_lb: row.load_lb,
 		duration_min: row.duration_min,
 		distance_mi: row.distance_mi,
-		// A lift that reported no calories carries its block's MET estimate here, so
-		// `calorie_balance` and the coach read the same energy the day view shows. Only the
-		// rows that gave no figure are in the map (0004_v2.sql stores "nobody said" as 0,
-		// not NULL), so this cannot overwrite a number anyone reported. The `activities`
-		// row itself is untouched — this is the request's own arithmetic.
+		// A lift that reported no calories carries its block's MET estimate here, so every
+		// reader of this window agrees with the day view's `earned`. Only the rows that gave
+		// no figure are in the map (0004_v2.sql stores "nobody said" as 0, not NULL), so this
+		// cannot overwrite a number anyone reported. The `activities` row itself is
+		// untouched — this is the request's own arithmetic.
 		kcal: estimates.get(row.id) ?? row.kcal,
 		kcal_estimated: estimates.has(row.id),
 		// Not read by any measure; the coach's data-quality flags are what these are for.
@@ -865,7 +654,7 @@ export function buildFacts(input: FactsInput): DayFacts {
 		value: row.value,
 		unit: row.unit,
 	}));
-	return { date, tdee, meals, activities, weights, healthSamples };
+	return { date, activities, weights, healthSamples };
 }
 
 /**
@@ -876,8 +665,7 @@ export async function firstActiveDate(db: Queryable, userId: string, tzOffsetMin
 	const { rows } = await db.query<{ first: string | null; created: string }>(
 		`SELECT (
 			SELECT MIN(logged_at) FROM (
-				SELECT MIN(logged_at) AS logged_at FROM meals WHERE user_id = $1
-				UNION ALL SELECT MIN(logged_at) FROM activities WHERE user_id = $1
+				SELECT MIN(logged_at) AS logged_at FROM activities WHERE user_id = $1
 				UNION ALL SELECT MIN(logged_at) FROM weight_logs WHERE user_id = $1
 			) firsts
 		) AS first, "createdAt" AS created FROM "user" WHERE id = $1`,

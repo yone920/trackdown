@@ -2,7 +2,6 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 
-import { DayEating } from '@/components/day-eating';
 import { DayTraining } from '@/components/day-training';
 import { IconChevronLeft, IconChevronRight } from '@/components/icons';
 import { Card, dismissDeletes, Skeleton, SkeletonLines } from '@/components/kit';
@@ -19,21 +18,19 @@ import { C, SPACE, TABULAR } from '@/lib/theme';
 // "in train it should show me only the train … they have their own page — the historic data
 // should also have their own page").
 //
-// The tabs are domain-scoped, so their history is too. Three doors, three shapes:
+// The tabs are domain-scoped, so their history is too. Two doors, two shapes:
 //
 //   · Progress → Days → `/day/<date>`        the whole-day archive: verdict, In short,
-//                                            training, eating, body, the coach's ask.
+//                                            training, body, the coach's ask.
 //   · Train  → calendar → `/day/<date>/train` the session, and nothing else.
-//   · Eat    → calendar → `/day/<date>/eat`   the meals, and nothing else.
 //
-// This screen is the second and third of those. It is **not** a filtered copy of the day
-// page: it draws the same `DayTraining` / `DayEating` components that page draws, so a
-// workout reads identically through either door, and it deliberately carries **no verdict
-// and no In-short** — a verdict is a judgement about a whole day, and half a day cannot be
-// judged. The prev/next chevrons stay inside the scope, so browsing backwards through
-// sessions never lands the reader in a meal.
+// This screen is the second of those. It is **not** a filtered copy of the day page: it
+// draws the same `DayTraining` component that page draws, so a workout reads identically
+// through either door, and it deliberately carries **no verdict and no In-short** — a
+// verdict is a judgement about a whole day, and half a day cannot be judged. The prev/next
+// chevrons stay inside the scope, so browsing backwards through sessions stays in sessions.
 
-export type DayScope = 'train' | 'eat';
+export type DayScope = 'train';
 
 const SCOPE = {
   train: {
@@ -41,11 +38,6 @@ const SCOPE = {
     /** Where the open day actually lives: the tab, which is the only live page for it. */
     liveTab: '/train' as const,
     back: 'Train',
-  },
-  eat: {
-    title: 'Eating',
-    liveTab: '/eat' as const,
-    back: 'Eat',
   },
 };
 
@@ -126,7 +118,7 @@ export function ScopedDay({ scope }: { scope: DayScope }) {
         <Disp size={30} testID={`${scope}-day-title`} style={{ marginTop: 6 }}>
           {dateLabel(date)}
         </Disp>
-        {view && scope === 'train' ? (
+        {view ? (
           <Sub testID="train-day-line" style={[{ marginTop: 6 }, TABULAR]}>
             {[
               logged.length === 0 && health.length === 0
@@ -136,11 +128,6 @@ export function ScopedDay({ scope }: { scope: DayScope }) {
             ]
               .filter(Boolean)
               .join(' · ')}
-          </Sub>
-        ) : null}
-        {view && scope === 'eat' ? (
-          <Sub testID="eat-day-line" style={[{ marginTop: 6 }, TABULAR]}>
-            {view.items.meals.length === 0 ? 'Nothing logged' : `${kcal(view.eaten)} kcal eaten`}
           </Sub>
         ) : null}
       </View>
@@ -160,17 +147,8 @@ export function ScopedDay({ scope }: { scope: DayScope }) {
         </Card>
       ) : null}
 
-      {view && scope === 'train' ? (
+      {view ? (
         <DayTraining
-          view={view}
-          onCorrect={(kind, id) =>
-            router.push({ pathname: '/log', params: { editDate: date, editId: id, editKind: kind } })
-          }
-        />
-      ) : null}
-
-      {view && scope === 'eat' ? (
-        <DayEating
           view={view}
           onCorrect={(kind, id) =>
             router.push({ pathname: '/log', params: { editDate: date, editId: id, editKind: kind } })

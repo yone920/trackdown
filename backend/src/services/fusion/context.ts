@@ -37,13 +37,6 @@ export interface TodayActivity {
 	logged_at: string;
 }
 
-export interface TodayMeal {
-	description: string;
-	kcal: number | null;
-	protein_g: number | null;
-	logged_at: string;
-}
-
 export interface ActiveGoal {
 	id: string;
 	kind: string;
@@ -59,7 +52,6 @@ export interface FusionContext {
 	tzOffsetMin: number;
 	units: "lb";
 	todayActivities: TodayActivity[];
-	todayMeals: TodayMeal[];
 	todayWeights: number[];
 	/** Exercise names this user has actually logged, most recent first. */
 	recentExercises: string[];
@@ -70,7 +62,7 @@ export interface FusionContext {
 	 */
 	catalog: { name: string; aliases: string[]; category: string | null; primary_muscles: string[] }[];
 	goals: ActiveGoal[];
-	/** What the app thinks the user was doing ("meal", "goal"); a hint, never an order. */
+	/** What the app thinks the user was doing ("activities", "goal"); a hint, never an order. */
 	kindHint: FusionKind | null;
 	/** The unanswered question this log is the answer to, when there is one. */
 	clarify: ClarifyRound | null;
@@ -115,12 +107,6 @@ export async function buildFusionContext(
 		   ORDER BY logged_at`,
 		[userId, ...range]
 	);
-	const meals = await db.query<TodayMeal>(
-		`SELECT description, kcal, protein_g, logged_at
-		   FROM meals WHERE user_id = $1 AND logged_at >= $2 AND logged_at < $3
-		   ORDER BY logged_at`,
-		[userId, ...range]
-	);
 	const weights = await db.query<{ weight_lb: number }>(
 		`SELECT weight_lb FROM weight_logs WHERE user_id = $1 AND logged_at >= $2 AND logged_at < $3
 		   ORDER BY logged_at`,
@@ -149,7 +135,6 @@ export async function buildFusionContext(
 		tzOffsetMin,
 		units: "lb",
 		todayActivities: activities.rows,
-		todayMeals: meals.rows,
 		todayWeights: weights.rows.map((row) => row.weight_lb),
 		recentExercises: recent.rows.map((row) => row.exercise),
 		catalog: catalog.rows.map((row) => ({

@@ -37,13 +37,6 @@ export const SAMPLE_BRIEF: Brief = {
 		],
 		finisher: [{ name: "Doorway Chest Stretch", minutes: 2, note: "Both sides." }],
 	},
-	nutrition: {
-		kcal: 2254,
-		protein_g: 160,
-		carbs_max_g: 250,
-		ideas: ["Greek yoghurt and berries", "Chicken, rice and greens"],
-		why: "Yesterday ran 60 g over your carb target, so keep today's starch to one meal.",
-	},
 	nudge: "Weigh in tomorrow morning — the last reading is four days old.",
 };
 

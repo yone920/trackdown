@@ -4,7 +4,7 @@ import React from 'react';
 
 import TrainingLog from '@/app/train/log';
 import { clock } from '@/lib/format';
-import type { DayActivity, DayMeal } from '@/lib/types';
+import type { DayActivity } from '@/lib/types';
 import { makeDay } from './fixtures';
 
 // The training log Today hides behind a door on a no-plan day. Everything the rows could
@@ -61,20 +61,6 @@ function lift(overrides: Partial<DayActivity> = {}): DayActivity {
     ...overrides,
   };
 }
-
-const MEAL: DayMeal = {
-  id: 'm1',
-  logged_at: '2026-08-30T07:30:00.000Z',
-  description: 'eggs and toast',
-  slot: 'breakfast',
-  stated_slot: null,
-  kcal: 480,
-  protein_g: 32,
-  carbs_g: 40,
-  fat_g: 20,
-  fiber_g: 4,
-  evidence: [],
-};
 
 function serve({ day = makeDay() }: { day?: unknown } = {}) {
   mockApi.mockImplementation((path: string) => {
@@ -144,7 +130,7 @@ describe('The Done log — grouped the way the closed Day groups it', () => {
     serve({
       day: makeDay({
         earned: 410,
-        items: { meals: [], weights: [], activities },
+        items: { weights: [], activities },
         muscle_summary: muscles.map((group) => ({ ...group, exercises: [] })),
       }),
     });
@@ -239,7 +225,7 @@ describe('The Done log — a row never repeats itself', () => {
   });
 
   const show = (activity: DayActivity) => {
-    serve({ day: makeDay({ items: { meals: [], activities: [activity], weights: [] }, earned: 90 }) });
+    serve({ day: makeDay({ items: { activities: [activity], weights: [] }, earned: 90 }) });
     renderTraining();
   };
 
@@ -284,7 +270,7 @@ describe("The Done log's exercise names", () => {
     mockApi.mockImplementation((path: string) => {
       if (path.startsWith('/api/day/')) {
         return Promise.resolve(
-          makeDay({ blocks: [], earned: 90, eaten: 0, items: { meals: [], activities, weights: [] } }),
+          makeDay({ blocks: [], earned: 90, items: { activities, weights: [] } }),
         );
       }
       return Promise.resolve(null);
@@ -348,11 +334,10 @@ describe('taking something back, from the log it is in', () => {
       if (path.startsWith('/api/day/')) {
         return Promise.resolve(
           gone
-            ? makeDay({ earned: 0, eaten: 0, items: { meals: [], activities: [], weights: [] } })
+            ? makeDay({ earned: 0, items: { activities: [], weights: [] } })
             : makeDay({
                 earned: 264,
-                eaten: 480,
-                items: { meals: [MEAL], activities: [lift()], weights: [] },
+                items: { activities: [lift()], weights: [] },
               }),
         );
       }
@@ -380,7 +365,7 @@ describe('taking something back, from the log it is in', () => {
 
 
   it('opens a training row for correction, dated today', async () => {
-    serve({ day: makeDay({ items: { meals: [], activities: [lift()], weights: [] } }) });
+    serve({ day: makeDay({ items: { activities: [lift()], weights: [] } }) });
     renderTraining();
     await waitFor(() => expect(screen.getByText('Bench Press')).toBeTruthy());
 

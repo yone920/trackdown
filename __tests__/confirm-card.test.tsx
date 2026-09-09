@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import React from 'react';
 
-import { ConfirmCard, consistencyLine, notedFactsLine, sourcesLine } from '@/components/confirm-card';
+import { ConfirmCard, notedFactsLine, sourcesLine } from '@/components/confirm-card';
 import type { ActivityItem, FusionResult } from '@/lib/types';
 
 // The confirm card has to render every kind the classifier can return — that is the whole
@@ -40,20 +40,6 @@ const activities: FusionResult = {
   ],
 };
 
-const meal: FusionResult = {
-  kind: 'meal',
-  description: 'Chicken, rice and broccoli',
-  meal_type: 'dinner',
-  kcal: 620,
-  protein_g: 45,
-  carbs_g: 60,
-  fat_g: 18,
-  fiber_g: 6,
-  items: [],
-  confidence: 'medium',
-  sources: { description: 'photo', kcal: 'photo', protein_g: null, carbs_g: null, fat_g: null, fiber_g: null },
-};
-
 const weight: FusionResult = {
   kind: 'weight',
   weight_lb: 181.4,
@@ -64,7 +50,7 @@ const weight: FusionResult = {
 const goal: FusionResult = {
   kind: 'goal',
   spec: {
-    kind: 'lose_fat',
+    kind: 'custom',
     title: 'Get to 170 lb',
     metrics: [{ measure: 'body_weight', target: 170, unit: 'lb', direction: 'decrease', by: '2027-01-14', scope: null, rate: null }],
     active_from: null,
@@ -97,13 +83,6 @@ describe('ConfirmCard', () => {
     // Minutes and miles are null on a shoulder press: an empty box invites typing into it.
     expect(screen.queryByText('MINUTES')).toBeNull();
     expect(screen.queryByText('MILES')).toBeNull();
-  });
-
-  it('renders a meal with its slot and macros', () => {
-    show(meal);
-    expect(screen.getByText('Recognized · meal')).toBeTruthy();
-    expect(screen.getByTestId('meal-kcal')).toHaveTextContent('620');
-    expect(screen.getByTestId('meal-slot')).toHaveTextContent('Dinner');
   });
 
   it('renders a weigh-in', () => {
@@ -238,77 +217,11 @@ describe('the machine, and the offer to name the movement', () => {
 
 describe('the confidence chip says what it is about', () => {
   it('spells out each level, and asks for the eye only on the low one', () => {
-    render(<ConfirmCard result={{ ...meal, confidence: 'low' }} />);
+    render(<ConfirmCard result={{ ...weight, confidence: 'low' }} />);
     expect(screen.getByText('Low confidence — check me')).toBeTruthy();
 
-    screen.rerender(<ConfirmCard result={{ ...meal, confidence: 'medium' }} />);
+    screen.rerender(<ConfirmCard result={{ ...weight, confidence: 'medium' }} />);
     expect(screen.getByText('Medium confidence')).toBeTruthy();
     expect(screen.queryByText('Low confidence — check me')).toBeNull();
-  });
-});
-
-// The arithmetic gate's half of "confirm, don't trust" (backend
-// services/fusion/arithmetic.ts). The chip already had the words for a low reading; what
-// was missing was the reason — and it is a reason the user cannot see, because it is a
-// multiplication nothing on the card performs.
-describe('a meal whose numbers did not add up', () => {
-  it('says so under the plate, with both figures, when it was flagged', () => {
-    render(
-      <ConfirmCard
-        result={{
-          ...meal,
-          kcal: 918,
-          protein_g: 67,
-          carbs_g: 398,
-          fat_g: 35,
-          // Forced by the server, whatever the model claimed.
-          confidence: 'low',
-          consistency: { outcome: 'flagged', stated_kcal: 918, implied_kcal: 2175 },
-        }}
-      />,
-    );
-    expect(screen.getByText('Low confidence — check me')).toBeTruthy();
-    const line = screen.getByTestId('meal-consistency');
-    expect(line).toHaveTextContent(/918 kcal against 2,175 from the macros/);
-    expect(line).toHaveTextContent(/flagged, not adjusted/);
-  });
-
-  it('says it was put right, when the one re-ask put it right', () => {
-    render(
-      <ConfirmCard
-        result={{ ...meal, consistency: { outcome: 'adjusted', stated_kcal: 918, implied_kcal: 939 } }}
-      />,
-    );
-    expect(screen.getByTestId('meal-consistency')).toHaveTextContent(/read again and adjusted/);
-  });
-
-  // A correction is not a fault. The user says "the calorie is 1200", the macros move to meet
-  // it, and the card had been reporting that success in the same alarmed words it uses for a
-  // reading it distrusts — over the very number they had just supplied (field report
-  // 2026-09-03: "does this look correct, I thought you fixed the issue").
-  it('says a restated meal was KEPT, not that it failed to add up', () => {
-    render(
-      <ConfirmCard
-        result={{
-          ...meal,
-          kcal: 1200,
-          protein_g: 65,
-          carbs_g: 80,
-          fat_g: 48,
-          consistency: { outcome: 'restated', stated_kcal: 1200, implied_kcal: 876 },
-        }}
-      />,
-    );
-    const line = screen.getByTestId('meal-consistency');
-    expect(line).toHaveTextContent(/Kept your 1,200 kcal/);
-    expect(line).toHaveTextContent(/macros were re-estimated to match/);
-    expect(line).not.toHaveTextContent(/didn’t add up/);
-  });
-
-  it('draws nothing for the meal that added up first time, which is nearly all of them', () => {
-    render(<ConfirmCard result={meal} />);
-    expect(screen.queryByTestId('meal-consistency')).toBeNull();
-    expect(consistencyLine(null)).toBeNull();
-    expect(consistencyLine(undefined)).toBeNull();
   });
 });

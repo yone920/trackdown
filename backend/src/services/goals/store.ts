@@ -1,7 +1,7 @@
 import type pg from "pg";
 import { buildFacts } from "../day.js";
 import { addDays, boundsOf, daysBetween, localDay, type IsoDate } from "../localTime.js";
-import { loadTargets } from "../profile.js";
+import { loadGoalPace } from "../profile.js";
 import { detectReached, type GoalDetection } from "./detect.js";
 import { computeMeasure, getMeasure, measureLabel, type DayFacts } from "./measures.js";
 import {
@@ -112,11 +112,6 @@ export async function loadFacts(db: Queryable, userId: string, range: FactsRange
 	const end = boundsOf(date, tzOffsetMin).endUtc.toISOString();
 	const window = [userId, windowStart, end];
 
-	const meals = await db.query(
-		`SELECT id, logged_at, description, meal_type, kcal, protein_g, carbs_g, fat_g, fiber_g
-		   FROM meals WHERE user_id = $1 AND logged_at >= $2 AND logged_at < $3 ORDER BY logged_at`,
-		window
-	);
 	const activities = await db.query(
 		`SELECT id, logged_at, description, exercise, category, muscle_groups, sets, reps, load_lb,
 		        duration_min, distance_mi, kcal, source, confidence, external_id
@@ -134,12 +129,9 @@ export async function loadFacts(db: Queryable, userId: string, range: FactsRange
 		window
 	);
 
-	const targets = await loadTargets(db, userId, date, tzOffsetMin);
 	return buildFacts({
 		date,
 		tzOffsetMin,
-		tdee: targets.tdee,
-		mealRows: meals.rows,
 		activityRows: activities.rows,
 		weightRows: weights.rows,
 		healthRows: health.rows,
@@ -367,8 +359,8 @@ export async function proposalForSpec(
 ): Promise<GoalProposal> {
 	const today = localDay(now, tzOffsetMin).date;
 	const facts = await loadFacts(db, userId, { date: today, tzOffsetMin });
-	const targets = await loadTargets(db, userId, today, tzOffsetMin);
-	return proposeTimeline({ spec, facts, pace: targets.profile?.goal_pace ?? null, today, statedWeightLb });
+	const pace = await loadGoalPace(db, userId);
+	return proposeTimeline({ spec, facts, pace, today, statedWeightLb });
 }
 
 /** Thrown for a spec the measure catalog cannot accept; routes turn it into a 400. */

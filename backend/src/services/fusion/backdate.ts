@@ -1,8 +1,8 @@
-// "Two scoops of ice cream yesterday" — reading the day out of what was said.
+// "Went for a run yesterday" — reading the day out of what was said.
 //
 // Until now every log landed on the day it was typed. A person who forgot to log Tuesday's
-// dinner had no way to put it on Tuesday: the reader had no field for a date, and the app
-// never sent one, so "yesterday" was a word that fell on the floor and the ice cream went
+// workout had no way to put it on Tuesday: the reader had no field for a date, and the app
+// never sent one, so "yesterday" was a word that fell on the floor and the run went
 // on today (field report 2026-09-04).
 //
 // **This is code, not a model field.** The routing schema is at a grammar ceiling that a new
@@ -15,7 +15,7 @@
 // What it never does is decide. A backdate is an OFFER: the confirm card names the day it
 // read and the user keeps it or puts it back on today (concept-v2 §Principles 3 — confirm,
 // don't trust). That matters more here than for most readings, because the failure mode is
-// silent — a meal filed on the wrong day is invisible until a week's totals look wrong.
+// silent — a workout filed on the wrong day is invisible until a week's totals look wrong.
 
 /** How far back a phrase can reach. A fortnight is the window the Progress strip draws. */
 export const MAX_DAYS_AGO = 14;

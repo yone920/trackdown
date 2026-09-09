@@ -12,7 +12,7 @@ dotenv.config();
  *
  * Same design as My Read Coach's script:
  * - Supabase auth.users UUIDs become Better Auth "user".id verbatim, so every user_id FK
- *   (profiles.id, meals, calorie_expenditure, weight_logs) stays valid without rewriting
+ *   (profiles.id, calorie_expenditure, weight_logs) stays valid without rewriting
  *   a row. Those columns are TEXT in 0002_app_tables.sql, so a UUID string fits.
  * - Nobody has a password (the app only ever used email OTP), so there is no hash to carry
  *   over and no "account" row to create. Users sign in after cutover exactly as before —
@@ -34,7 +34,6 @@ const TARGET_URL = process.env.DATABASE_URL;
 // pre-v2 name (0004_v2.sql renamed calorie_expenditure to activities on our side).
 const DATA_TABLES: { table: string; target?: string; pk: string; owner: string }[] = [
 	{ table: "profiles", pk: "id", owner: "id" },
-	{ table: "meals", pk: "id", owner: "user_id" },
 	{ table: "calorie_expenditure", target: "activities", pk: "id", owner: "user_id" },
 	{ table: "weight_logs", pk: "id", owner: "user_id" },
 	{ table: "daily_summaries", pk: "user_id,date", owner: "user_id" },

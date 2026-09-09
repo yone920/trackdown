@@ -4,20 +4,12 @@
 
 export type IsoDate = string;
 
-export type DayStatus = 'on_track' | 'over' | 'under' | 'none';
 export type Verdict = 'served' | 'missed' | 'unlogged' | 'none';
 export type ActivitySource = 'manual' | 'fused' | 'health';
 export type ActivityCategory = 'cardio' | 'strength' | 'mobility' | 'other';
-export type MealSlot = 'breakfast' | 'lunch' | 'dinner' | 'snack';
 export type Confidence = 'low' | 'medium' | 'high';
 
-export type GoalKind =
-  | 'lose_fat'
-  | 'gain_muscle'
-  | 'build_strength'
-  | 'improve_endurance'
-  | 'maintain'
-  | 'custom';
+export type GoalKind = 'gain_muscle' | 'build_strength' | 'improve_endurance' | 'custom';
 
 export type GoalMetric = {
   measure: string;
@@ -139,20 +131,6 @@ export type DayActivity = {
   evidence: EvidencePhoto[];
 };
 
-export type DayMeal = {
-  id: string;
-  logged_at: string;
-  description: string;
-  slot: MealSlot;
-  stated_slot: MealSlot | null;
-  kcal: number;
-  protein_g: number | null;
-  carbs_g: number | null;
-  fat_g: number | null;
-  fiber_g: number | null;
-  evidence: EvidencePhoto[];
-};
-
 export type DayWeightRow = {
   id: string | null;
   logged_at: string;
@@ -178,7 +156,7 @@ export type Block = {
 };
 
 export type ArcEvent = {
-  kind: 'meal' | 'activity' | 'weight' | 'block' | 'now';
+  kind: 'activity' | 'weight' | 'block' | 'now';
   label: string;
   at: number;
   until?: number;
@@ -186,25 +164,7 @@ export type ArcEvent = {
   kcal?: number;
 };
 
-/**
- * A slot today has nothing in yet. Nothing renders it — the app shows what was logged and
- * not what is owed (user decision 2026-08-31). It stays on the response because the
- * server's Right-now reading is written from it: what the day has not had is how the
- * reading knows a dinner is what would close the remaining targets.
- */
-export type ExpectedItem = {
-  kind: 'meal' | 'weigh_in';
-  slot?: MealSlot;
-  label: string;
-};
-
-export type MacroLine = {
-  eaten: number | null;
-  target: number | null;
-  note: 'under' | 'over' | 'on target' | null;
-};
-
-export type ActionKind = 'log_meal' | 'weigh_in' | 'coach' | 'workout';
+export type ActionKind = 'weigh_in' | 'coach' | 'workout';
 
 export type ReadingAction = { label: string; kind: ActionKind };
 
@@ -227,31 +187,19 @@ export type DayView = {
   is_today: boolean;
   closed_at: string | null;
   day_number: number;
-  items: { meals: DayMeal[]; activities: DayActivity[]; weights: DayWeightRow[] };
+  items: { activities: DayActivity[]; weights: DayWeightRow[] };
   blocks: Block[];
-  eaten: number;
+  /** Calories earned from activity today. */
   earned: number;
-  target: number | null;
-  allowance: number | null;
-  remaining: number | null;
-  eatback: 'none' | 'half' | 'all';
-  tdee: number | null;
-  balance: number | null;
-  status: DayStatus;
-  over_by: number | null;
-  macros: { protein_g: MacroLine; carbs_g: MacroLine; fat_g: MacroLine; fiber_g: MacroLine };
   weight: { day: number | null; avg_7d: number | null; trend_per_week: number | null };
   muscle_groups: string[];
   muscle_summary: MuscleSummary[];
   health: { active_energy: number | null; steps: number | null };
-  eating_pattern: string | null;
   arc: ArcEvent[];
-  expected: ExpectedItem[];
   verdict: Verdict;
   verdict_words: string;
   verdict_why: string;
   goal: GoalRow | null;
-  goal_involves_calories: boolean;
   summary_line: string;
   /** The live day's reading, or the closed day's. Null when no model could be reached. */
   reading: Reading | null;
@@ -266,15 +214,11 @@ export type DayRow = {
   day_number: number;
   is_today: boolean;
   closed: boolean;
-  status: DayStatus;
   verdict: Verdict;
   verdict_words: string;
   summary: string;
   in_short: string | null;
-  eaten: number | null;
   earned: number | null;
-  allowance: number | null;
-  balance: number | null;
   weight_lb: number | null;
   muscle_groups: string[];
 };
@@ -283,7 +227,7 @@ export type WeekView = {
   end: IsoDate;
   start: IsoDate;
   days: DayRow[];
-  weekly_deficit: number | null;
+  weekly_earned: number | null;
   served: number;
   judged: number;
 };
@@ -294,7 +238,7 @@ export type DaysView = { days: DayRow[]; next_before: IsoDate | null };
 // The log, as recorded (GET /api/day/:date/log — backend/src/services/dayLog.ts)
 // ---------------------------------------------------------------------------
 
-export type DayLogKind = 'activity' | 'meal' | 'weight' | 'goal' | 'statement';
+export type DayLogKind = 'activity' | 'weight' | 'goal' | 'statement';
 export type DayLogIcon = 'camera' | 'mic' | 'keyboard' | 'heart';
 
 export type DayLogEvidence = {
@@ -321,16 +265,6 @@ export type DayLogRecord =
       duration_min: number | null;
       distance_mi: number | null;
       kcal: number;
-    }
-  | {
-      kind: 'meal';
-      description: string;
-      meal_type: MealSlot | null;
-      kcal: number;
-      protein_g: number | null;
-      carbs_g: number | null;
-      fat_g: number | null;
-      fiber_g: number | null;
     }
   | { kind: 'weight'; weight_lb: number }
   | { kind: 'goal'; title: string; goal_kind: GoalKind; metrics: GoalMetric[] }
@@ -434,18 +368,6 @@ export type BriefExercise = {
   completion?: ExerciseCompletion;
 };
 
-export type NutritionNow = {
-  remaining_kcal: number | null;
-  eaten_kcal: number;
-  allowance_kcal: number | null;
-  remaining_protein_g: number | null;
-  eaten_protein_g: number | null;
-  protein_target_g: number | null;
-  /** True once the day is past its allowance. One flat line, never a scolding. */
-  past_target: boolean;
-  line: string;
-};
-
 export type CoachBrief = {
   id?: string;
   date?: IsoDate;
@@ -480,18 +402,6 @@ export type CoachBrief = {
     /** True when every line of a non-empty plan is done — the "Plan complete" state. */
     complete?: boolean;
   } | null;
-  nutrition?: {
-    kcal: number | null;
-    protein_g: number | null;
-    carbs_max_g: number | null;
-    ideas?: string[];
-    why?: string | null;
-  } | null;
-  /**
-   * What is LEFT of the day, computed by the server on every read (never stored). The Eat
-   * card draws these; `nutrition` above is the day's target and does not move.
-   */
-  nutrition_now?: NutritionNow | null;
   nudge?: string | null;
   nudge_action?: { kind: string; goal_id?: string | null; label?: string } | null;
 };
@@ -546,28 +456,6 @@ export type CoachNext = {
   goals: { id: string; title: string; priority: number }[];
 };
 
-/** GET /api/profile — the row, plus what it works out to (backend services/profile.ts). */
-export type ProfileTargets = {
-  tdee: number | null;
-  eat_target: number | null;
-  deficit: number | null;
-  safe_floor: number | null;
-  protein_g: number | null;
-  carbs_g: number | null;
-  fat_g: number | null;
-  fiber_g: number | null;
-  /**
-   * Where `eat_target` came from: derived from the TDEE inputs, stated by the user, the
-   * `daily_calorie_target` column's own DEFAULT that nobody chose, or nothing at all
-   * (backend services/tdee.ts §TargetSource).
-   */
-  source: 'derived' | 'stated' | 'default' | 'none';
-  tracking_only: boolean;
-  eatback: string;
-  weight_lb: number | null;
-  date: IsoDate;
-};
-
 /** Where they train now, and how much has been seen there (migration 0012). */
 export type PlaceSummary = {
   id: string;
@@ -581,12 +469,10 @@ export type Profile = Record<string, unknown> & {
   display_name: string | null;
   units: 'imperial' | 'metric';
   training_days?: number | null;
-  diet_style?: string | null;
   constraints?: string[] | null;
   preferences?: string[] | null;
   /** Null until they say where they train, which is most of the time. */
   place?: PlaceSummary | null;
-  targets: ProfileTargets;
 };
 
 /**
@@ -664,16 +550,6 @@ export type ActivityItem = {
   refine?: Refinement | null;
 };
 
-export type MealItem = {
-  name: string;
-  kcal: number | null;
-  protein_g: number | null;
-  carbs_g: number | null;
-  fat_g: number | null;
-  fiber_g: number | null;
-  serving_amount: string | null;
-};
-
 export type ProposedTimeline = {
   by: IsoDate | null;
   rate: string | null;
@@ -703,51 +579,16 @@ export type GoalFacts = {
 };
 
 export type ProfileFields = {
-  diet_style: string | null;
-  protein_g: number | null;
-  carbs_max_g: number | null;
   training_days: number | null;
   environment: string | null;
   equipment: string[] | null;
-  eatback: 'none' | 'half' | 'all' | null;
   /** The gym they named, if they named one — migration 0012. */
   place_name?: string | null;
   place_kind?: 'gym' | 'home' | 'travel' | 'other' | null;
 } | null;
 
-/**
- * What the server's arithmetic gate made of a meal's numbers (backend
- * services/fusion/arithmetic.ts). Present only when the FIRST reading did not add up —
- * 4 × protein + 4 × carbs + 9 × fat against the kcal beside them.
- *
- *   "adjusted" — one automatic re-ask reconciled it.
- *   "restated" — the user corrected a number and the rest was moved to meet it. Not a
- *                warning: they said what it was, and the app did as it was told.
- *   "flagged"  — it still does not add up; the confidence was forced to low.
- */
-export type MealConsistency = {
-  outcome: 'adjusted' | 'restated' | 'flagged';
-  stated_kcal: number | null;
-  implied_kcal: number | null;
-};
-
 export type FusionResult =
   | { kind: 'activities'; items: ActivityItem[] }
-  | {
-      kind: 'meal';
-      description: string;
-      meal_type: MealSlot | null;
-      kcal: number | null;
-      protein_g: number | null;
-      carbs_g: number | null;
-      fat_g: number | null;
-      fiber_g: number | null;
-      items: MealItem[];
-      confidence: Confidence;
-      sources: Record<string, FieldSource> | null;
-      /** Null unless the server's arithmetic gate had something to say. */
-      consistency?: MealConsistency | null;
-    }
   | {
       kind: 'weight';
       weight_lb: number;
@@ -793,7 +634,7 @@ export type EvidenceRef = {
  */
 export type PartCorrection = {
   part: number;
-  /** Which item of an activities part; null for a meal or a weigh-in. */
+  /** Which item of an activities part; null for a weigh-in. */
   item: number | null;
   instruction: string;
   changes: FieldChange[];
@@ -838,7 +679,6 @@ export type Backdate = {
 export type SavedPart = {
   kind: FusionKind;
   activity_ids: string[];
-  meal_id: string | null;
   weight_id: string | null;
   goal_id: string | null;
   evidence_ids: string[];
@@ -851,10 +691,7 @@ export type ConfirmResponse = {
   kinds: FusionKind[];
   parts: SavedPart[];
   activities: Record<string, unknown>[];
-  /** The first meal saved; `meals` holds them all. Same for `weight` / `weights`. */
-  meal: Record<string, unknown> | null;
-  meals: Record<string, unknown>[];
-  meal_items: Record<string, unknown>[];
+  /** The first weigh-in saved; `weights` holds them all. */
   weight: Record<string, unknown> | null;
   weights: Record<string, unknown>[];
   goal: Record<string, unknown> | null;
@@ -1052,57 +889,6 @@ export type TrainingBoard = {
     trend_per_week: number | null;
     series: { date: IsoDate; value: number }[];
   };
-};
-
-// ---------------------------------------------------------------------------
-// The Eat page (GET /api/eating — backend/src/routes/eating.ts)
-// ---------------------------------------------------------------------------
-
-export type MacroAverage = {
-  avg_per_day: number | null;
-  target: number | null;
-  direction: 'at_least' | 'at_most';
-  /** Where the target came from — the page says when a number is standing in. */
-  source: 'stated' | 'derived' | 'guideline' | 'none';
-};
-
-export type EatingDay = {
-  date: IsoDate;
-  kcal: number;
-  protein_g: number;
-  carbs_g: number;
-  fat_g: number;
-  fiber_g: number;
-  meals: number;
-};
-
-export type EatingWeek = {
-  days: EatingDay[];
-  /** The divisor, said out loud: days that actually had food logged on them. */
-  days_logged: number;
-  avg_kcal: number | null;
-  protein: MacroAverage;
-  carbs: MacroAverage;
-  fat: MacroAverage;
-  fiber: MacroAverage;
-  outliers: string[];
-};
-
-export type EatingView = {
-  date: IsoDate;
-  today: {
-    eaten: number;
-    target: number | null;
-    allowance: number | null;
-    remaining: number | null;
-    status: DayView['status'];
-    macros: DayView['macros'];
-    meals: DayMeal[];
-    eating_pattern: string | null;
-  };
-  week: EatingWeek;
-  /** The one written layer. Null when there is nothing to steer yet. */
-  direction: Reading | null;
 };
 
 // ---------------------------------------------------------------------------

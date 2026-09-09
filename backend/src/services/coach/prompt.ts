@@ -18,7 +18,7 @@ import type { Prescription } from "./rules.js";
 // And it is asked for exactly one thing: which movements, in which order, with which
 // reasoning. Every number in its answer already exists somewhere above it.
 
-const SYSTEM = `You are the coach inside TrackDown, a training and eating log. The user has tapped
+const SYSTEM = `You are the coach inside TrackDown, a training and weight log. The user has tapped
 "What should I do today?" and this is the one answer they get. Write it for them, not about them.
 
 WHAT THIS ANSWER IS
@@ -36,7 +36,7 @@ WHAT YOU DECIDE
   session, say today is rest and say why — never answer with a training day and an empty list.
 - The stretch/mobility finisher that closes a training day, and which of the movements (at
   most one) is an introduction — see VARIETY AND INTRODUCTIONS in the rules below.
-- The reasoning, the meal ideas and the nudge, in plain sentences.
+- The reasoning and the nudge, in plain sentences.
 
 NEVER A RETROACTIVE REST VERDICT — read this twice if TODAY SO FAR lists a session.
 - "rest" is a workout type for a day you are PLANNING to be a rest day: nothing has been
@@ -76,7 +76,6 @@ WHAT YOU DO NOT DECIDE
   45 lb bar and halve what is left. 115 lb is "35 a side plus the bar"; 135 lb is "45 a
   side". Only for a barbell — a dumbbell figure is already per hand, and a machine's number
   is the stack.
-- Calorie and protein numbers. Use the ones in EATING TARGETS.
 
 RULES YOU MUST FOLLOW
 - Respect the constraints absolutely. An injury or an exercise to avoid outrules everything
@@ -89,7 +88,7 @@ RULES YOU MUST FOLLOW
 - If today already contains a workout, do not prescribe a second one of the same kind — offer
   a complement, under NEVER A RETROACTIVE REST VERDICT above.
 - The primary goal (priority 1) decides the emphasis. With no goal at all, coach for
-  consistency and whole-body coverage and pass no judgement on the eating.
+  consistency and whole-body coverage.
 
 VOICE
 - Second person, plain, calm. No exclamation marks, no emoji, no coaching clichés
@@ -97,11 +96,6 @@ VOICE
 - headline: one short line, under ten words — "Pull day: back and biceps", "Rest — you
   trained three days running".
 - why: two or three sentences, each grounded in a number you were given.
-- nutrition.why: one or two sentences about what is LEFT of the day, not what the whole day
-  was for — the card beside it shows the remaining calories and protein, computed live from
-  what has been eaten. Reference yesterday or the week when it explains today. If the day is
-  already past its allowance, say so as one flat fact and move on: no scolding, no "try to",
-  no advice about tomorrow. The meal ideas should fit the room that is actually left.
 - nudge: exactly one sentence, on the subject named in the rules.
 - Pounds, miles, whole calories.`;
 
@@ -117,12 +111,6 @@ function block(title: string, lines: (string | null)[]): string {
 function adherence(window: AdherenceWindow): string {
 	const bits = [
 		`${window.logged_days}/${window.days} day${window.days === 1 ? "" : "s"} logged`,
-		window.kcal_avg == null ? null : `${window.kcal_avg} kcal/day`,
-		window.kcal_delta_avg == null
-			? null
-			: `${window.kcal_delta_avg > 0 ? "+" : ""}${window.kcal_delta_avg} vs target`,
-		window.protein_avg == null ? null : `${window.protein_avg} g protein`,
-		window.carbs_avg == null ? null : `${window.carbs_avg} g carbs`,
 		`${window.training_days} training day${window.training_days === 1 ? "" : "s"}`,
 	].filter(Boolean);
 	return `Last ${window.days} day${window.days === 1 ? "" : "s"}: ${bits.join(", ")}`;
@@ -242,9 +230,7 @@ export function buildFeatureSheet(features: CoachFeatures): string {
 						.map((item) => `${item.exercise} on ${item.date} (${item.reason})`)
 						.join("; ")}`,
 			quality.unlogged_days.length === 0 ? null : `Days with nothing logged this week: ${quality.unlogged_days.join(", ")}`,
-			quality.no_calorie_target ? "No calorie target can be computed — do not state one as if it were." : null,
 			quality.weigh_in_due ? "A weigh-in is due." : null,
-			quality.meals_missing_macros > 0 ? `${quality.meals_missing_macros} meal(s) this week have no protein figure.` : null,
 		])
 	);
 
@@ -282,8 +268,8 @@ ${modeBlock(revision.mode)}
   * workout.targets are the targets the ADDITION is for; they are merged with the plan's.
   * "why" is one or two sentences about the addition. The plan's own reasoning is kept above
     it, so do not restate it.
-  * headline, nutrition and nudge are ignored on an append — the plan keeps the ones it has.
-    Fill them in anyway (the shape requires them); the shortest true thing will do.
+  * headline and nudge are ignored on an append — the plan keeps the ones it has. Fill them
+    in anyway (the shape requires them); the shortest true thing will do.
 
 "rewrite" — they are changing WHAT THE SESSION IS. "switch to legs", "make it 8 exercises",
   "harder", "I'd rather do cardio", "drop the squats".
@@ -365,7 +351,7 @@ export function buildCoachPrompt(inputs: CoachBriefInputs, revision?: BriefRevis
 
 	const goalLines =
 		goals.length === 0
-			? ["No goal set. Coach for consistency and whole-body coverage; pass no judgement on the eating."]
+			? ["No goal set. Coach for consistency and whole-body coverage."]
 			: goals.map((goal, index) => {
 					const metrics = goal.metrics
 						.map((metric) =>
@@ -387,12 +373,10 @@ export function buildCoachPrompt(inputs: CoachBriefInputs, revision?: BriefRevis
 		`TODAY IS ${inputs.date}, ${inputs.local_time} for the user.`,
 		block("GOALS (priority order — the first one decides the emphasis)", goalLines),
 		block("THE PLAN AS STATED", [
-			line("Diet style", plan.diet_style),
 			line("Trains", plan.training_days == null ? null : `${plan.training_days} days a week`),
 			line("Where", plan.environment),
 			line("Equipment", plan.equipment.length > 0 ? plan.equipment.join(", ") : null),
 			line("Pace", plan.goal_pace),
-			line("Eat-back of what is earned", plan.eatback),
 			// Stated, not measured — but the only thing that tells a first brief whether it
 			// is writing for someone new to this or someone who has trained for years.
 			line("Experience (their own word for it)", plan.experience),
@@ -406,26 +390,8 @@ export function buildCoachPrompt(inputs: CoachBriefInputs, revision?: BriefRevis
 			plan.constraints.length > 0 ? `CONSTRAINTS (absolute): ${plan.constraints.join("; ")}` : null,
 			plan.preferences.length > 0 ? `Preferences: ${plan.preferences.join("; ")}` : null,
 		]),
-		block("EATING TARGETS FOR TODAY (use these numbers)", [
-			line("Calories", plan.targets.kcal),
-			line("Protein", plan.targets.protein_g == null ? null : `${plan.targets.protein_g} g`),
-			line("Carbs at most", plan.targets.carbs_max_g == null ? null : `${plan.targets.carbs_max_g} g`),
-			line("Fat", plan.targets.fat_g == null ? null : `${plan.targets.fat_g} g`),
-			plan.targets.tracking_only ? "This user is tracking only — do not prescribe a deficit." : null,
-		]),
 		block("TODAY SO FAR", [
-			line("Eaten", `${today.eaten} kcal`),
 			line("Earned from activity", `${today.earned} kcal`),
-			line("Allowance", today.allowance),
-			line("Left to eat", today.remaining),
-			line("Protein so far", today.protein_g == null ? null : `${today.protein_g} g`),
-			line(
-				"Protein left",
-				today.protein_target_g == null || today.protein_g == null
-					? null
-					: `${Math.max(0, Math.round(today.protein_target_g - today.protein_g))} g`
-			),
-			line("Calorie status", today.status),
 			today.trained.length > 0 ? `Already trained today: ${today.trained.join(", ")}` : "Nothing trained yet today.",
 			// Every movement, not just the block titles: this is what "acknowledge what was
 			// done" is built on, and what the app ticks off the plan later in the day.

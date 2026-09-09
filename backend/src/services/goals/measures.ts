@@ -17,15 +17,6 @@ export type IsoDate = string;
 
 export type ActivityCategory = "cardio" | "strength" | "mobility" | "other";
 
-export interface FactMeal {
-	date: IsoDate;
-	kcal: number | null;
-	protein_g: number | null;
-	carbs_g: number | null;
-	fat_g: number | null;
-	fiber_g: number | null;
-}
-
 export interface FactActivity {
 	date: IsoDate;
 	exercise: string | null;
@@ -75,16 +66,13 @@ export interface FactHealthSample {
  */
 export interface DayFacts {
 	date: IsoDate;
-	/** Maintenance calories for the day, from the profile. null when the profile is incomplete. */
-	tdee: number | null;
-	meals: FactMeal[];
 	activities: FactActivity[];
 	weights: FactWeight[];
 	healthSamples: FactHealthSample[];
 }
 
-export function emptyDayFacts(date: IsoDate, tdee: number | null = null): DayFacts {
-	return { date, tdee, meals: [], activities: [], weights: [], healthSamples: [] };
+export function emptyDayFacts(date: IsoDate): DayFacts {
+	return { date, activities: [], weights: [], healthSamples: [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -156,9 +144,6 @@ function latestHealthValue(facts: DayFacts, kind: string, windowDays: number): n
 
 export const MEASURE_IDS = [
 	"body_weight",
-	"calorie_balance",
-	"protein_g",
-	"carbs_g",
 	"weekly_sets",
 	"exercise_load",
 	"weekly_cardio_min",
@@ -226,48 +211,6 @@ export const MEASURES: Record<MeasureId, Measure> = {
 			const dailyMeans = [...byDay.values()].map((values) => mean(values) as number);
 			const average = mean(dailyMeans);
 			return average == null ? null : round(average, 1);
-		},
-	}),
-
-	// Positive = a deficit, matching concept-v2 §Calories ("Σ(TDEE + earned − eaten)").
-	// Needs a TDEE, so it is null until the profile has sex/height/age/activity.
-	//
-	// `earned` here is the same number the day view shows: the facts window already carries
-	// each lift's MET estimate on its `kcal` (services/day.ts buildFacts), so this is not a
-	// second, rawer sum of the same rows.
-	calorie_balance: define({
-		id: "calorie_balance",
-		label: "Calorie balance",
-		unit: "kcal",
-		windowDays: 1,
-		derivedFrom: "logs",
-		compute({ facts }) {
-			if (facts.tdee == null) return null;
-			const eaten = sum(facts.meals.filter((m) => m.date === facts.date).map((m) => m.kcal));
-			const earned = sum(facts.activities.filter((a) => a.date === facts.date).map((a) => a.kcal));
-			return round(facts.tdee + earned - eaten, 0);
-		},
-	}),
-
-	protein_g: define({
-		id: "protein_g",
-		label: "Protein",
-		unit: "g",
-		windowDays: 1,
-		derivedFrom: "logs",
-		compute({ facts }) {
-			return macroForDay(facts, "protein_g");
-		},
-	}),
-
-	carbs_g: define({
-		id: "carbs_g",
-		label: "Carbs",
-		unit: "g",
-		windowDays: 1,
-		derivedFrom: "logs",
-		compute({ facts }) {
-			return macroForDay(facts, "carbs_g");
 		},
 	}),
 
@@ -392,16 +335,6 @@ export const MEASURES: Record<MeasureId, Measure> = {
 		},
 	}),
 };
-
-/**
- * Grams of one macro eaten on the day. null when nothing was logged: an unlogged day is
- * not a zero-protein day, and the verdict for it is "unlogged", not "missed".
- */
-function macroForDay(facts: DayFacts, key: "protein_g" | "carbs_g"): number | null {
-	const today = facts.meals.filter((m) => m.date === facts.date);
-	if (today.length === 0) return null;
-	return round(sum(today.map((m) => m[key])), 1);
-}
 
 export function isMeasureId(value: string): value is MeasureId {
 	return (MEASURE_IDS as readonly string[]).includes(value);

@@ -97,7 +97,7 @@ export default function DayLog() {
 }
 
 /** The kinds this screen can take back. The rest are corrections, not rows. */
-const DELETABLE = new Set<string>(['activity', 'meal', 'weight']);
+const DELETABLE = new Set<string>(['activity', 'weight']);
 
 /** time · icon · the words in quotes (or "photo") · source · what it became · confidence. */
 function LogRow({

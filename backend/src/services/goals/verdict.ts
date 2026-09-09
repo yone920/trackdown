@@ -1,23 +1,21 @@
-import { computeMeasure, type DayFacts, type MeasureId } from "./measures.js";
+import { computeMeasure, type DayFacts } from "./measures.js";
 
 // The day's verdict (docs/concept-v2.md §The two day views: "verdict vs the goal active
-// that day"; docs/design-system.md §Day: "Served your goal" / "Over by N" / "Not logged").
+// that day"; docs/design-system.md §Day: "Served your goal" / "Not logged").
 //
-// Three rules hold the whole thing up:
+// Two rules hold the whole thing up:
 //   * There is no verdict without a goal. With none, the app shows no judgement colours at
 //     all (concept-v2 §Goals) — `none`, not a quiet pass.
 //   * An unlogged day is `unlogged`, never `missed`. We do not know what happened; saying
 //     the user failed because they did not type is the fastest way to lose them.
-//   * Which question gets asked depends on what the goal is *about*. A fat-loss day is
-//     judged on calories, a muscle day on protein and whether they trained, an endurance
-//     day on the week's cardio pace. Judging every goal on calories is how a strength app
-//     tells someone who ate to grow that they failed.
+//
+// Which question gets asked depends on what the goal is *about*: a muscle day on whether
+// they trained, an endurance day on the week's cardio pace.
 //
 // The verdict for a *past* day is written once at close and never revised, so a goal set
 // tomorrow cannot retroactively fail yesterday.
 
 export type Verdict = "served" | "missed" | "unlogged" | "none";
-export type DayStatus = "on_track" | "over" | "under" | "none";
 
 export interface GoalMetricRow {
 	measure: string;
@@ -31,7 +29,7 @@ export interface GoalMetricRow {
 
 export interface GoalRow {
 	id: string;
-	kind: "lose_fat" | "gain_muscle" | "build_strength" | "improve_endurance" | "maintain" | "custom";
+	kind: "gain_muscle" | "build_strength" | "improve_endurance" | "custom";
 	title: string;
 	metrics: GoalMetricRow[];
 	priority: number;
@@ -40,22 +38,6 @@ export interface GoalRow {
 	active_to: string | null;
 }
 
-/**
- * The measures whose number is a calorie number. A goal built on one of these — or a
- * fat-loss / maintenance goal, which are about calories whatever they list — is what makes
- * the day's calorie `status` meaningful; without one, `status` is `none` and the ring has
- * no colour (concept-v2 §Calories: the week is the unit, and only when it is the point).
- */
-const CALORIE_MEASURES: readonly MeasureId[] = ["calorie_balance", "body_weight"];
-
-export function goalInvolvesCalories(goal: GoalRow | null): boolean {
-	if (!goal) return false;
-	if (goal.kind === "lose_fat" || goal.kind === "maintain") return true;
-	return goal.metrics.some((metric) => (CALORIE_MEASURES as readonly string[]).includes(metric.measure));
-}
-
-/** Protein counts as met a little under target — 5 g is a chicken thigh, not a failure. */
-const PROTEIN_TOLERANCE = 0.9;
 /** Cardio is judged on the week's pace, not the day's: 90 % of the weekly target is on pace. */
 const CARDIO_PACE_TOLERANCE = 0.9;
 /** With no stated cardio target, the WHO's 150 min/week is the standing one. */
@@ -66,12 +48,8 @@ export interface VerdictInput {
 	goal: GoalRow | null;
 	/** Everything the measure calculators may read, ending on the day. */
 	facts: DayFacts;
-	/** The day's calorie status; `none` when there is no target to compare against. */
-	status: DayStatus;
-	/** Did anything at all get logged — a meal, an activity, a weigh-in? */
+	/** Did anything at all get logged — an activity or a weigh-in? */
 	logged: boolean;
-	/** The day's protein target in grams, from the profile or the recommendation. */
-	proteinTarget: number | null;
 	trainedToday: boolean;
 	trainedYesterday: boolean;
 	/** Sessions in the trailing 7 days, for the rest-day rule. */
@@ -92,9 +70,6 @@ export function judgeDay(input: VerdictInput): VerdictResult {
 	if (!logged) return { verdict: "unlogged", why: "Nothing was logged." };
 
 	switch (goal.kind) {
-		case "lose_fat":
-		case "maintain":
-			return judgeCalories(input);
 		case "gain_muscle":
 		case "build_strength":
 			return judgeTraining(input);
@@ -105,29 +80,7 @@ export function judgeDay(input: VerdictInput): VerdictResult {
 	}
 }
 
-function judgeCalories({ status, facts }: VerdictInput): VerdictResult {
-	const balance = computeMeasure("calorie_balance", facts);
-	const deficit = balance == null ? "" : ` (${balance >= 0 ? "−" : "+"}${Math.abs(Math.round(balance))} kcal)`;
-	switch (status) {
-		case "on_track":
-			return { verdict: "served", why: `Ate inside the allowance${deficit}.` };
-		case "under":
-			// A deficit day served a fat-loss goal even when it undershot. The status line
-			// still says "under-eating" — that is a caution about health, not a verdict on
-			// the goal, and conflating them would mark a light day as a failure.
-			return { verdict: "served", why: `Ate well under the allowance${deficit}.` };
-		case "over":
-			return { verdict: "missed", why: `Ate over the allowance${deficit}.` };
-		default:
-			return { verdict: "none", why: "No calorie target for that day." };
-	}
-}
-
 function judgeTraining(input: VerdictInput): VerdictResult {
-	const protein = computeMeasure("protein_g", input.facts);
-	const target = input.proteinTarget;
-	const proteinOk = target == null ? protein != null : protein != null && protein >= target * PROTEIN_TOLERANCE;
-
 	// The rest-day rule: a day off is part of building muscle. It only counts as one when
 	// the week around it actually has training in it — otherwise every empty day would
 	// pass as a rest day.
@@ -135,16 +88,11 @@ function judgeTraining(input: VerdictInput): VerdictResult {
 		input.trainedYesterday ||
 		(input.trainingDaysTarget != null && input.sessionsLast7 >= input.trainingDaysTarget);
 	const trainingOk = input.trainedToday || restDayOk;
-
-	const proteinText =
-		protein == null
-			? "no protein logged"
-			: `${Math.round(protein)} g protein${target == null ? "" : ` of ${Math.round(target)}`}`;
 	const trainingText = input.trainedToday ? "trained" : restDayOk ? "rest day" : "no training";
 
-	return proteinOk && trainingOk
-		? { verdict: "served", why: `${proteinText}, ${trainingText}.` }
-		: { verdict: "missed", why: `${proteinText}, ${trainingText}.` };
+	return trainingOk
+		? { verdict: "served", why: `${trainingText}.` }
+		: { verdict: "missed", why: `${trainingText}.` };
 }
 
 function judgeEndurance(input: VerdictInput): VerdictResult {
@@ -185,15 +133,15 @@ function judgeCustom(input: VerdictInput): VerdictResult {
 }
 
 /** The words the Day screen puts under the check circle. */
-export function verdictWords(verdict: Verdict, status: DayStatus, over: number | null): string {
+export function verdictWords(verdict: Verdict, logged: boolean): string {
 	switch (verdict) {
 		case "served":
 			return "Served your goal";
 		case "missed":
-			return status === "over" && over != null ? `Over by ${Math.round(over).toLocaleString("en-US")}` : "Missed your goal";
+			return "Missed your goal";
 		case "unlogged":
 			return "Not logged";
 		default:
-			return status === "none" ? "Logged" : "No goal set";
+			return logged ? "Logged" : "No goal set";
 	}
 }

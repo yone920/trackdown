@@ -18,7 +18,6 @@ import {
 	FusionRouteOutputSchema,
 	FusionRouteSchema,
 	GoalDetailOutputSchema,
-	MealDetailOutputSchema,
 	PlanFieldsOutputSchema,
 	ProfileFieldsSchema,
 	StatementDetailOutputSchema,
@@ -49,16 +48,13 @@ const context: FusionContext = {
 			logged_at: "2026-08-29T16:10:00.000Z",
 		},
 	],
-	todayMeals: [
-		{ description: "eggs, toast, coffee", kcal: 265, protein_g: 16, logged_at: "2026-08-29T06:20:00.000Z" },
-	],
 	todayWeights: [181.4],
 	recentExercises: ["Bench Press", "Lat Pulldown"],
 	catalog: [
 		{ name: "Dumbbell Bench Press", aliases: ["db bench", "dumbbell press"], category: "strength", primary_muscles: ["chest"] },
 		{ name: "Chest-Supported Row", aliases: ["chest supported row", "incline bench row", "seal row"], category: "strength", primary_muscles: ["back"] },
 	],
-	goals: [{ id: "g1", kind: "lose_fat", title: "Down to 170 lb", priority: 1, metrics: [] }],
+	goals: [{ id: "g1", kind: "gain_muscle", title: "Down to 170 lb", priority: 1, metrics: [] }],
 	kindHint: null,
 	clarify: null,
 };
@@ -96,7 +92,6 @@ describe("the fusion prompt", () => {
 	it("tells the model what has been logged today and what the user calls things", () => {
 		const prompt = buildFusionSystemPrompt(context);
 		expect(prompt).toContain("16:10 activity — Bench Press, 3×8, 135 lb, 160 kcal");
-		expect(prompt).toContain("eggs, toast, coffee");
 		expect(prompt).toContain("181.4 lb");
 		// The catalogue is the shared vocabulary: canonical name plus the spoken forms.
 		expect(prompt).toContain("Dumbbell Bench Press (db bench, dumbbell press)");
@@ -104,9 +99,8 @@ describe("the fusion prompt", () => {
 		expect(prompt).toContain("18:40 on 2026-08-29");
 	});
 
-	it("keeps v1's grouping rules — one meal per log, one item per exercise", () => {
+	it("keeps v1's grouping rules — one item per exercise", () => {
 		const prompt = buildFusionSystemPrompt(context);
-		expect(prompt).toContain("All food and drink in a single log is ONE meal");
 		expect(prompt).toContain("Each distinct exercise is its own item");
 		expect(prompt).toContain("Sets and reps NEVER come from a photo");
 	});
@@ -121,10 +115,9 @@ describe("the fusion prompt", () => {
 	});
 
 	it("tells a segment's own call which kind to pull out, and to leave the rest alone", () => {
-		const prompt = buildPartDetailSystemPrompt(context, "meal");
+		const prompt = buildPartDetailSystemPrompt(context, "activities");
 		expect(prompt).toContain("Read ONLY that part");
 		expect(prompt).toContain("saved twice");
-		expect(prompt).toContain("All of it is ONE meal");
 		// It still gets the catalogue and the units, or it would invent its own spellings.
 		expect(prompt).toContain("Dumbbell Bench Press (db bench, dumbbell press)");
 		expect(prompt).toContain("Units are POUNDS and MILES");
@@ -136,7 +129,7 @@ describe("the fusion prompt", () => {
 		const prompt = buildPartDetailSystemPrompt(context, "statement");
 		expect(prompt).toContain('say in "scope" which of three it is');
 		expect(prompt).toContain("a passing state changes no plan");
-		expect(prompt).toContain("diet_style");
+		expect(prompt).toContain("training_days");
 		expect(prompt).not.toContain("photo_indexes");
 	});
 
@@ -148,7 +141,6 @@ describe("the fusion prompt", () => {
 		const prompt = buildFusionSystemPrompt({
 			...context,
 			todayActivities: [],
-			todayMeals: [],
 			todayWeights: [],
 			goals: [],
 		});
@@ -157,8 +149,8 @@ describe("the fusion prompt", () => {
 	});
 
 	it("passes the app's kind hint through as a hint, not an order", () => {
-		const prompt = buildFusionSystemPrompt({ ...context, kindHint: "meal" });
-		expect(prompt).toContain('The app thinks this is a "meal"');
+		const prompt = buildFusionSystemPrompt({ ...context, kindHint: "activities" });
+		expect(prompt).toContain('The app thinks this is a "activities"');
 		expect(prompt).toContain("not an instruction");
 	});
 });
@@ -209,24 +201,11 @@ describe("the fusion schema", () => {
 					},
 				],
 			},
-			{
-				kind: "meal",
-				description: "chicken burrito",
-				meal_type: "lunch",
-				kcal: 950,
-				protein_g: 38,
-				carbs_g: 130,
-				fat_g: 28,
-				fiber_g: 8,
-				items: [],
-				confidence: "medium",
-				sources: null,
-			},
 			{ kind: "weight", weight_lb: 181.4, confidence: "high", sources: null },
 			{
 				kind: "goal",
 				spec: {
-					kind: "lose_fat",
+					kind: "custom",
 					title: "Down to 170 lb",
 					metrics: [
 						{
@@ -299,7 +278,6 @@ describe("the model-facing schema", () => {
 			["goal_spec", GoalDetailOutputSchema],
 			["plan_fields", PlanFieldsOutputSchema],
 			["activities", ActivitiesDetailOutputSchema],
-			["meal", MealDetailOutputSchema],
 			["weigh_in", WeightDetailOutputSchema],
 			["statement", StatementDetailOutputSchema],
 		] as const) {
@@ -321,13 +299,9 @@ describe("the model-facing schema", () => {
 	 */
 	it("carries the training background on the second call, not on the routing schema", () => {
 		const fields = ProfileFieldsSchema.parse({
-			diet_style: null,
-			protein_g: null,
-			carbs_max_g: null,
 			training_days: null,
 			environment: null,
 			equipment: null,
-			eatback: null,
 			experience: "intermediate",
 			background: "three years of 5/3/1",
 			reference_loads: [{ exercise: "Bench Press", load_lb: 165, reps: 5 }],
@@ -349,14 +323,10 @@ describe("the model-facing schema", () => {
 	 */
 	it("carries the session length on the second call, not on the routing schema", () => {
 		const fields = ProfileFieldsSchema.parse({
-			diet_style: null,
-			protein_g: null,
-			carbs_max_g: null,
 			training_days: 4,
 			session_minutes: 45,
 			environment: null,
 			equipment: null,
-			eatback: null,
 			experience: null,
 			background: null,
 			reference_loads: null,
@@ -377,15 +347,11 @@ describe("the model-facing schema", () => {
 	 */
 	it("carries the weekly cardio target on the second call, not on the routing schema", () => {
 		const fields = ProfileFieldsSchema.parse({
-			diet_style: null,
-			protein_g: null,
-			carbs_max_g: null,
 			training_days: null,
 			session_minutes: null,
 			cardio_minutes_target: 200,
 			environment: null,
 			equipment: null,
-			eatback: null,
 			experience: null,
 			background: null,
 			reference_loads: null,
@@ -403,11 +369,11 @@ describe("the model-facing schema", () => {
 	it("keeps the routing schema to one branch of the union plus a list of bare kinds", () => {
 		const answer = FusionRouteOutputSchema.parse({
 			result: { kind: "weight", weight_lb: 181, confidence: "high" },
-			more_kinds: ["meal", "activities"],
+			more_kinds: ["goal", "activities"],
 			photo_fields: ["weight_lb"],
 		});
 		// A segment is a kind and nothing else — its own call fills the fields in.
-		expect(answer.more_kinds).toEqual(["meal", "activities"]);
+		expect(answer.more_kinds).toEqual(["goal", "activities"]);
 		// And the photo attribution is one answer for the whole log, beside the result
 		// rather than inside it: the union could not afford three copies of it AND
 		// `equipment`, and one message has one set of photos (see FusionRouteOutputSchema).
@@ -428,8 +394,8 @@ describe("the model-facing schema", () => {
 			};
 		};
 		const branches = json.properties.result.oneOf;
-		// activities · meal · weight · goal · statement · unclear.
-		expect(branches.map((branch) => Object.keys(branch.properties).length)).toEqual([2, 10, 3, 2, 3, 2]);
+		// activities · weight · goal · statement · unclear.
+		expect(branches.map((branch) => Object.keys(branch.properties).length)).toEqual([2, 3, 2, 3, 2]);
 		// And one activity item, which is the object every extra field wanted to live on.
 		expect(Object.keys(branches[0]!.properties.items?.items?.properties ?? {})).toEqual([
 			"exercise",
@@ -453,9 +419,9 @@ describe("the model-facing schema", () => {
 		const statement = FusionRouteSchema.parse({ kind: "statement", scope: "constraint", text: "bad left knee" });
 		expect(toFusionResult(statement)).toEqual({ kind: "constraint", text: "bad left knee", fields: null });
 		// The plan fields, when there were any, come from the second call.
-		expect(toFusionResult(statement, { fields: { diet_style: "keto", protein_g: null, carbs_max_g: 50, training_days: null, session_minutes: null, cardio_minutes_target: null, environment: null, equipment: null, eatback: null, experience: null, background: null, reference_loads: null, place_name: null, place_kind: null } })).toMatchObject({
+		expect(toFusionResult(statement, { fields: { training_days: 4, session_minutes: null, cardio_minutes_target: null, environment: "gym", equipment: null, experience: null, background: null, reference_loads: null, place_name: null, place_kind: null } })).toMatchObject({
 			kind: "constraint",
-			fields: { diet_style: "keto", carbs_max_g: 50 },
+			fields: { training_days: 4, environment: "gym" },
 		});
 		expect(toFusionResult({ kind: "statement", scope: "coach_context", text: "30 minutes only" })).toEqual({
 			kind: "coach_context",
@@ -527,7 +493,7 @@ describe("createFusionAnalyzer", () => {
 			routed({ kind: "goal", title: "Down to 170 lb" }),
 			{
 				spec: {
-					kind: "lose_fat",
+					kind: "custom",
 					title: "Down to 170 lb",
 					metrics: [
 						{
@@ -568,7 +534,7 @@ describe("createFusionAnalyzer", () => {
 			routed({ kind: "goal", title: "Down to 170 lb" }),
 			{
 				spec: {
-					kind: "lose_fat",
+					kind: "custom",
 					title: "Down to 170 lb",
 					metrics: [
 						{ measure: "body_weight", scope: null, target: 170, unit: "lb", direction: "decrease", rate: null, by: null },
@@ -586,16 +552,14 @@ describe("createFusionAnalyzer", () => {
 	it("asks a second time for the plan fields behind a constraint, but not for coach context", async () => {
 		const llm = createFakeLlm();
 		llm.outputs.push(
-			routed({ kind: "statement", scope: "preference", text: "switching to keto" }),
+			routed({ kind: "statement", scope: "preference", text: "switching to a home gym" }),
 			{
 				fields: {
-					diet_style: "keto",
-					protein_g: null,
-					carbs_max_g: 50,
 					training_days: null,
-					environment: null,
-					equipment: null,
-					eatback: null,
+					session_minutes: null,
+					cardio_minutes_target: null,
+					environment: "home",
+					equipment: ["dumbbells"],
 					experience: null,
 					background: null,
 					reference_loads: null,
@@ -604,8 +568,8 @@ describe("createFusionAnalyzer", () => {
 				},
 			}
 		);
-		const { results } = await createFusionAnalyzer(llm).analyze({ text: "switching to keto", context });
-		expect(results[0]).toMatchObject({ kind: "preference", fields: { diet_style: "keto", carbs_max_g: 50 } });
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "switching to a home gym", context });
+		expect(results[0]).toMatchObject({ kind: "preference", fields: { environment: "home", equipment: ["dumbbells"] } });
 		expect(llm.requests).toHaveLength(2);
 
 		// A passing state changes no plan, so there is nothing to extract and no second call.
@@ -632,8 +596,8 @@ describe("createFusionAnalyzer", () => {
 
 	it("refuses an answer the schema does not allow, rather than saving nonsense", async () => {
 		const llm = createFakeLlm();
-		llm.nextOutput = routed({ kind: "meal" });
-		await expect(createFusionAnalyzer(llm).analyze({ text: "lunch", context })).rejects.toThrow();
+		llm.nextOutput = routed({ kind: "weight" });
+		await expect(createFusionAnalyzer(llm).analyze({ text: "181", context })).rejects.toThrow();
 	});
 });
 
@@ -642,18 +606,7 @@ describe("createFusionAnalyzer", () => {
 // ---------------------------------------------------------------------------
 
 describe("splitting one input into parts", () => {
-	const eggs = {
-		kind: "meal",
-		description: "two eggs and toast",
-		meal_type: "breakfast",
-		kcal: 320,
-		protein_g: 18,
-		carbs_g: 30,
-		fat_g: 14,
-		fiber_g: 3,
-		items: [],
-		confidence: "medium",
-	};
+	const weighIn181 = { kind: "weight", weight_lb: 181, confidence: "high" };
 	const run = {
 		kind: "activities",
 		items: [
@@ -671,23 +624,25 @@ describe("splitting one input into parts", () => {
 			},
 		],
 	};
-	const weighIn = { weight_lb: 181, confidence: "high" };
 
 	it("returns one result per kind, in the order they were said", async () => {
 		const llm = createFakeLlm();
 		llm.outputs.push(
-			routed(eggs, ["activities", "weight"]),
+			routed(weighIn181, ["activities", "goal"]),
 			{ items: run.items, photo_fields: [], photo_indexes: [] },
-			{ ...weighIn, photo_fields: [], photo_indexes: [] }
+			{
+				spec: { kind: "custom", title: "Down to 170 lb", metrics: [], active_to: null },
+				facts: { current_weight_lb: null, training_days: null, environment: null, age_years: null },
+			}
 		);
 		const { results } = await createFusionAnalyzer(llm).analyze({
-			text: "ate two eggs and toast, then ran 5k, weighed in at 181",
+			text: "weighed in at 181, then ran 5k, want to get to 170",
 			context,
 		});
-		expect(results.map((result) => result.kind)).toEqual(["meal", "activities", "weight"]);
-		expect(results[2]).toMatchObject({ kind: "weight", weight_lb: 181 });
-		// One routing call, then one focused call per extra part — two round trips, not four.
-		expect(llm.requests.map((request) => request.schemaName)).toEqual(["fusion_result", "activities", "weigh_in"]);
+		expect(results.map((result) => result.kind)).toEqual(["weight", "activities", "goal"]);
+		expect(results[0]).toMatchObject({ kind: "weight", weight_lb: 181 });
+		// One routing call, then one focused call per extra part — three round trips, not four.
+		expect(llm.requests.map((request) => request.schemaName)).toEqual(["fusion_result", "activities", "goal_spec"]);
 		// Each focused call is told which kind to pull out and to leave the others alone.
 		expect(llm.requests[1]?.system).toContain("PHYSICAL ACTIVITY");
 		expect(llm.requests[1]?.system).toContain("saved twice");
@@ -697,9 +652,9 @@ describe("splitting one input into parts", () => {
 
 	it("ignores a kind the router named twice", async () => {
 		const llm = createFakeLlm();
-		llm.outputs.push(routed(eggs, ["weight", "weight"]), { ...weighIn, photo_fields: [], photo_indexes: [] });
-		const { results } = await createFusionAnalyzer(llm).analyze({ text: "eggs; 181; 181", context });
-		expect(results.map((result) => result.kind)).toEqual(["meal", "weight"]);
+		llm.outputs.push(routed(weighIn181, ["activities", "activities"]), { items: run.items, photo_fields: [], photo_indexes: [] });
+		const { results } = await createFusionAnalyzer(llm).analyze({ text: "181; ran 5k; ran 5k", context });
+		expect(results.map((result) => result.kind)).toEqual(["weight", "activities"]);
 		expect(llm.requests).toHaveLength(2);
 	});
 
@@ -709,7 +664,7 @@ describe("splitting one input into parts", () => {
 			routed(run, ["goal", "statement"]),
 			{
 				spec: {
-					kind: "lose_fat",
+					kind: "custom",
 					title: "Down to 200 lb",
 					metrics: [
 						{ measure: "body_weight", scope: null, target: 200, unit: "lb", direction: "decrease", rate: null, by: null },
@@ -769,7 +724,7 @@ describe("splitting one input into parts", () => {
 			routed({ kind: "goal", title: "Down to 200 lb" }, ["weight"]),
 			{
 				spec: {
-					kind: "lose_fat",
+					kind: "custom",
 					title: "Down to 200 lb",
 					metrics: [
 						{ measure: "body_weight", scope: null, target: 200, unit: "lb", direction: "decrease", rate: null, by: null },
@@ -787,10 +742,10 @@ describe("splitting one input into parts", () => {
 
 	it("files each photo against the part that says it read it", async () => {
 		const llm = createFakeLlm();
-		// The machine photo (index 1) went to the run; the plate stayed with the meal.
-		llm.outputs.push(routed(eggs, ["activities"]), { items: run.items, photo_fields: [], photo_indexes: [1] });
+		// The machine photo (index 1) went to the run; the scale photo stayed with the weigh-in.
+		llm.outputs.push(routed(weighIn181, ["activities"]), { items: run.items, photo_fields: [], photo_indexes: [1] });
 		const { photoParts } = await createFusionAnalyzer(llm).analyze({
-			text: "ate this, then did this",
+			text: "weighed in, then did this",
 			photos: [
 				{ mediaType: "image/jpeg", base64: "AAAA" },
 				{ mediaType: "image/jpeg", base64: "BBBB" },
@@ -811,9 +766,9 @@ describe("splitting one input into parts", () => {
 
 	it("has nothing more to ask when the whole log was unclear", () => {
 		const question = { kind: "unclear" as const, question: "What did you have?" };
-		expect(usableSegments(question, ["meal"])).toEqual([]);
-		const meal = { kind: "meal" as const, description: "x", meal_type: null, kcal: null, protein_g: null, carbs_g: null, fat_g: null, fiber_g: null, items: [], confidence: "low" as const };
-		expect(usableSegments(meal, ["weight", "weight", "goal"])).toEqual(["weight", "goal"]);
+		expect(usableSegments(question, ["weight"])).toEqual([]);
+		const weight = { kind: "weight" as const, weight_lb: 182, confidence: "low" as const, sources: null, check: null };
+		expect(usableSegments(weight, ["weight", "weight", "goal"])).toEqual(["weight", "goal"]);
 	});
 });
 
@@ -1257,31 +1212,44 @@ describe("revising what was understood", () => {
 
 	it("asks about every part at once and leaves a question alone", async () => {
 		const llm = createFakeLlm();
-		const meal: FusionResult = {
-			kind: "meal",
-			description: "chicken and rice",
-			meal_type: "dinner",
-			kcal: 620,
-			protein_g: 45,
-			carbs_g: 60,
-			fat_g: 18,
-			fiber_g: 6,
-			items: [],
-			confidence: "medium",
-			sources: null,
-			consistency: null,
+		const lift: FusionResult = {
+			kind: "activities",
+			items: [
+				{
+					exercise: "Bench Press",
+					equipment: null,
+					description: "3 × 8 bench at 135 lb",
+					category: "strength",
+					muscle_groups: ["chest"],
+					sets: 3,
+					reps: 8,
+					load_lb: 135,
+					duration_min: null,
+					distance_mi: null,
+					kcal: 160,
+					confidence: "medium",
+					sources: null,
+					refine: null,
+				},
+			],
 		};
 		llm.outputs.push(
 			{
-				description: "chicken and rice",
-				meal_type: "lunch",
-				kcal: 620,
-				protein_g: 45,
-				carbs_g: 60,
-				fat_g: 18,
-				fiber_g: 6,
-				items: [],
-				confidence: "high",
+				revision_mode: "amend",
+				items: [
+					{
+						exercise: "Bench Press",
+						equipment: null,
+						description: "3 × 8 bench at 145 lb",
+						sets: 3,
+						reps: 8,
+						load_lb: 145,
+						duration_min: null,
+						distance_mi: null,
+						kcal: 160,
+						confidence: "high",
+					},
+				],
 				photo_fields: [],
 				photo_indexes: [],
 			},
@@ -1289,261 +1257,16 @@ describe("revising what was understood", () => {
 		);
 
 		const revised = await createFusionAnalyzer(llm).revise({
-			results: [meal, { kind: "weight", weight_lb: 181, confidence: "high", sources: null, check: null }, { kind: "unclear", question: "Which machine?" }],
-			instruction: "that meal was lunch not dinner",
+			results: [lift, { kind: "weight", weight_lb: 181, confidence: "high", sources: null, check: null }, { kind: "unclear", question: "Which machine?" }],
+			instruction: "the bench was 145 not 135",
 			context,
 		});
 
-		expect(revised.map((result) => result.kind)).toEqual(["meal", "weight", "unclear"]);
-		expect(revised[0]).toMatchObject({ meal_type: "lunch" });
+		expect(revised.map((result) => result.kind)).toEqual(["activities", "weight", "unclear"]);
+		const first = revised[0];
+		if (first?.kind === "activities") expect(first.items[0]).toMatchObject({ load_lb: 145 });
 		// The weigh-in was asked and came back as it was; the question was never asked at all.
-		expect(llm.requests.map((request) => request.schemaName)).toEqual(["meal", "weigh_in"]);
-	});
-});
-
-// ---------------------------------------------------------------------------
-// The arithmetic gate, in the pipeline (services/fusion/arithmetic.ts).
-// ---------------------------------------------------------------------------
-
-/** The field case as the routing call answered it: 918 kcal against 2,175 of macros. */
-const FIELD_MEAL_ANSWER = {
-	kind: "meal" as const,
-	description: "tuna, eggs, vegetables and four slices of bread",
-	meal_type: "lunch" as const,
-	kcal: 918,
-	protein_g: 67,
-	carbs_g: 398,
-	fat_g: 35,
-	fiber_g: 12,
-	items: [],
-	confidence: "high" as const,
-};
-
-const routedMeal = (result: unknown) => ({ result, more_kinds: [], photo_fields: [] });
-const mealDetail = (over: Record<string, unknown>) => ({
-	description: FIELD_MEAL_ANSWER.description,
-	meal_type: "lunch",
-	kcal: 918,
-	protein_g: 67,
-	carbs_g: 398,
-	fat_g: 35,
-	fiber_g: 12,
-	items: [],
-	confidence: "high",
-	photo_fields: [],
-	photo_indexes: [],
-	...over,
-});
-
-describe("the arithmetic gate", () => {
-	it("says nothing about a meal that adds up, and costs no second call", async () => {
-		const llm = createFakeLlm();
-		llm.outputs.push(routedMeal({ ...FIELD_MEAL_ANSWER, kcal: 620, protein_g: 45, carbs_g: 60, fat_g: 18 }));
-
-		const { results } = await createFusionAnalyzer(llm).analyze({ text: "chicken and rice", context });
-
-		expect(llm.requests).toHaveLength(1);
-		expect(results[0]).toMatchObject({ kind: "meal", confidence: "high", consistency: null });
-	});
-
-	it("re-asks once, with the discrepancy spelled out, and keeps the answer that adds up", async () => {
-		const llm = createFakeLlm();
-		llm.outputs.push(
-			routedMeal(FIELD_MEAL_ANSWER),
-			// The loaf read as four slices this time: 4×67 + 4×89 + 9×35 = 939 against 918.
-			mealDetail({ carbs_g: 89, confidence: "medium" })
-		);
-
-		const { results } = await createFusionAnalyzer(llm).analyze({
-			text: "tuna, two eggs, quarter onion, a chilli, two cups of vegetables, two tbsp olive oil, four slices of this bread",
-			context,
-		});
-
-		// Exactly two calls: the route, and the ONE automatic re-ask.
-		expect(llm.requests.map((request) => request.schemaName)).toEqual(["fusion_result", "meal"]);
-		const system = llm.requests[1]!.system;
-		// It is told what we noticed, in numbers, not asked to think again.
-		expect(system).toContain("2175");
-		expect(system).toContain("918");
-		expect(String(system).toLowerCase()).toContain("serving");
-		// And it is shown its own answer, without our verdict on it.
-		expect(system).toContain('"carbs_g":398');
-		expect(system).not.toContain("consistency");
-
-		// What the card names is the disagreement that FIRED the gate — 918 against the 2,175
-		// the first reading's macros implied — not the reconciled pair, which by definition
-		// agree. "The numbers didn't add up — 918 kcal against 939" is already a stretch; the
-		// day a re-ask lands exactly on the macros it reads "876 against 876", which is not a
-		// sentence anyone can act on.
-		expect(results[0]).toMatchObject({
-			kind: "meal",
-			carbs_g: 89,
-			confidence: "medium",
-			consistency: { outcome: "adjusted", stated_kcal: 918, implied_kcal: 2175 },
-		});
-	});
-
-	it("presents the meal anyway and FORCES low when the re-ask does not fix it", async () => {
-		const llm = createFakeLlm();
-		llm.outputs.push(
-			routedMeal(FIELD_MEAL_ANSWER),
-			// Same numbers back, and still claiming high.
-			mealDetail({ confidence: "high" })
-		);
-
-		const { results } = await createFusionAnalyzer(llm).analyze({ text: "lunch", context });
-
-		expect(llm.requests).toHaveLength(2);
-		// The log is saved-able: refusing to log what the user ate is the failure "always
-		// log" exists to prevent. What we stop doing is calling it certain.
-		expect(results[0]).toMatchObject({
-			kind: "meal",
-			kcal: 918,
-			carbs_g: 398,
-			confidence: "low",
-			consistency: { outcome: "flagged", stated_kcal: 918, implied_kcal: 2175 },
-		});
-		expect(FusionResultSchema.safeParse(results[0]).success).toBe(true);
-	});
-
-	it("keeps the first reading, flagged, when the re-ask itself fails", async () => {
-		const llm = createFakeLlm();
-		llm.outputs.push(routedMeal(FIELD_MEAL_ANSWER), { nonsense: true });
-
-		const { results } = await createFusionAnalyzer(llm).analyze({ text: "lunch", context });
-
-		expect(results[0]).toMatchObject({
-			kind: "meal",
-			carbs_g: 398,
-			confidence: "low",
-			consistency: { outcome: "flagged" },
-		});
-	});
-
-	it("flags a re-ask that escapes the check by dropping the macros", async () => {
-		const llm = createFakeLlm();
-		llm.outputs.push(
-			routedMeal(FIELD_MEAL_ANSWER),
-			mealDetail({ protein_g: null, carbs_g: null, fat_g: null, confidence: "high" })
-		);
-
-		const { results } = await createFusionAnalyzer(llm).analyze({ text: "lunch", context });
-
-		// Nothing left to check is not the same as checked and fine.
-		expect(results[0]).toMatchObject({ kind: "meal", confidence: "low", consistency: { outcome: "flagged" } });
-	});
-
-	it("runs on a meal that arrived as a second part, not only on the routed one", async () => {
-		const llm = createFakeLlm();
-		llm.outputs.push(
-			{ result: { kind: "weight", weight_lb: 181, confidence: "high" }, more_kinds: ["meal"], photo_fields: [] },
-			mealDetail({}),
-			mealDetail({ carbs_g: 89, confidence: "medium" })
-		);
-
-		const { results } = await createFusionAnalyzer(llm).analyze({ text: "181 on the scale, then lunch", context });
-
-		expect(llm.requests.map((request) => request.schemaName)).toEqual(["fusion_result", "meal", "meal"]);
-		expect(results.map((result) => result.kind)).toEqual(["weight", "meal"]);
-		expect(results[1]).toMatchObject({ carbs_g: 89, consistency: { outcome: "adjusted" } });
-	});
-
-	it("runs at revise too — a told change can make the numbers stop adding up", async () => {
-		const llm = createFakeLlm();
-		const pending: FusionResult = {
-			kind: "meal",
-			description: "tuna, eggs, vegetables and four slices of bread",
-			meal_type: "lunch",
-			kcal: 918,
-			protein_g: 67,
-			carbs_g: 89,
-			fat_g: 35,
-			fiber_g: 12,
-			items: [],
-			confidence: "medium",
-			sources: null,
-			consistency: null,
-		};
-		llm.outputs.push(mealDetail({ carbs_g: 398 }), mealDetail({ carbs_g: 89, confidence: "medium" }));
-
-		const [revised] = await createFusionAnalyzer(llm).revise({
-			results: [pending],
-			instruction: "it was the whole loaf",
-			context,
-		});
-
-		expect(llm.requests.map((request) => request.schemaName)).toEqual(["meal", "meal"]);
-		// "restated" wherever the gate fires at revise: the user moved a number and the rest
-		// followed, which is the feature rather than a fault to warn about.
-		expect(revised).toMatchObject({ carbs_g: 89, consistency: { outcome: "restated" } });
-	});
-
-	// A number the user has just said out loud is not a misread label (services/fusion/prompt.ts
-	// §buildMealReconcilePrompt). The field case: a breakfast that read 876 kcal off macros of
-	// 52/50/52, corrected out loud to "the calorie is 1200" — and put straight back to 876 by a
-	// re-ask that had been told not to scale the kcal up. It is the one flow where the app knows
-	// less than the person using it, and the gate was spending its re-ask arguing with them.
-	it("keeps a calorie the user stated at revise, and moves the macros to meet it", async () => {
-		const llm = createFakeLlm();
-		const saved: FusionResult = {
-			kind: "meal",
-			description: "tuna, two eggs, cheese, onion and pepper in olive oil, four slices of bread",
-			meal_type: "breakfast",
-			kcal: 876,
-			protein_g: 52,
-			carbs_g: 50,
-			fat_g: 52,
-			fiber_g: 7,
-			items: [],
-			confidence: "medium",
-			sources: null,
-			consistency: null,
-		};
-		llm.outputs.push(
-			// The revision moves only what it was told to: 1,200 against the 876 the untouched
-			// macros still imply is 324 out, and trips the gate by 24.
-			mealDetail({ kcal: 1200, protein_g: 52, carbs_g: 50, fat_g: 52 }),
-			// The re-ask re-derives the plate at the size it would have to be to get there.
-			mealDetail({ kcal: 1200, protein_g: 60, carbs_g: 95, fat_g: 60, confidence: "medium" })
-		);
-
-		const [revised] = await createFusionAnalyzer(llm).revise({
-			results: [saved],
-			instruction: "the calorie is 1200",
-			context,
-		});
-
-		const reask = String(llm.requests[1]!.system);
-		// It is told a person said this, and which way the numbers are allowed to move.
-		expect(reask).toContain("the calorie is 1200");
-		expect(reask).toContain("that figure IS the answer");
-		// And NOT told the thing that caused the revert, which is right only for a label.
-		expect(reask).not.toContain("Do not simply scale");
-
-		// "restated", not "adjusted": the discrepancy was the user's own correction, and the
-		// card must not report doing as it was told in the words it uses for a reading it
-		// distrusts.
-		expect(revised).toMatchObject({
-			kind: "meal",
-			kcal: 1200,
-			protein_g: 60,
-			carbs_g: 95,
-			fat_g: 60,
-			consistency: { outcome: "restated", stated_kcal: 1200, implied_kcal: 876 },
-		});
-	});
-
-	// The analyze branch keeps the wording it needs: there, nobody has said anything, and the
-	// 398 g of carbs really is the loaf's row rather than four slices of it.
-	it("still tells a FRESH read not to move the kcal to meet an unchecked macro", async () => {
-		const llm = createFakeLlm();
-		llm.outputs.push(routedMeal(FIELD_MEAL_ANSWER), mealDetail({ carbs_g: 89, confidence: "medium" }));
-
-		await createFusionAnalyzer(llm).analyze({ text: "four slices of this bread", context });
-
-		const reask = String(llm.requests[1]!.system);
-		expect(reask).toContain("Do not simply scale");
-		expect(reask).not.toContain("has just corrected this meal");
+		expect(llm.requests.map((request) => request.schemaName)).toEqual(["activities_revision", "weigh_in"]);
 	});
 });
 
@@ -1551,23 +1274,6 @@ describe("the photo-binding rules", () => {
 	it("tells the router a photo is evidence about something they said, never a new item", () => {
 		const prompt = buildFusionSystemPrompt(context);
 		expect(prompt).toContain("NEVER adds an item");
-		expect(prompt).toContain("PER-SERVING");
-		expect(prompt).toContain("per-container");
-		expect(prompt).toContain("weakest link");
-	});
-
-	it("says the same three things on the meal's own detail call", () => {
-		const prompt = buildPartDetailSystemPrompt(context, "meal");
-		// The arithmetic, said cheaply once, so the common case never needs a second call.
-		expect(prompt).toContain("4 × protein + 4 × carbs + 9 × fat");
-		expect(prompt).toContain("PER SERVING");
-		expect(prompt).toContain("per-container column");
-		expect(prompt).toContain("about the NUMBERS");
-	});
-
-	it("does not put any of it on the activities call, which has no label to read", () => {
-		const prompt = buildPartDetailSystemPrompt(context, "activities");
-		expect(prompt).not.toContain("4 × protein + 4 × carbs + 9 × fat");
 	});
 });
 
@@ -1604,7 +1310,6 @@ describe("the router prompt's cacheable prefix", () => {
 			localDate: "2027-01-14",
 			recentExercises: ["Zercher Squat"],
 			todayActivities: [],
-			todayMeals: [],
 			goals: [],
 		};
 		expect(buildFusionSystemParts(other).prefix).toBe(buildFusionSystemParts(context).prefix);

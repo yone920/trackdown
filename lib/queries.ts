@@ -17,7 +17,6 @@ import { LOST_ANSWER_NOTE, pollForPlan } from './coach-recovery';
 import { readerLine } from './errors';
 import { rememberExercise } from './exercise-cache';
 import type {
-  EatingView,
   ExerciseHistory,
   WeighIn,
   AnalyzeResponse,
@@ -84,7 +83,6 @@ export const INVALIDATED_AFTER_LOG = [
   'coach',
   'training',
   'you',
-  'eating',
   'weight',
 ] as const;
 
@@ -104,18 +102,6 @@ export function useDay(date: IsoDate, options: { enabled?: boolean } = {}) {
     // stops asking for a day it is about to redirect away from (user decision 2026-09-01).
     enabled: !!date && options.enabled !== false,
     queryFn: () => api<DayView>(`/api/day/${date}`, { query: { tz: tzOffsetMin() } }),
-  });
-}
-
-/**
- * GET /api/eating — the Eat page in one request: today's numbers, the computed week, and
- * the written direction. The direction is a cached READING, so opening the page when
- * nothing has moved generates nothing.
- */
-export function useEating() {
-  return useQuery({
-    queryKey: ['eating'],
-    queryFn: () => api<EatingView>('/api/eating', { query: { tz: tzOffsetMin() } }),
   });
 }
 
@@ -675,13 +661,12 @@ export function useConfirm() {
 /** Which endpoint corrects which kind of row (backend/src/routes/{entries,weight}.ts). */
 const PATCH_PATH: Record<string, (id: string) => string> = {
   activity: (id) => `/api/entries/movement/${id}`,
-  meal: (id) => `/api/entries/meals/${id}`,
   weight: (id) => `/api/weight/${id}`,
   goal: (id) => `/api/goals/${id}`,
 };
 
 export type PatchInput = {
-  kind: 'activity' | 'meal' | 'weight' | 'goal';
+  kind: 'activity' | 'weight' | 'goal';
   id: string;
   patch: Record<string, unknown>;
   /**
@@ -739,23 +724,22 @@ export function useSplitRecord() {
 
 /** The three kinds of row a tap can take back. A goal is dropped, not deleted; a
  * statement lives on the plan and has no row of its own. */
-export type DeleteKind = 'activity' | 'meal' | 'weight';
+export type DeleteKind = 'activity' | 'weight';
 
 const DELETE_PATH: Record<DeleteKind, (id: string) => string> = {
   activity: (id) => `/api/entries/movement/${id}`,
-  meal: (id) => `/api/entries/meals/${id}`,
   weight: (id) => `/api/weight/${id}`,
 };
 
 /**
  * DELETE one logged row. Something logged by mistake is undone where it is shown — one
  * tap to ask, one to do it — and the row's evidence goes with it, cascaded by the
- * database (migrations 0004_v2.sql `evidence.activity_id/meal_id`, 0009_day_log.sql
+ * database (migrations 0004_v2.sql `evidence.activity_id`, 0009_day_log.sql
  * `evidence.weight_id`, all ON DELETE CASCADE).
  *
- * Everything a delete moves is invalidated on the same list a log uses: earned and eaten,
- * the sets per muscle group, the day's status, the week, the goal progress and the
- * Right-now reading, which the server regenerates because the day's inputs hash changed.
+ * Everything a delete moves is invalidated on the same list a log uses: earned, the sets
+ * per muscle group, the day's verdict, the week, the goal progress and the Right-now
+ * reading, which the server regenerates because the day's inputs hash changed.
  */
 export function useDeleteRecord() {
   const qc = useQueryClient();

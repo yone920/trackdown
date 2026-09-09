@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
-import { activity, daysAgo, facts, meal, TODAY, weight } from "../../test/fixtures/facts.js";
+import { activity, daysAgo, facts, TODAY, weight } from "../../test/fixtures/facts.js";
 import { computeFeatures, type CoachFeatures } from "./features.js";
 import {
 	buildRules,
@@ -417,7 +417,7 @@ describe("prescribeLoads — a stated load, when the log has nothing", () => {
 describe("selectNudge — the single most useful thing", () => {
 	const goal = (values: Partial<CoachGoal>): CoachGoal => ({
 		id: "g1",
-		kind: "lose_fat",
+		kind: "custom",
 		title: "Down to 170 lb",
 		priority: 1,
 		metrics: [{ measure: "body_weight", target: 170, direction: "decrease" }],
@@ -427,8 +427,7 @@ describe("selectNudge — the single most useful thing", () => {
 	});
 
 	const clean = computeFeatures({
-		facts: facts({ activities: [lift(daysAgo(1))], weights: [weight(TODAY, 169.4)], meals: [meal(TODAY, { kcal: 2000, protein_g: 150 })] }),
-		targets: { kcal: 2250, protein_g: 160, carbs_max_g: null },
+		facts: facts({ activities: [lift(daysAgo(1))], weights: [weight(TODAY, 169.4)] }),
 	});
 
 	it("asks about a reached goal before anything else", () => {
@@ -496,7 +495,6 @@ describe("selectNudge — the single most useful thing", () => {
 			facts: facts({
 				activities: [lift(daysAgo(1)), lift(daysAgo(3)), lift(daysAgo(4)), lift(daysAgo(5)), lift(daysAgo(6)), lift(daysAgo(2)), lift(TODAY)],
 				weights: [weight(TODAY, 190)],
-				meals: [meal(TODAY, { kcal: 2000, protein_g: 150 })],
 			}),
 		});
 		const nudge = selectNudge(complete, []);

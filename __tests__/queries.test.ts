@@ -48,7 +48,7 @@ describe('invalidateAfterLog', () => {
     const roots = queryRootsInSource();
     expect(roots).toContain('weight');
     expect(roots).toContain('day');
-    expect(roots).toContain('eating');
+    expect(roots).toContain('goals');
     expect(roots.length).toBeGreaterThan(8);
   });
 

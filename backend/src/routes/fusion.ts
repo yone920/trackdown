@@ -28,7 +28,7 @@ import { toProposedTimeline } from "../services/goals/proposal.js";
 // A preview the user abandons therefore leaves stored photos owning nothing; the boot
 // sweep in services/evidence.ts removes those after a day.
 
-/** Four photos is a machine, its display, the weight stack and the plate. */
+/** Four photos is a machine, its display, the weight stack and the scale. */
 export const MAX_PHOTOS = 4;
 /** 8 MB is a full-size iPhone HEIC; the phone downscales first, this is the safety net. */
 export const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
@@ -45,7 +45,7 @@ const upload = multer({
 const AnalyzeFields = z.object({
 	text: z.string().trim().max(2000).optional(),
 	kind_hint: z
-		.enum(["activities", "meal", "weight", "goal", "constraint", "preference", "coach_context"])
+		.enum(["activities", "weight", "goal", "constraint", "preference", "coach_context"])
 		.optional(),
 	/** The phone's clock. Day boundaries are the user's local midnight, not the server's. */
 	client_time: z.string().datetime({ offset: true }).optional(),

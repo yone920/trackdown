@@ -37,7 +37,6 @@ export interface RecordCorrection {
 /** Which record a correction is about. Exactly one, checked by the table too. */
 export interface CorrectionOwner {
 	activityId?: string | null;
-	mealId?: string | null;
 	weightId?: string | null;
 	/**
 	 * The record this one was split out of (migration 0018). Set only on the rows a
@@ -68,7 +67,6 @@ export const CORRECTABLE_FIELDS = {
 		"distance_mi",
 		"kcal",
 	],
-	meal: ["description", "meal_type", "kcal", "protein_g", "carbs_g", "fat_g", "fiber_g"],
 	weight: ["weight_lb"],
 } as const;
 
@@ -110,7 +108,7 @@ export function diffFields(
 export interface PartCorrection {
 	/** Index into the log's parts. */
 	part: number;
-	/** Index into an activities part's items; null for a meal or a weigh-in. */
+	/** Index into an activities part's items; null for a weigh-in. */
 	item: number | null;
 	instruction: string;
 	changes: FieldChange[];
@@ -175,8 +173,7 @@ export function diffResults(
 			});
 			return;
 		}
-		const fields =
-			was.kind === "meal" ? CORRECTABLE_FIELDS.meal : was.kind === "weight" ? CORRECTABLE_FIELDS.weight : null;
+		const fields = was.kind === "weight" ? CORRECTABLE_FIELDS.weight : null;
 		if (!fields) return;
 		const changes = diffFields(
 			was as unknown as Record<string, unknown>,
@@ -203,25 +200,23 @@ export async function recordCorrection(
 	const said = instruction.trim();
 	if (said === "" || changes.length === 0) return null;
 	const activityId = owner.activityId ?? null;
-	const mealId = owner.mealId ?? null;
 	const weightId = owner.weightId ?? null;
-	if ([activityId, mealId, weightId].filter(Boolean).length !== 1) return null;
+	if ([activityId, weightId].filter(Boolean).length !== 1) return null;
 	// A row cannot have been split out of itself; that would be a loop in the provenance
 	// rather than a fact about where the row came from.
 	const replaces = owner.replacesActivityId && owner.replacesActivityId !== activityId ? owner.replacesActivityId : null;
 	const { rows } = await db.query<RecordCorrection>(
 		`INSERT INTO record_corrections
-		        (user_id, activity_id, meal_id, weight_id, instruction, changes, replaces_activity_id)
-		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+		        (user_id, activity_id, weight_id, instruction, changes, replaces_activity_id)
+		 VALUES ($1, $2, $3, $4, $5::jsonb, $6)
 		 RETURNING id, instruction, changes, created_at`,
-		[userId, activityId, mealId, weightId, said, JSON.stringify(changes), replaces]
+		[userId, activityId, weightId, said, JSON.stringify(changes), replaces]
 	);
 	return rows[0] ?? null;
 }
 
 interface CorrectionRow extends RecordCorrection {
 	activity_id: string | null;
-	meal_id: string | null;
 	weight_id: string | null;
 }
 
@@ -232,21 +227,21 @@ interface CorrectionRow extends RecordCorrection {
 export async function correctionsByRecord(
 	db: Queryable,
 	userId: string,
-	ids: { activityIds: readonly string[]; mealIds: readonly string[]; weightIds: readonly string[] }
+	ids: { activityIds: readonly string[]; weightIds: readonly string[] }
 ): Promise<Map<string, RecordCorrection[]>> {
 	const byRecord = new Map<string, RecordCorrection[]>();
-	const { activityIds, mealIds, weightIds } = ids;
-	if (activityIds.length + mealIds.length + weightIds.length === 0) return byRecord;
+	const { activityIds, weightIds } = ids;
+	if (activityIds.length + weightIds.length === 0) return byRecord;
 	const { rows } = await db.query<CorrectionRow>(
-		`SELECT id, activity_id, meal_id, weight_id, instruction, changes, created_at
+		`SELECT id, activity_id, weight_id, instruction, changes, created_at
 		   FROM record_corrections
 		  WHERE user_id = $1
-		    AND (activity_id = ANY($2::uuid[]) OR meal_id = ANY($3::uuid[]) OR weight_id = ANY($4::uuid[]))
+		    AND (activity_id = ANY($2::uuid[]) OR weight_id = ANY($3::uuid[]))
 		  ORDER BY created_at`,
-		[userId, activityIds, mealIds, weightIds]
+		[userId, activityIds, weightIds]
 	);
 	for (const row of rows) {
-		const owner = row.activity_id ?? row.meal_id ?? row.weight_id;
+		const owner = row.activity_id ?? row.weight_id;
 		if (!owner) continue;
 		const list = byRecord.get(owner) ?? [];
 		list.push({

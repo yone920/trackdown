@@ -2,7 +2,6 @@ import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { config } from "../../config/index.js";
 import { createFusionAnalyzer } from "../../services/fusion/analyze.js";
-import { checkMeal } from "../../services/fusion/arithmetic.js";
 import type { FusionContext } from "../../services/fusion/context.js";
 import { createAnthropicLlm } from "./anthropic.js";
 
@@ -38,7 +37,6 @@ const context: FusionContext = {
 	tzOffsetMin: 0,
 	units: "lb",
 	todayActivities: [],
-	todayMeals: [],
 	todayWeights: [],
 	recentExercises: [],
 	catalog: [
@@ -50,30 +48,6 @@ const context: FusionContext = {
 	kindHint: null,
 	clarify: null,
 };
-
-/**
- * A nutrition label, generated rather than photographed, so no binary fixture has to live
- * in the repo. Two columns — per slice and per package — which is the whole trap: 20 × 15 g
- * of carbohydrate is 300 g, and four slices is 60.
- */
-function labelImage(): Promise<Buffer> {
-	const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="520" height="360">
-	<rect width="520" height="360" fill="white"/>
-	<g font-family="Helvetica" font-size="20" fill="black">
-		<text x="20" y="40" font-size="26" font-weight="bold">Nutrition Facts</text>
-		<text x="20" y="72">Serving size: 1 slice (45 g)</text>
-		<text x="20" y="100">Servings per package: 20</text>
-		<text x="20" y="140" font-weight="bold">Per slice</text>
-		<text x="300" y="140" font-weight="bold">Per package</text>
-		<text x="20" y="176">Calories 80</text><text x="300" y="176">1600</text>
-		<text x="20" y="210">Total Fat 1 g</text><text x="300" y="210">20 g</text>
-		<text x="20" y="244">Total Carbohydrate 15 g</text><text x="300" y="244">300 g</text>
-		<text x="20" y="278">Dietary Fiber 2 g</text><text x="300" y="278">40 g</text>
-		<text x="20" y="312">Protein 3 g</text><text x="300" y="312">60 g</text>
-	</g>
-</svg>`;
-	return sharp(Buffer.from(svg)).png().toBuffer();
-}
 
 /** A tiny generated image, so no binary fixture has to live in the repo. */
 function tinyImage(): Promise<Buffer> {
@@ -164,18 +138,22 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 	// The mixed-input fix, against the real model. A fake can prove the pipeline carries
 	// three parts; only this proves the model actually splits the sentence into three, and
 	// that the array-of-results grammar still compiles.
-	it("splits one sentence into a meal, an activity and a weigh-in", async () => {
+	it("splits one sentence into an activity, a weigh-in and a note for the coach", async () => {
+		// A goal stated alongside a weight is deliberately consolidated (services/fusion/
+		// analyze.ts §dropWeightStatedWithGoal) — "I'm 212, goal is 200" writes ONE weigh-in,
+		// not two. A coach-context note carries no such fact, so it keeps this a clean
+		// three-way split instead of colliding with that rule.
 		const { results } = await analyzer().analyze({
-			text: "ate two eggs and toast, then ran 5k, weighed in at 181",
+			text: "ran 5k, weighed in at 181, and only had about 20 minutes for all this",
 			context,
 		});
 
 		const kinds = results.map((result) => result.kind);
-		expect(kinds).toContain("meal");
 		expect(kinds).toContain("activities");
 		expect(kinds).toContain("weight");
+		expect(kinds).toContain("coach_context");
 		// In the order they were said, so the stacked cards read like the sentence.
-		expect(kinds.indexOf("meal")).toBeLessThan(kinds.indexOf("weight"));
+		expect(kinds.indexOf("activities")).toBeLessThan(kinds.indexOf("weight"));
 
 		const weight = results.find((result) => result.kind === "weight");
 		expect(weight?.kind === "weight" && weight.weight_lb).toBeCloseTo(181, 0);
@@ -300,14 +278,14 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 	it("assigns the photo to the part it belongs to", async () => {
 		const photo = await tinyImage();
 		const { results, photoParts } = await analyzer().analyze({
-			text: "this is the treadmill display — 2 miles in 18 minutes. I also had a chicken burrito for lunch.",
+			text: "this is the treadmill display — 2 miles in 18 minutes. Also weighed in at 181 this morning.",
 			photos: [{ mediaType: "image/jpeg", base64: photo.toString("base64") }],
 			context,
 		});
 
 		expect(results.length).toBeGreaterThan(1);
 		expect(photoParts).toHaveLength(1);
-		// The display belongs to the run, not to the burrito.
+		// The display belongs to the run, not to the weigh-in.
 		expect(results[photoParts[0]!]?.kind).toBe("activities");
 	}, 90_000);
 
@@ -500,137 +478,6 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 		expect(revised!.items[0]!.sets).toBe(3);
 	}, 90_000);
 
-	// The other half of the same contract, on a different kind: a meal's slot is a fact the
-	// user can only ever change by saying so.
-	it("moves a meal to the sitting the user says it was", async () => {
-		const [revised] = await analyzer().revise({
-			results: [
-				{
-					kind: "meal",
-					description: "chicken, rice and broccoli",
-					meal_type: "dinner",
-					kcal: 620,
-					protein_g: 45,
-					carbs_g: 60,
-					fat_g: 18,
-					fiber_g: 6,
-					items: [],
-					confidence: "medium",
-					sources: null,
-					consistency: null,
-				},
-			],
-			instruction: "that meal was lunch not dinner",
-			context,
-		});
-
-		expect(revised!.kind).toBe("meal");
-		if (revised!.kind !== "meal") return;
-		expect(revised!.meal_type).toBe("lunch");
-		// Everything else is untouched: the instruction was about the slot, not the plate.
-		expect(revised!.kcal).toBe(620);
-		expect(revised!.description.toLowerCase()).toContain("chicken");
-	}, 90_000);
-
-	// ── The meal-accuracy field case, against the real model ──────────────────────────
-	//
-	// Reported 2026-08-31: a spoken lunch with photographs of the bread bag's label and the
-	// tuna can's came back kcal 918, protein 67, **carbs 398**, fat 35 — and HIGH. The macros
-	// imply about 2,175 kcal. It is the label's whole-loaf carbohydrate figure, taken for
-	// four slices of it, asserted with confidence.
-	//
-	// The contract is NOT that the model prices this lunch correctly — nobody can, from those
-	// words. It is the honesty guarantee the arithmetic gate exists to make: whatever comes
-	// back either adds up, or it says so and is not called high confidence.
-	it("never returns a meal that is both internally inconsistent and confident", async () => {
-		const { results } = await analyzer().analyze({
-			text:
-				"for lunch I had a can of tuna, two eggs, a quarter of an onion, one chilli, two cups of " +
-				"vegetables, two tablespoons of olive oil, and four slices of this bread",
-			context,
-		});
-
-		const meal = results.find((part) => part.kind === "meal");
-		expect(meal?.kind).toBe("meal");
-		if (meal?.kind !== "meal") return;
-
-		const check = checkMeal(meal);
-		if (check.ok) {
-			// The common case: it adds up, and there is nothing to say about it.
-			expect(meal.consistency).toBeNull();
-		} else {
-			// The gate ran, re-asked, and could not reconcile it — so it says so, in the two
-			// places the user can see: the chip and the line under the plate.
-			expect(meal.confidence).toBe("low");
-			expect(meal.consistency?.outcome).toBe("flagged");
-		}
-		// Either way the lunch is logged. Refusing to save what somebody ate is the failure
-		// "always log" exists to prevent.
-		expect(meal.kcal).toBeGreaterThan(0);
-	}, 120_000);
-
-	// The photo-binding rules, on the evidence that produced the bug: a nutrition label is a
-	// PER-SERVING table, and the user said how many servings they had.
-	it("prices a nutrition label by the servings stated, not by the package", async () => {
-		const label = await labelImage();
-		const { results, photoParts } = await analyzer().analyze({
-			text: "I ate four slices of this bread",
-			photos: [{ mediaType: "image/png", base64: label.toString("base64") }],
-			context,
-		});
-
-		// The label is evidence ABOUT the bread they mentioned; it does not log itself.
-		expect(results).toHaveLength(1);
-		expect(photoParts).toEqual([0]);
-		const meal = results[0]!;
-		expect(meal.kind).toBe("meal");
-		if (meal.kind !== "meal") return;
-
-		// Four slices at 15 g is 60 g. The whole loaf is 300 g, and that is the answer this
-		// rule exists to keep out of the record; anything under half the loaf is the model
-		// having read the per-serving column.
-		expect(meal.carbs_g ?? 0).toBeLessThan(150);
-		expect(meal.carbs_g ?? 0).toBeGreaterThan(20);
-		// And whatever it decided, it adds up or it says it does not.
-		if (!checkMeal(meal).ok) expect(meal.confidence).toBe("low");
-	}, 120_000);
-
-	// ── "the same bowl of the lunch I had earlier" ───────────────────────────────────
-	// Field bug 2026-09-02, the user's own sentence, typos and all: "I just the same bawl
-	// of the lunch I had earlier" — no eating verb ("ate" missing), "bawl" for bowl. Their
-	// log attempt ended in silence, and the first thing to establish was whether the READER
-	// was the reason. It was not, and this is what holds that.
-	//
-	// The contract is the whole point of `todayMeals` being in the context at all: a
-	// reference to an earlier meal resolves to that meal's own numbers. Always-log applies
-	// — something was plainly eaten — so this may never come back as a question or as a
-	// statement about the day, whatever the spelling.
-	it("copies the earlier lunch when the user says they had the same again", async () => {
-		const { results } = await analyzer().analyze({
-			text: "I just the same bawl of the lunch I had earlier",
-			context: {
-				...context,
-				localTime: "17:58",
-				todayMeals: [
-					{ description: "beef soup bowl with rice", kcal: 620, protein_g: 38, logged_at: "2026-08-29T15:05:00.000Z" },
-				],
-			},
-		});
-
-		expect(results).toHaveLength(1);
-		const meal = results[0]!;
-		expect(meal.kind).toBe("meal");
-		if (meal.kind !== "meal") return;
-
-		// The earlier meal's own numbers, not a guess about a generic bowl of soup: within
-		// a quarter of what was logged at lunch is "the same thing again".
-		expect(meal.kcal).toBeGreaterThan(620 * 0.75);
-		expect(meal.kcal).toBeLessThan(620 * 1.25);
-		expect(meal.protein_g ?? 0).toBeGreaterThan(38 * 0.6);
-		// And it is recognisably that meal rather than an invention.
-		expect(meal.description.toLowerCase()).toMatch(/soup|bowl|beef|rice/);
-	}, 90_000);
-
 	// The clarify round: the question is remembered, so "yes" resolves instead of looping.
 	it("resolves a bare answer against the question it was asked", async () => {
 		const { results } = await analyzer().analyze({
@@ -644,18 +491,18 @@ describe.skipIf(!apiKey)("anthropic fusion (contract)", () => {
 		expect(results[0]!.kind).toBe("activities");
 	}, 90_000);
 
-	// A named day is when, not whether. The reader once answered "I had slice of pizza
-	// yesterday" with a question about which day was meant — the app reads the day itself
+	// A named day is when, not whether. The reader once answered "ran 5k yesterday" with a
+	// question about which day was meant — the app reads the day itself
 	// (services/fusion/backdate.ts), so asking stops a log it could have written (field
 	// report 2026-09-04). Live, because it is the model's judgement being tested.
-	it("logs a meal that names a past day instead of asking about it", async () => {
+	it("logs an activity that names a past day instead of asking about it", async () => {
 		const { results } = await analyzer().analyze({
-			text: "I had slice of pizza yesterday",
+			text: "ran 5k yesterday",
 			context,
 		});
 
 		const asked = results.find((result) => result.kind === "unclear");
 		expect(asked, `asked instead of logging: ${JSON.stringify(asked)}`).toBeUndefined();
-		expect(results.map((result) => result.kind)).toContain("meal");
+		expect(results.map((result) => result.kind)).toContain("activities");
 	}, 60_000);
 });

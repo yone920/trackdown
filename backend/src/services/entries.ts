@@ -11,7 +11,7 @@ import { EXPERIENCE_LEVELS, ReferenceLoadSchema } from "./fusion/schema.js";
 // "movement" is the v1 name the shipped app still calls; 0004_v2.sql renamed the table to
 // `activities` and gave it exercise/sets/reps/load columns. Keeping the alias here is what
 // lets /api/entries/movement go on working until WP6 replaces those screens.
-export const KINDS = { meals: "meals", movement: "activities" } as const;
+export const KINDS = { movement: "activities" } as const;
 export type Kind = keyof typeof KINDS;
 export function isKind(value: string): value is Kind {
 	return value in KINDS;
@@ -20,14 +20,12 @@ export function isKind(value: string): value is Kind {
 type Queryable = pg.Pool | pg.PoolClient;
 
 const isoDate = z.string().datetime({ offset: true });
-const macro = z.number().min(0).nullable();
 
 export const ACTIVITY_SOURCES = ["manual", "fused", "health"] as const;
 export const CONFIDENCE_LEVELS = ["low", "medium", "high"] as const;
 
-// The v2 activity fields, accepted on the "movement" kind and ignored on "meals" (only
-// `activities` has these columns). All optional: a v1 client that sends none is still
-// writing a valid row.
+// The v2 activity fields (migration 0012 onward). All optional: a v1 client that sends none
+// is still writing a valid row.
 const activityFields = {
 	exercise: z.string().trim().min(1).max(120).nullable().optional(),
 	// What it was done ON (migration 0012). Separate from the movement, and never used to
@@ -55,10 +53,6 @@ export type RangeQuery = z.infer<typeof RangeQuery>;
 export const NewEntry = z.object({
 	description: z.string().trim().min(1).max(500),
 	kcal: z.number().int().min(0).default(0),
-	protein_g: macro.optional(),
-	carbs_g: macro.optional(),
-	fat_g: macro.optional(),
-	fiber_g: macro.optional(),
 	logged_at: isoDate.optional(),
 	...activityFields,
 });
@@ -77,10 +71,6 @@ export const EntryPatch = z
 	.object({
 		description: z.string().trim().min(1).max(500),
 		kcal: z.number().int().min(0),
-		protein_g: macro,
-		carbs_g: macro,
-		fat_g: macro,
-		fiber_g: macro,
 		logged_at: isoDate,
 		...activityFields,
 		correction_instruction: correctionInstruction,
@@ -144,17 +134,13 @@ export const ProfilePatch = z
 		birth_year: z.number().int().min(1900).max(2100).nullable(),
 		height_cm: z.number().positive().max(300).nullable(),
 		activity_level: z.enum(["sedentary", "light", "moderate", "active", "very_active"]).nullable(),
+		// Not diet-specific: goals/proposal.ts uses this to pace EVERY goal's projected
+		// timeline (body-weight goals, exercise_load plate steps, …), so it survives the
+		// TDEE/calorie-budget removal even though it once fed that too.
 		goal_pace: z.enum(["gentle", "standard", "aggressive"]),
 		pregnant_or_lactating: z.boolean(),
 		health_concern: z.boolean(),
 		disclaimer_acknowledged_at: isoDate.nullable(),
-		daily_calorie_target: z.number().int().min(0).nullable(),
-		deficit_kcal: z.number().int().min(0).nullable(),
-		// The plan (0004_v2.sql), normally set by talking — concept-v2 §Goals and profile.
-		// Editable here too, because "single-field tap to correct" is part of that screen.
-		diet_style: z.string().trim().max(80).nullable(),
-		protein_g: z.number().int().min(0).max(1000).nullable(),
-		carbs_max_g: z.number().int().min(0).max(2000).nullable(),
 		training_days: z.number().int().min(0).max(7).nullable(),
 		/** How long a normal session is (migration 0014); null = never stated, not "sixty". */
 		session_minutes: z.number().int().min(10).max(240).nullable(),
@@ -167,7 +153,6 @@ export const ProfilePatch = z
 		// twice is one knee, and deleting a row is something only a tap can mean.
 		constraints: z.array(z.string().trim().min(1).max(200)).max(30),
 		preferences: z.array(z.string().trim().min(1).max(200)).max(30),
-		eatback: z.enum(["none", "half", "all"]),
 		// The training background (migration 0011): what the user brings with them, so a
 		// cold start does not have to assume a beginner. Normally stated out loud through
 		// the Log sheet; editable here for the same reason every other plan field is.
@@ -178,8 +163,6 @@ export const ProfilePatch = z
 	.partial()
 	.refine((patch) => Object.keys(patch).length > 0, { message: "Empty patch." });
 export type ProfilePatch = z.infer<typeof ProfilePatch>;
-
-const MACRO_COLUMNS = ["protein_g", "carbs_g", "fat_g", "fiber_g"] as const;
 
 // Written in this order by insertEntries; exercise_id is derived, never sent by a client.
 const ACTIVITY_COLUMNS = [
@@ -304,44 +287,30 @@ export async function getEntry(db: Queryable, userId: string, kind: Kind, id: st
 
 export async function insertEntries(db: Queryable, userId: string, kind: Kind, entries: NewEntry[]) {
 	if (entries.length === 0) return [];
-	const withMacros = kind === "meals";
-	const withActivity = kind === "movement";
 	// One catalogue lookup for the whole batch.
-	const catalog: Map<string, CatalogMatch> = withActivity
-		? await lookupExercises(db, entries.map((e) => e.exercise))
-		: new Map();
-	const columns = [
-		"user_id",
-		"description",
-		"kcal",
-		"logged_at",
-		...(withMacros ? MACRO_COLUMNS : []),
-		...(withActivity ? ACTIVITY_COLUMNS : []),
-	];
+	const catalog = await lookupExercises(db, entries.map((e) => e.exercise));
+	const columns = ["user_id", "description", "kcal", "logged_at", ...ACTIVITY_COLUMNS];
 	const params: unknown[] = [];
 	const tuples = entries.map((e) => {
 		const values: unknown[] = [userId, e.description, e.kcal, e.logged_at ?? new Date().toISOString()];
-		if (withMacros) values.push(e.protein_g ?? null, e.carbs_g ?? null, e.fat_g ?? null, e.fiber_g ?? null);
-		if (withActivity) {
-			const match = e.exercise ? (catalog.get(e.exercise.trim().toLowerCase()) ?? null) : null;
-			values.push(
-				// Store the catalogue's spelling when we recognise the name, so the coach's
-				// "last time you benched" matches across weeks of differently worded logs.
-				match?.name ?? e.exercise ?? null,
-				match?.id ?? null,
-				e.equipment ?? null,
-				e.category ?? match?.category ?? null,
-				e.muscle_groups ?? match?.primary_muscles ?? null,
-				e.sets ?? null,
-				e.reps ?? null,
-				e.load_lb ?? null,
-				e.duration_min ?? null,
-				e.distance_mi ?? null,
-				// NOT NULL in the schema: a row with no stated source was typed by the user.
-				e.source ?? "manual",
-				e.confidence ?? null
-			);
-		}
+		const match = e.exercise ? (catalog.get(e.exercise.trim().toLowerCase()) ?? null) : null;
+		values.push(
+			// Store the catalogue's spelling when we recognise the name, so the coach's
+			// "last time you benched" matches across weeks of differently worded logs.
+			match?.name ?? e.exercise ?? null,
+			match?.id ?? null,
+			e.equipment ?? null,
+			e.category ?? match?.category ?? null,
+			e.muscle_groups ?? match?.primary_muscles ?? null,
+			e.sets ?? null,
+			e.reps ?? null,
+			e.load_lb ?? null,
+			e.duration_min ?? null,
+			e.distance_mi ?? null,
+			// NOT NULL in the schema: a row with no stated source was typed by the user.
+			e.source ?? "manual",
+			e.confidence ?? null
+		);
 		const placeholders = values.map((v) => {
 			params.push(v);
 			return `$${params.length}`;
@@ -356,10 +325,7 @@ export async function insertEntries(db: Queryable, userId: string, kind: Kind, e
 }
 
 export async function updateEntry(db: Queryable, userId: string, kind: Kind, id: string, patch: EntryPatch) {
-	const allowed: string[] =
-		kind === "meals"
-			? ["description", "kcal", "logged_at", ...MACRO_COLUMNS]
-			: ["description", "kcal", "logged_at", ...ACTIVITY_PATCH_COLUMNS];
+	const allowed: string[] = ["description", "kcal", "logged_at", ...ACTIVITY_PATCH_COLUMNS];
 	// Read before writing only when there is a correction to file: this is the DayLog's
 	// "tap → make a change" and not the hot path (migration 0015).
 	const said = patch.correction_instruction;
@@ -371,14 +337,14 @@ export async function updateEntry(db: Queryable, userId: string, kind: Kind, id:
 		// source is NOT NULL; clearing it is not a correction anyone means to make.
 		if (key === "source" && value === null) continue;
 		// exercise is assigned below, together with the exercise_id it resolves to.
-		if (kind === "movement" && key === "exercise") continue;
+		if (key === "exercise") continue;
 		params.push(value);
 		sets.push(`${key} = $${params.length}`);
 	}
 	// Correcting the exercise re-points exercise_id (or clears it, when the new name is not
 	// in the catalogue). category and muscle_groups are left as they are unless the patch
 	// names them: an edit should change what was asked for and nothing else.
-	if (kind === "movement" && patch.exercise !== undefined) {
+	if (patch.exercise !== undefined) {
 		const match = patch.exercise
 			? (await lookupExercises(db, [patch.exercise])).get(patch.exercise.trim().toLowerCase())
 			: undefined;
@@ -399,13 +365,9 @@ export async function updateEntry(db: Queryable, userId: string, kind: Kind, id:
 		await recordCorrection(
 			db,
 			userId,
-			kind === "meals" ? { mealId: id } : { activityId: id },
+			{ activityId: id },
 			said,
-			diffFields(
-				before as Record<string, unknown>,
-				after as Record<string, unknown>,
-				kind === "meals" ? CORRECTABLE_FIELDS.meal : CORRECTABLE_FIELDS.activity
-			)
+			diffFields(before as Record<string, unknown>, after as Record<string, unknown>, CORRECTABLE_FIELDS.activity)
 		);
 	}
 	return after;

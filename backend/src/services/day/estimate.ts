@@ -1,5 +1,6 @@
-import { LB_TO_KG } from "../tdee.js";
 import type { ActivityCategory, Block, DayActivity } from "./types.js";
+
+const LB_TO_KG = 0.45359237;
 
 // Strength calories are estimates (docs/concept-v2.md §Calories). A treadmill prints a
 // number and we read it as-is; a barbell prints nothing, so a real lifting session — four

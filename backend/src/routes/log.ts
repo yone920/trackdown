@@ -15,14 +15,14 @@ import { logFailure } from "../services/fusion/outcome.js";
 //
 // Since WP2 the *saving* half is the fusion pipeline: each parsed item becomes a
 // FusionResult and goes through services/fusion/confirm.ts, so there is one place that
-// knows how a meal, an activity or a weight is written, and the typed line is kept as
+// knows how an activity or a weight is written, and the typed line is kept as
 // evidence like any other log. Request and response shapes are untouched — WP6 replaces
 // these screens with /api/log/analyze and /api/log/confirm.
 //
-// Why the parser stays: a typed log is routinely several things at once ("protein shake
-// after my 30 min walk, 181 on the scale"), and the fusion schema is a discriminated
-// union — one log, one kind. Sending this text through /api/log/analyze would throw two
-// of those three items away. The parser's job is the multi-item split; confirm's job is
+// Why the parser stays: a typed log is routinely several things at once ("30 min walk,
+// 181 on the scale"), and the fusion schema is a discriminated
+// union — one log, one kind. Sending this text through /api/log/analyze would throw one
+// of those two items away. The parser's job is the multi-item split; confirm's job is
 // the write.
 
 const LogBody = z.object({ text: z.string().trim().min(1).max(2000) });
@@ -55,23 +55,6 @@ function toFusionResult(item: ParsedItem): FusionResult | null {
 						refine: null,
 					},
 				],
-			};
-		case "meal":
-			return {
-				kind: "meal",
-				description: item.description,
-				meal_type: null,
-				kcal: item.kcal ?? 0,
-				protein_g: item.protein_g ?? null,
-				carbs_g: item.carbs_g ?? null,
-				fat_g: item.fat_g ?? null,
-				fiber_g: item.fiber_g ?? null,
-				items: [],
-				confidence: item.confidence,
-				sources: null,
-				// The v1 parser reads a typed line, never macros off a label: the
-				// arithmetic gate has nothing to have said about it.
-				consistency: null,
 			};
 		case "weight":
 			// v1 allowed a weight item with no number; there is nothing to save in that.
@@ -154,7 +137,7 @@ export function logRouter(pool: pg.Pool, parser: LogParser): Router {
 					source: "manual",
 				});
 				keptText = true;
-				const row = saved.activities[0] ?? saved.meal ?? saved.weight;
+				const row = saved.activities[0] ?? saved.weight;
 				enriched.push({ ...item, ...(row?.id ? { id: row.id as string } : {}) });
 			}
 			await client.query("COMMIT");

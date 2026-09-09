@@ -3,7 +3,6 @@ import {
 	type DayFacts,
 	type FactActivity,
 	type FactHealthSample,
-	type FactMeal,
 	type FactWeight,
 } from "../../services/goals/measures.js";
 
@@ -20,10 +19,6 @@ export function daysAgo(days: number, from: string = TODAY): string {
 
 export function facts(partial: Partial<DayFacts> = {}): DayFacts {
 	return { ...emptyDayFacts(TODAY), ...partial };
-}
-
-export function meal(date: string, values: Partial<FactMeal> = {}): FactMeal {
-	return { date, kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0, ...values };
 }
 
 export function activity(date: string, values: Partial<FactActivity> = {}): FactActivity {

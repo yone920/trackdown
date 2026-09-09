@@ -39,7 +39,7 @@ export function DayArc({ events }: { events: ArcEvent[] }) {
 
   const blocks = events.filter((e) => e.kind === 'block');
   const now = events.find((e) => e.kind === 'now');
-  const dots = events.filter((e) => e.kind === 'meal' || e.kind === 'activity' || e.kind === 'weight');
+  const dots = events.filter((e) => e.kind === 'activity' || e.kind === 'weight');
 
   return (
     <View onLayout={onLayout} style={{ height: HEIGHT }}>

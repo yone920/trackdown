@@ -5,15 +5,15 @@ import { TabBar } from '@/components/tab-bar';
 
 // The floating `+` and the framing it carries (lib/log-framing.ts).
 //
-// A tab about one thing is a door that knows something. Pressing + while looking at what you
-// ate used to open the sheet suggesting a shoulder press — the same mistake the You page made
-// (field report 2026-09-03: "if it is being called from food it should say how to log lunch").
+// A tab about one thing is a door that knows something. Pressing + while looking at a
+// workout should open the sheet suggesting a set, not something unrelated to what the tab
+// is about (field report 2026-09-03).
 
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({ router: { push: (...a: unknown[]) => mockPush(...a) } }));
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
 
-const ROUTES = ['index', 'train', 'eat', 'progress'];
+const ROUTES = ['index', 'train', 'progress'];
 
 function renderBar(focused: string) {
   const state = {
@@ -28,12 +28,6 @@ function renderBar(focused: string) {
 beforeEach(() => mockPush.mockReset());
 
 describe('the floating +', () => {
-  it('opens on the plate from Eat', () => {
-    renderBar('eat');
-    fireEvent.press(screen.getByTestId('log-fab'));
-    expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { framing: 'food' } });
-  });
-
   it('opens on the set from Train', () => {
     renderBar('train');
     fireEvent.press(screen.getByTestId('log-fab'));
