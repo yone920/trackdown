@@ -157,7 +157,7 @@ describe('Home', () => {
   });
 
   it('shows the week and the trend, not today’s numbers', async () => {
-    serve({ goals: { active: [makeGoal('lose_fat', [makeMetric()])], history: [], no_goal: false } as never });
+    serve({ goals: { active: [makeGoal('custom', [makeMetric()])], history: [], no_goal: false } as never });
     renderHome();
 
     await waitFor(() => expect(screen.getByText('of 4 planned')).toBeTruthy());
@@ -266,7 +266,7 @@ describe('Home — the whole day', () => {
 
   const READING = {
     kind: 'right_now' as const,
-    text: 'A solid push day; 700 under your allowance with dinner still to come.',
+    text: 'A solid push day, three lifts in and a weigh-in this morning.',
     next_action: null,
     actions: [],
     inputs_hash: 'x',
@@ -278,53 +278,40 @@ describe('Home — the whole day', () => {
     serve({
       day: makeDay({
         day_number: 12,
-        status: 'on_track',
-        items: { meals: [], weights: [], activities: [ACTIVITY] },
+        verdict: 'served',
+        verdict_words: 'Served your goal',
+        items: { weights: [], activities: [ACTIVITY] },
       }),
     });
     renderHome();
 
-    await waitFor(() => expect(screen.getByTestId('home-verdict')).toHaveTextContent('on track'));
+    await waitFor(() => expect(screen.getByTestId('home-verdict')).toHaveTextContent('Served your goal'));
     expect(screen.getByText(/Day/)).toBeTruthy();
     expect(screen.getByText(/12/)).toBeTruthy();
   });
 
   it('carries NO verdict on a day that has not happened', async () => {
-    // 0 eaten is trivially "under allowance", and a green "on track" at 6 am judges a day
-    // nobody has lived yet. The rule came with the header when it moved here.
-    serve({ day: makeDay({ day_number: 12, items: { meals: [], weights: [], activities: [] } }) });
+    // `unlogged`/`none` are not real judgements, so a day nobody has lived yet reads as a
+    // plain day number rather than a false "served"/"missed". The rule came with the
+    // header when it moved here.
+    serve({
+      day: makeDay({ day_number: 12, verdict: 'unlogged', items: { weights: [], activities: [] } }),
+    });
     renderHome();
 
     await waitFor(() => expect(screen.getByText(/Day/)).toBeTruthy());
     expect(screen.queryByTestId('home-verdict')).toBeNull();
-    expect(screen.queryByText('on track')).toBeNull();
   });
 
-  it('draws the Right-now reading, which reads food and training together', async () => {
+  it('draws the Right-now reading, which reads the day as a whole', async () => {
     serve({ day: makeDay({ reading: READING as never }) });
     renderHome();
 
     await waitFor(() => expect(screen.getByText('Right now')).toBeTruthy());
-    expect(screen.getByText(/700 under your allowance/)).toBeTruthy();
+    expect(screen.getByText(/three lifts in/)).toBeTruthy();
   });
 
-  it('glances at the food in one line, and opens the tab that owns it', async () => {
-    serve({ day: makeDay({ eaten: 1180, allowance: 2385 }) });
-    renderHome();
-
-    await waitFor(() => expect(screen.getByTestId('home-eat-line')).toHaveTextContent('1,180 eaten · 1,205 left'));
-    fireEvent.press(screen.getByTestId('home-eat'));
-    expect(mockPush).toHaveBeenCalledWith('/eat');
-  });
-
-  it('says "over" rather than a negative amount left', async () => {
-    serve({ day: makeDay({ eaten: 2574, allowance: 2254 }) });
-    renderHome();
-    await waitFor(() => expect(screen.getByTestId('home-eat-line')).toHaveTextContent(/320 over/));
-    expect(screen.getByTestId('home-eat-line')).not.toHaveTextContent('-');
-  });
-
-  it('has both doors on it — the session and the food — and generates neither', async () => {
+  it('has the session door on it, and generates nothing', async () => {
     serve({ coach: noPlan({ has_plan: true, done_count: 2, total_count: 6 }), day: makeDay() });
     renderHome();
 

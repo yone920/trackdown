@@ -112,7 +112,7 @@ beforeEach(() => {
 
 describe('behind the goal row', () => {
   const weightGoal = () => ({
-    ...makeGoal('lose_fat', [
+    ...makeGoal('custom', [
       makeMetric({
         measure: 'body_weight',
         unit: 'lb',
@@ -132,7 +132,7 @@ describe('behind the goal row', () => {
   });
 
   const weighInsGoal = (series: { date: string; value: number }[]) => ({
-    ...makeGoal('lose_fat', [
+    ...makeGoal('custom', [
       makeMetric({
         measure: 'body_weight',
         unit: 'lb',

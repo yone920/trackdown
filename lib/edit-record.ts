@@ -8,7 +8,7 @@ import type { DayLogRecord, FusionResult, PartCorrection } from '@/lib/types';
 // Confidence comes back as "high" because the user is the one saying it now: a correction
 // is the most confident fact in the system (concept-v2 §Principles 3).
 
-export type EditKind = 'activity' | 'meal' | 'weight' | 'goal';
+export type EditKind = 'activity' | 'weight' | 'goal';
 
 /** A saved row as a confirm-card result. Null for a statement, which nothing can PATCH. */
 export function recordToResult(record: DayLogRecord): FusionResult | null {
@@ -33,20 +33,6 @@ export function recordToResult(record: DayLogRecord): FusionResult | null {
             sources: null,
           },
         ],
-      };
-    case 'meal':
-      return {
-        kind: 'meal',
-        description: record.description,
-        meal_type: record.meal_type,
-        kcal: record.kcal,
-        protein_g: record.protein_g,
-        carbs_g: record.carbs_g,
-        fat_g: record.fat_g,
-        fiber_g: record.fiber_g,
-        items: [],
-        confidence: 'high',
-        sources: null,
       };
     case 'weight':
       return { kind: 'weight', weight_lb: record.weight_lb, confidence: 'high', sources: null };
@@ -87,16 +73,6 @@ export function resultToPatch(kind: EditKind, result: FusionResult): Record<stri
       load_lb: item.load_lb,
       duration_min: item.duration_min,
       distance_mi: item.distance_mi,
-    };
-  }
-  if (kind === 'meal' && result.kind === 'meal') {
-    return {
-      description: result.description,
-      kcal: Math.max(0, Math.round(result.kcal ?? 0)),
-      protein_g: result.protein_g,
-      carbs_g: result.carbs_g,
-      fat_g: result.fat_g,
-      fiber_g: result.fiber_g,
     };
   }
   if (kind === 'weight' && result.kind === 'weight') return { weight_lb: result.weight_lb };

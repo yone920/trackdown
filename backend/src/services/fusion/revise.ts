@@ -2,7 +2,7 @@ import type { ActivityItem, FusionResult, SegmentKind } from "./schema.js";
 
 // "Make a change" — the second half of the review-and-tell flow (docs/concept-v2.md
 // §Principles 7: NO FORMS). The user is looking at what was understood and says what is
-// wrong with it in their own words: "reps were 3, not 4", "that meal was lunch not dinner",
+// wrong with it in their own words: "reps were 3, not 4",
 // "it was the cable machine". No field is ever typed into.
 //
 // The shape of the answer is the shape the app already draws, so a revision is not a new
@@ -14,15 +14,13 @@ import type { ActivityItem, FusionResult, SegmentKind } from "./schema.js";
 //
 // A revision is applied part by part. A log that read as three things is three calls, each
 // told "if this instruction is not about this part, return it unchanged" — which is also
-// what makes "that meal was lunch" safe to send at a log that holds a meal and a run.
+// what makes one correction safe to send at a log that holds several things.
 
 /** Which focused detail call answers for a result. Null for a part nothing can revise. */
 export function segmentKindFor(result: FusionResult): SegmentKind | null {
 	switch (result.kind) {
 		case "activities":
 			return "activities";
-		case "meal":
-			return "meal";
 		case "weight":
 			return "weight";
 		case "goal":
@@ -40,18 +38,11 @@ export function segmentKindFor(result: FusionResult): SegmentKind | null {
 /**
  * The part as the model is shown it: compact JSON, with the bookkeeping the user never
  * sees taken out. `sources` is provenance for the card, `refine` is an offer this call
- * knows nothing about, `consistency` is our own arithmetic verdict on the last reading —
- * none of the three is a fact to be revised, and showing the model its own last verdict
- * would only invite it to copy the verdict instead of fixing the numbers.
+ * knows nothing about — neither is a fact to be revised.
  */
 export function compactPart(result: FusionResult): string {
 	const strip = <T extends Record<string, unknown>>(value: T): Record<string, unknown> => {
-		const {
-			sources: _sources,
-			refine: _refine,
-			consistency: _consistency,
-			...rest
-		} = value as Record<string, unknown>;
+		const { sources: _sources, refine: _refine, ...rest } = value as Record<string, unknown>;
 		return rest;
 	};
 	if (result.kind === "activities") {

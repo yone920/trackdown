@@ -14,8 +14,6 @@ import { z } from "zod";
 //   * `workout.exercises[]` is the Do list. The *numbers* in it are copied from
 //     services/coach/rules.ts — the model picks the movements and the order, not the load
 //     (concept-v2 §Progression rules: deterministic, fed to the model as constraints).
-//   * `nutrition` is the Eat card. `kcal` and `protein_g` are given to the model in the
-//     prompt too; they are asked for again so the card is self-contained for the app.
 //   * `nudge` is the One thing. The *action* behind it is chosen by rules.ts and attached
 //     after the call — a button that does something is not a thing to generate.
 
@@ -72,7 +70,6 @@ const clamp = (value: string, max: number) => (value.length > max ? value.slice(
 export function clampBrief<T extends {
 	headline: string; why: string; nudge: string;
 	workout: { targets: string[]; exercises: { name: string; note: string | null }[]; finisher?: { name: string; note: string | null }[] };
-	nutrition: { ideas: string[]; why: string };
 }>(brief: T): T {
 	brief.headline = clamp(brief.headline, 140);
 	brief.why = clamp(brief.why, 600);
@@ -86,8 +83,6 @@ export function clampBrief<T extends {
 		item.name = clamp(item.name, 80);
 		if (item.note) item.note = clamp(item.note, 160);
 	}
-	brief.nutrition.ideas = brief.nutrition.ideas.map((i) => clamp(i, 100));
-	brief.nutrition.why = clamp(brief.nutrition.why, 400);
 	return brief;
 }
 
@@ -114,14 +109,6 @@ export const CoachBriefSchema = z.object({
 		 * of `assertUsableBrief`: a finisher is how a session ends, not whether it exists.
 		 */
 		finisher: z.array(BriefFinisherSchema).max(4),
-	}),
-	nutrition: z.object({
-		kcal: z.number().int().min(0).max(10000),
-		protein_g: z.number().int().min(0).max(500),
-		carbs_max_g: z.number().int().min(0).max(1000).nullable(),
-		/** Two or three meals that fit the diet style. */
-		ideas: z.array(z.string().trim().min(1)).max(3),
-		why: z.string().trim().min(1),
 	}),
 	/** The single most useful thing, in one sentence. */
 	nudge: z.string().trim().min(1),

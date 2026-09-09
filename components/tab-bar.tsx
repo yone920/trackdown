@@ -5,7 +5,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   IconAvatar,
-  IconEat,
   IconHome,
   IconPlus,
   IconProgress,
@@ -16,36 +15,32 @@ import { Eyebrow } from '@/components/type';
 import type { Framing } from '@/lib/log-framing';
 import { C, SPACE } from '@/lib/theme';
 
-// Home · Train · Eat · Progress · You, 84 high, stroke icons at 1.8, inactive `dim`
+// Home · Train · Progress · You, 84 high, stroke icons at 1.8, inactive `dim`
 // (docs/design-system.md §Tokens). Written by hand rather than configured, because the
 // floating `+` sits above it and the two have to agree about where the bar ends.
 
 const ICONS: Record<string, (p: IconProps) => React.ReactElement> = {
   index: IconHome,
   train: IconTrain,
-  eat: IconEat,
   progress: IconProgress,
 };
 
 const LABELS: Record<string, string> = {
   index: 'Home',
   train: 'Train',
-  eat: 'Eat',
   progress: 'Progress',
 };
 
 /**
  * What the `+` opens on, per tab (lib/log-framing.ts). A tab about one thing is a door that
- * knows something, and the sheet should say it: pressing + while looking at what you ate
- * should not suggest a shoulder press (field report 2026-09-03).
+ * knows something, and the sheet should say it: pressing + while looking at a workout
+ * should not suggest a weigh-in (field report 2026-09-03).
  *
  * Home and Progress are deliberately absent. Home thinks in whole days and Progress in the
- * long view, so neither implies a register and both get the default — which is now three
- * examples wide rather than a workout.
+ * long view, so neither implies a register and both get the default.
  */
 const TAB_FRAMING: Record<string, Framing> = {
   train: 'workout',
-  eat: 'food',
 };
 
 export function TabBar({ state, navigation }: BottomTabBarProps) {

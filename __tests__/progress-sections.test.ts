@@ -21,7 +21,7 @@ const series = (values: number[]) =>
 
 describe('goalSections — the chart per measure', () => {
   it('draws body weight as a line, with the target and the raw weigh-ins under it', () => {
-    const goal = makeGoal('lose_fat', [
+    const goal = makeGoal('custom', [
       makeMetric({ measure: 'body_weight', target: 170, series: series([190, 185, 181]) }),
     ]);
     const [section] = goalSections(goal, [
@@ -63,8 +63,8 @@ describe('goalSections — the chart per measure', () => {
     expect(goalSections(goal)).toEqual([]);
   });
 
-  it('does not judge a maintain goal', () => {
-    const goal = makeGoal('maintain', [
+  it('does not judge a custom goal', () => {
+    const goal = makeGoal('custom', [
       makeMetric({ measure: 'weekly_cardio_min', current: 90, series: series([20, 30]) }),
     ]);
     expect(goalSections(goal)[0].judge).toBe(false);
@@ -74,9 +74,14 @@ describe('goalSections — the chart per measure', () => {
 describe('the goal card — where I stand, and whether the rate gets me there', () => {
   const TODAY = '2026-08-31';
 
-  /** A clean loss: 212 on 1 Aug down to 210.4 on 31 Aug, one point a week. */
+  /**
+   * A clean loss: 212 on 1 Aug down to 210.4 on 31 Aug, one point a week. `build_strength`
+   * stands in for "a judged kind" — the pace/rate/projection arithmetic under test is the
+   * same for any judged goal kind, and there is no dedicated weight-loss kind any more
+   * (goal kinds are gain_muscle / build_strength / improve_endurance / custom).
+   */
   const losing = (target: number | null, by: string | null) => {
-    const goal = makeGoal('lose_fat', [
+    const goal = makeGoal('build_strength', [
       makeMetric({
         measure: 'body_weight',
         unit: 'lb',
@@ -158,7 +163,7 @@ describe('the goal card — where I stand, and whether the rate gets me there', 
   // "Reached · The measure says you are there" the same day. A verdict that FLATTERS is
   // worse than one that scolds, because nothing about it invites a second look.
   it('does not call a goal reached off one reading at target', () => {
-    const goal = makeGoal('lose_fat', [makeMetric({ percent: 1, current: 170, target: 170 })]);
+    const goal = makeGoal('build_strength', [makeMetric({ percent: 1, current: 170, target: 170 })]);
     const card = goalCard(goal, { today: TODAY });
     expect(card.to_go).toBe('At target today');
     expect(card.to_go).not.toBe('Reached');
@@ -171,7 +176,7 @@ describe('the goal card — where I stand, and whether the rate gets me there', 
     // `reached_candidate_at` is set only after a week at target on several weigh-ins across
     // several days (backend services/goals/detect.ts). That is the signal the word waits for.
     const goal = {
-      ...makeGoal('lose_fat', [makeMetric({ percent: 1, current: 170, target: 170 })]),
+      ...makeGoal('build_strength', [makeMetric({ percent: 1, current: 170, target: 170 })]),
       reached_candidate_at: '2026-09-01T00:00:00.000Z',
     };
     const card = goalCard(goal, { today: TODAY });
@@ -180,14 +185,14 @@ describe('the goal card — where I stand, and whether the rate gets me there', 
     expect(card.pace?.tone).toBe('good');
   });
 
-  it('never colours a maintain goal', () => {
-    const goal = { ...losing(200, '2026-10-01'), kind: 'maintain' as const };
+  it('never colours a custom goal', () => {
+    const goal = { ...losing(200, '2026-10-01'), kind: 'custom' as const };
     expect(goalCard(goal, { today: TODAY }).judge).toBe(false);
     expect(goalCard(goal, { today: TODAY }).pace?.tone).toBe('mute');
   });
 
   it('is quiet rather than wrong with nothing measured', () => {
-    const goal = makeGoal('lose_fat', [
+    const goal = makeGoal('build_strength', [
       makeMetric({ current: null, baseline: null, target: null, percent: null, series: [] }),
     ]);
     const card = goalCard(goal, { today: TODAY });
@@ -199,7 +204,7 @@ describe('the goal card — where I stand, and whether the rate gets me there', 
   // The field report (2026-08-31): one weigh-in drew a tall empty box and "No movement yet".
   describe('fewer than two readings', () => {
     const withSeries = (points: { date: string; value: number }[]) => {
-      const goal = makeGoal('lose_fat', [
+      const goal = makeGoal('build_strength', [
         makeMetric({
           measure: 'body_weight',
           unit: 'lb',
@@ -413,7 +418,7 @@ describe('the goal card shows the weigh-ins, labelled and dated', () => {
   // numbers, one of them an average, neither of them dated, so a reader had no way to judge
   // whether 161 was believable.
 
-  const goal = () => makeGoal('lose_fat', [makeMetric({ measure: 'body_weight', unit: 'lb', current: 161, target: 170, baseline: 212 })]);
+  const goal = () => makeGoal('custom', [makeMetric({ measure: 'body_weight', unit: 'lb', current: 161, target: 170, baseline: 212 })]);
 
   it('names the latest reading and when it was taken', () => {
     const card = goalCard(goal(), {

@@ -6,8 +6,8 @@ import type { SegmentKind } from "./schema.js";
 // the adapter behind LlmPort decides how to ask for structured output.
 //
 // The grouping rules are lifted from v1's parse-log prompt (src/services/parseLog.ts),
-// because they were right and they are why one photographed plate does not become five
-// meals. What is new is the routing: the same panel logs a workout, states a goal, adds a
+// because they were right and they are why one workout logged across several sentences
+// does not become several records. What is new is the routing: the same panel logs a workout, states a goal, adds a
 // constraint and gives the coach context, so the first decision the model makes is which
 // of those it is looking at — and, since the mixed-input fix, *how many* of those there
 // are. The user says everything at once and the app sorts it out (concept-v2 §One input
@@ -26,7 +26,6 @@ FIRST decide what kind each thing is, then fill in that kind and nothing else:
   squats: category "other" (or "mobility" for foam rolling and stretching), the duration
   from their words, muscle_groups empty, kcal 0 or a small honest estimate, and the details
   they gave — a temperature, a bath, which sauna — kept in the description.
-- "meal" — anything eaten or drunk.
 - "weight" — a body-weight reading (a scale photo, "182 this morning").
 - "goal" — a target or a standing intention. Return the title only; you will be asked for the
   numbers in a second step.
@@ -61,7 +60,7 @@ whether it did. The app reads the day out of the same words in code and files th
 it (services/fusion/backdate.ts), so a past day needs nothing from you and costs you no field:
 read the record exactly as you would if it had happened an hour ago. Never ask which day they
 meant, never ask whether they are logging it now, and never return "unclear" because a
-sentence names a day. The user saying "I had a slice of pizza yesterday" is a meal, fully
+sentence names a day. The user saying "I went for a run yesterday" is an activity, fully
 readable, and asking about it is the one answer that is certainly wrong.
 
 ALWAYS LOG. BEST EFFORT.
@@ -111,18 +110,18 @@ is the goal — the second step captures the 191 as a stated fact, so it is NOT 
 "weight" part here.`;
 
 const PARTS = `PARTS — "result" is the FIRST thing they said; "more_kinds" names the rest.
-One sentence often holds several things: "ate two eggs and toast, then ran 5k, and weighed in
-at 181" is a meal, an activity and a weigh-in. Fill in "result" with the first of them, in
+One sentence often holds several things: "ran 5k, then weighed in at 181" is an activity and a
+weigh-in. Fill in "result" with the first of them, in
 full, and list the KINDS of the others in "more_kinds". Each one will be read out of this same
 message by its own call, so "more_kinds" carries nothing but the kind.
 
 - Strongly bias toward an EMPTY "more_kinds". Most logs are a single kind, and a single kind
-  is one part no matter how many exercises or foods are in it — the grouping rules below say
+  is one part no matter how many exercises are in it — the grouping rules below say
   how those become items inside it.
 - At most one part per kind: a repeat is ignored.
 - Keep the user's order. "more_kinds" runs from the second thing they said to the last.
-- Name a kind only if the user actually said something of that kind. Do not invent a meal
-  from a calorie count or a statement from a passing adjective. When it is all one thing,
+- Name a kind only if the user actually said something of that kind. Do not invent a goal
+  from a passing adjective. When it is all one thing,
   "more_kinds" is [].
 - A weight the user says they are NOW, while setting a goal ("I am 212 lbs, my goal is 200"),
   is part of the goal and NOT a "weight" part. The goal's own step records it. Only a
@@ -139,8 +138,8 @@ const EVIDENCE_RULES = `EVIDENCE
 - List in "photo_fields" the names of the fields you read off a photo ("load_lb",
   "distance_mi"). Everything else is taken to have come from the words. Leave it empty when
   there was no photo.
-- A photo belongs to the part it is about: a machine to the exercise, a plate to the meal, a
-  scale to the weigh-in. Read "result" off the photos that are about "result" and leave the
+- A photo belongs to the part it is about: a machine to the exercise, a scale to the weigh-in.
+  Read "result" off the photos that are about "result" and leave the
   others to the parts they belong to — each of those is asked which photos it used.
 - confidence: "high" when the evidence states it outright; "medium" when you assumed a
   portion, an intensity or a unit; "low" when it is a guess.
@@ -148,20 +147,9 @@ const EVIDENCE_RULES = `EVIDENCE
 WHAT A PHOTO IS EVIDENCE *ABOUT*
 - A photo is evidence about something the user already mentioned. It NEVER adds an item of
   its own — a label, a packet, a machine in the frame is there to price what they said, not
-  to log itself. Add something a photo shows only when nothing they said matches it at all.
-- A NUTRITION LABEL is a table of PER-SERVING numbers. Take the quantity the user stated and
-  multiply the per-serving values by it: "four slices" × the per-slice row. NEVER use the
-  per-container or whole-package column unless they say they ate the whole thing. A loaf's
-  carbohydrate total is not four slices of bread, and a can's is not the half they ate.
-- Confidence is the weakest link, and the weakest link is the NUMBERS. Reading the label
-  correctly is not the same as knowing what was eaten: recognising the food is the easy half
-  and it does not make the portion, the serving count or the macros "high".`;
+  to log itself. Add something a photo shows only when nothing they said matches it at all.`;
 
 const GROUPING = `GROUPING — inside one result, strongly bias toward ONE record.
-- All food and drink in a single log is ONE meal. Sum calories and macros across everything;
-  the description briefly lists what was had ("eggs, sourdough toast, coffee"). Break the
-  plate out into "items" only when the evidence actually shows the parts. Return a second
-  meal result only if the user clearly names separate eating occasions at different times.
 - Each distinct exercise is its own item under "activities": "bench, then rows, then a
   10 minute bike" is three items in ONE activities result, not three results. Same exercise
   across several sets in one breath is ONE item with the set count — UNLESS the load
@@ -169,7 +157,7 @@ const GROUPING = `GROUPING — inside one result, strongly bias toward ONE recor
   70" is TWO items whose sets SUM to what was said: 2 × 10 at 85 and 2 × 10 at 70. Never a
   total item plus a partial item — that invents sets nobody did. Each part's description
   says which it was ("first two sets", "last two sets — dropped to 70").
-- When in doubt about food, COMBINE. When in doubt about exercises, SEPARATE.`;
+- When in doubt about exercises, SEPARATE.`;
 
 const FIELDS = `FIELDS
 - Units are POUNDS and MILES. If the user says kilograms, convert (kg × 2.20462, one
@@ -186,11 +174,9 @@ const FIELDS = `FIELDS
   it was ("last two sets, dropped to 70"), the working behind a per-side load ("45/side +
   45 lb bar = 135 lb"), how it went. Do NOT restate sets × reps × load: they are already
   fields, the row draws them from the fields, and saying them again prints them twice
-  ("4 × 10 · 4 × 10 chest press machine…" — field report 2026-09-01). For a composed dish,
-  name the dish.
-- kcal: integer. For a meal, calories eaten. For an activity, calories burned — a MET-style
-  estimate from duration and effort, or the machine's own figure when a photo shows one.
-- Macros are grams. Estimate them for every meal.
+  ("4 × 10 · 4 × 10 chest press machine…" — field report 2026-09-01).
+- kcal: integer. Calories burned — a MET-style estimate from duration and effort, or the
+  machine's own figure when a photo shows one.
 - weight_lb: body weight only. A dumbbell is not a body weight.
 - statement "text": what they said, cleaned up to one line and kept in their own terms.`;
 
@@ -213,10 +199,6 @@ function describeToday(context: FusionContext): string {
 			number(a.kcal, " kcal"),
 		].filter(Boolean);
 		lines.push(`${a.logged_at.slice(11, 16)} activity — ${parts.join(", ")}`);
-	}
-	for (const m of context.todayMeals) {
-		const parts = [m.description, number(m.kcal, " kcal"), number(m.protein_g, " g protein")].filter(Boolean);
-		lines.push(`${m.logged_at.slice(11, 16)} meal — ${parts.join(", ")}`);
 	}
 	for (const w of context.todayWeights) lines.push(`weight — ${w} lb`);
 	return lines.length > 0 ? bullet(lines) : "- nothing logged yet today";
@@ -311,7 +293,7 @@ export function buildGoalDetailSystemPrompt(context: FusionContext, title: strin
 
 ${said}
 
-The same message may also have logged a meal, a workout or a weigh-in. Those are being saved
+The same message may also have logged a workout or a weigh-in. Those are being saved
 separately — read only what bears on THIS goal and on the user themselves.
 
 It is ${context.localTime} on ${context.localDate} in the user's timezone. Units: pounds and miles.
@@ -319,35 +301,12 @@ It is ${context.localTime} on ${context.localDate} in the user's timezone. Units
 ${describeGoals(context)}`;
 }
 
-/**
- * The meal's own numbers rule, said where the meal is read. Two halves of one field report
- * (docs/CHANGELOG-v2.md §Field fixes — a lunch that read 398 g of carbs): the label was read
- * per loaf instead of per slice, and the answer was marked HIGH.
- *
- * The arithmetic is checked in code afterwards either way (services/fusion/arithmetic.ts) —
- * this is the cheap half, said once, so the common case never needs the second call.
- */
-const MEAL_NUMBERS = `THE NUMBERS HAVE TO ADD UP.
-- Before you answer, multiply: 4 × protein + 4 × carbs + 9 × fat should land within about a
-  quarter of the kcal you are about to give. If it does not, one of the four is wrong — and
-  it is nearly always a serving size read off a label. Fix it, do not report both.
-- A nutrition label is PER SERVING. Multiply by the servings the user said they had. The
-  per-container column is what the whole packet holds, and nobody ate the packet unless they
-  said so.
-- "confidence" is about the NUMBERS, not about recognising the food. A portion you assumed,
-  a label you scaled, a serving count you inferred: that is "medium" at best.`;
-
 const PART_INTRO: Record<SegmentKind, string> = {
 	activities: `Pull out the PHYSICAL ACTIVITY they described — exercises, a walk, a run, a machine
 display — and nothing else. One item per distinct exercise; several sets of the same exercise
 in one breath are ONE item with the set count. If they could not name the movement, name your
 best guess anyway (or a short phrase in their own words) and mark the confidence low; put the
 machine in "equipment". Their numbers are facts whatever the movement turns out to be.`,
-	meal: `Pull out what they ATE OR DRANK and nothing else. All of it is ONE meal: sum the calories
-and macros, and let "description" briefly list what was had ("eggs, sourdough toast, coffee").
-Break it into "items" only when the evidence actually shows the parts.
-
-${MEAL_NUMBERS}`,
 	weight: `Pull out the BODY-WEIGHT READING they gave and nothing else. Body weight only — a dumbbell
 is not a body weight, and a weight they want to reach is a goal, not a reading.`,
 	goal: "",
@@ -374,12 +333,12 @@ const PART_PHOTOS = `- "photo_indexes" are the positions of the photos this part
  * The focused call that fills in one segment of a mixed input. The router named this part's
  * kind and nothing more, so the call is given the whole original message and told which
  * kind to pull out of it — and it sees only that kind's schema, which is why the whole
- * eight-branch union never has to compile at once.
+ * seven-branch union never has to compile at once.
  */
 export function buildPartDetailSystemPrompt(context: FusionContext, kind: SegmentKind): string {
 	if (kind === "goal") return buildGoalDetailSystemPrompt(context, null);
-	const claims = kind === "activities" || kind === "meal" || kind === "weight";
-	return `The user logged several things at once — a meal, a workout, a weigh-in, a goal, something
+	const claims = kind === "activities" || kind === "weight";
+	return `The user logged several things at once — a workout, a weigh-in, a goal, something
 about how they train. ${PART_INTRO[kind]}
 
 Read ONLY that part and ignore the rest: the other parts are being read by their own calls,
@@ -440,7 +399,7 @@ export function buildRevisionSystemPrompt(
 	part: string,
 	instruction: string
 ): string {
-	const claims = kind === "activities" || kind === "meal" || kind === "weight";
+	const claims = kind === "activities" || kind === "weight";
 	return `The user logged something, read back what you understood, and is now telling you what to
 change about it. This is a CORRECTION, not a new log.
 
@@ -460,10 +419,7 @@ RULES
   when a photo said otherwise. Set the confidence of anything they just stated to "high".
 - If the instruction is about a different part of their log and does not touch this one at
   all, return this part unchanged.
-- A meal's "meal_type" is which sitting it was — breakfast, lunch, dinner or snack. "that
-  meal was lunch, not dinner" changes that field and nothing else.
-- Their words are an instruction, never something to log: "make it lunch" does not add a
-  meal called "make it lunch".
+- Their words are an instruction, never something to log.
 - A change belongs in a FIELD, never in the description. If they tell you a load, a rep
   count or a set count, move the FIELD; writing the new numbers into the description and
   leaving the fields as they were is not a correction, it is a note about one.
@@ -476,86 +432,9 @@ It is ${context.localTime} on ${context.localDate} in the user's timezone. Units
 ${claims ? describeVocabulary(context) : ""}`;
 }
 
-/**
- * The one automatic re-ask, when a meal's macros and its calories cannot both be true
- * (services/fusion/arithmetic.ts). Not a revision — the user has not said anything; the
- * *app* noticed, and it says exactly what it noticed rather than asking for a second guess.
- *
- * It is the meal detail call again, with the same message and the same schema, so it costs
- * no grammar and nothing new has to compile.
- *
- * `instruction` is the user's own words when the gate fired on a REVISION rather than on a
- * fresh read, and it inverts who is trusted. A calorie figure the user has just stated is not
- * a misread label — they were at the meal and the model was not — so reconciling by quietly
- * putting the old number back is the app overruling its only witness. That is exactly what
- * the analyze wording ("do not simply scale the kcal up") tells it to do, which is right for a
- * label read per container and wrong for a person saying "it was twelve hundred". Their figure
- * is kept, and the macros are re-derived from the foods already listed until the plate reaches
- * it.
- */
-export function buildMealReconcilePrompt(
-	context: FusionContext,
-	previous: string,
-	discrepancy: string,
-	instruction?: string | null
-): string {
-	const said = instruction?.trim();
-
-	const opening = said
-		? `The user has just corrected this meal, in their own words:
-
-"${said}"
-
-That correction is why these numbers no longer agree, and it is the one thing here you may
-not overturn.`
-		: `You read this meal out of the user's log and the numbers do not add up.`;
-
-	const rules = said
-		? `Read it again and return the whole meal, reconciled to what they told you.
-- KEEP what the user stated. If they gave a calorie figure, that figure IS the answer; it is
-  not a reading to be checked again. They ate it and you did not.
-- Move the OTHER numbers to meet it. Re-derive protein, carbs and fat from the foods already
-  in "items", at the serving sizes it would take to reach the calories they stated: a plate
-  that reads hundreds of kcal light is a serving read short, not a calorie count invented.
-- Correct the per-item numbers too, not only the totals — the totals are made of them.
-- Never drop a macro to escape the arithmetic. A blank field is not agreement.
-- Keep everything the correction did not touch — the description, the sitting, the foods.
-- Answer with "confidence" no higher than "medium": the calories are the user's own figure,
-  and the macros under them are now your estimate of how it gets there.`
-		: `Read it again and return the whole meal, reconciled.
-- Start from the SERVING SIZES. This is nearly always a nutrition label read per container
-  when the user ate a few servings of it: "four slices" is four × the per-slice row, not the
-  loaf. Check every quantity they actually stated against the numbers you gave.
-- Change the number that is wrong, not the one that is easiest to move. Do not simply scale
-  the kcal up to match a macro you have not checked.
-- Keep everything you are confident in — the description, the sitting, the foods.
-- Answer with "confidence" no higher than "medium" unless the corrected numbers now add up
-  AND every serving size came from something the user said or a label states outright.`;
-
-	return `${opening}
-
-What you answered, as JSON:
-${previous}
-
-${discrepancy}
-
-${rules}
-
-${PART_INTRO.meal}
-
-${EVIDENCE_RULES}
-
-${FIELDS}
-
-CONTEXT
-It is ${context.localTime} on ${context.localDate} in the user's timezone. Units: pounds and miles.`;
-}
-
 const PLAN_FIELDS = `Extract the plan fields it sets, and ONLY those — every field they did not actually state
 stays null. Do not restate the statement itself in a field; it is recorded as text.
 
-- diet_style: "keto", "lower carb", "high protein" — their own words, lower case.
-- protein_g / carbs_max_g: daily grams, when they named a number.
 - training_days: days per week, as a count.
 - session_minutes: how long a NORMAL session is for them, in minutes — "I've got about 45
   minutes in the gym", "my sessions run an hour and a half". A standing fact about how they
@@ -574,7 +453,6 @@ stays null. Do not restate the statement itself in a field; it is recorded as te
   gym, home, travel, other. A place they merely visited once ("did a session at a hotel
   gym") is not where they train: leave both null unless it reads as their regular place.
   "I train at the gym" names no place — that is "environment" and nothing more.
-- eatback: how much of the calories they burn they want back — none / half / all.
 
 TRAINING BACKGROUND — what they bring with them, when they say it. This is the only way the
 coach knows a new user is not a beginner, so read it whenever it is there:

@@ -27,7 +27,7 @@ export default function CardioDetail() {
   const [open, setOpen] = useState(false);
 
   const active = goals.data?.active ?? [];
-  const judge = active.length > 0 && active.some((goal) => goal.kind !== 'maintain' && goal.kind !== 'custom');
+  const judge = active.length > 0 && active.some((goal) => goal.kind !== 'custom');
 
   const cardio = board.data?.cardio ?? null;
   const rows = cardio?.activities ?? [];

@@ -4,15 +4,7 @@ import { IconClose } from '@/components/icons';
 import { Card, Chip, Chips } from '@/components/kit';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
 import { C, FONT, TABULAR } from '@/lib/theme';
-import type {
-  ActivityItem,
-  Confidence,
-  FieldSource,
-  FusionResult,
-  GoalFacts,
-  MealConsistency,
-  ProposedTimeline,
-} from '@/lib/types';
+import type { ActivityItem, Confidence, FieldSource, FusionResult, GoalFacts, ProposedTimeline } from '@/lib/types';
 
 // The confirm card (docs/design-system.md §Log). "Confirm, don't trust": every reading is
 // shown before it counts, with what each fact came from and how sure the model was
@@ -38,7 +30,6 @@ import type {
 
 const KIND_LABEL: Record<FusionResult['kind'], string> = {
   activities: 'exercise',
-  meal: 'meal',
   weight: 'weight',
   goal: 'goal',
   constraint: 'constraint',
@@ -51,13 +42,6 @@ const CONFIDENCE_COLOR: Record<Confidence, string> = {
   high: C.good,
   medium: C.mute,
   low: C.accent,
-};
-
-const MEAL_SLOT: Record<string, string> = {
-  breakfast: 'Breakfast',
-  lunch: 'Lunch',
-  dinner: 'Dinner',
-  snack: 'Snack',
 };
 
 /** A fact and its label, as text. Nothing here is editable — see the note above. */
@@ -139,39 +123,6 @@ export function sourcesLine(sources: Record<string, FieldSource> | null | undefi
   if (fromPhoto.length > 0) parts.push(`${fromPhoto.join(', ')} from the photo`);
   if (fromText.length > 0) parts.push(`${fromText.join(', ')} from your words`);
   return parts.length === 0 ? null : parts.join(' · ');
-}
-
-/**
- * What the server's arithmetic gate made of a meal's numbers, in one quiet line under the
- * plate (backend services/fusion/arithmetic.ts). Null when the reading added up first time,
- * which is nearly always — this line exists for the reading that did not.
- *
- * The field case it is written for: kcal 918 beside 67 g protein, 398 g carbs and 35 g fat,
- * which is 2,175 kcal of macros, marked HIGH. The chip already says "Low confidence — check
- * me" whenever the gate forced it; this says WHY, because "check me" with no reason is a
- * shrug and the user cannot see the multiplication.
- */
-export function consistencyLine(consistency: MealConsistency | null | undefined): string | null {
-  if (!consistency) return null;
-  const stated = consistency.stated_kcal;
-  const implied = consistency.implied_kcal;
-  const sum =
-    stated != null && implied != null
-      ? ` — ${Math.round(stated).toLocaleString('en-US')} kcal against ${Math.round(
-          implied,
-        ).toLocaleString('en-US')} from the macros`
-      : '';
-  // A correction is not a fault. "The numbers didn't add up" over a plate the user has just
-  // told the calories of reads as the app refusing them — which is exactly how it read on the
-  // day it was still overwriting them (field report 2026-09-03). Their figure is named as
-  // KEPT, and the macros are described as what moved.
-  if (consistency.outcome === 'restated') {
-    const kept = stated != null ? ` your ${Math.round(stated).toLocaleString('en-US')} kcal` : ' your figure';
-    return `Kept${kept} — the macros were re-estimated to match.`;
-  }
-  return consistency.outcome === 'adjusted'
-    ? `The numbers didn’t add up${sum}; read again and adjusted.`
-    : `The numbers didn’t add up${sum}; flagged, not adjusted.`;
 }
 
 function timelineLine(timeline: ProposedTimeline | null): string | null {
@@ -289,40 +240,6 @@ export function ConfirmCard({
               </Facts>
             </View>
           ))}
-        </View>
-      ) : null}
-
-      {result.kind === 'meal' ? (
-        <View style={{ marginTop: 12 }}>
-          <Disp size={22}>{result.description}</Disp>
-          {result.meal_type ? (
-            <Sub testID="meal-slot" style={{ marginTop: 4 }}>
-              {MEAL_SLOT[result.meal_type] ?? result.meal_type}
-            </Sub>
-          ) : null}
-          {sourcesLine(result.sources) ? <Sub style={{ marginTop: 4 }}>{sourcesLine(result.sources)}</Sub> : null}
-          {consistencyLine(result.consistency) ? (
-            <Sub
-              testID="meal-consistency"
-              style={{
-                marginTop: 4,
-                // Orange is the app saying "look at this". A restated meal is the app
-                // confirming it did as it was told, which is not the same errand.
-                color: result.consistency?.outcome === 'restated' ? C.mute : C.accent,
-              }}>
-              {consistencyLine(result.consistency)}
-            </Sub>
-          ) : null}
-          <Facts>
-            <Fact label="Kcal" numeric value={result.kcal} testID="meal-kcal" />
-            <Fact label="Protein g" numeric value={result.protein_g} />
-            <Fact label="Carbs g" numeric value={result.carbs_g} />
-            <Fact label="Fat g" numeric value={result.fat_g} />
-            <Fact label="Fibre g" numeric value={result.fiber_g} />
-          </Facts>
-          {result.items.length > 0 ? (
-            <Sub style={{ marginTop: 12 }}>{result.items.map((item) => item.name).join(' · ')}</Sub>
-          ) : null}
         </View>
       ) : null}
 

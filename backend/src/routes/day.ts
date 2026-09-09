@@ -6,7 +6,7 @@ import { latestBrief } from "../services/coach/coach.js";
 import { computeDay, dayNumberFrom, firstActiveDate, type DayView } from "../services/day.js";
 import { closeDay, closeDueDays } from "../services/dayClose.js";
 import { dayLog } from "../services/dayLog.js";
-import { verdictWords, type DayStatus, type Verdict } from "../services/goals/verdict.js";
+import { verdictWords, type Verdict } from "../services/goals/verdict.js";
 import { addDays, datesEndingOn, isIsoDate, localDay, type IsoDate } from "../services/localTime.js";
 import type { DayReadings } from "../services/readings/readings.js";
 
@@ -51,15 +51,10 @@ function toBody(view: DayView): Omit<DayView, "facts"> {
 
 interface SummaryRow {
 	date: IsoDate;
-	eaten: number | null;
 	earned: number | null;
-	allowance: number | null;
-	tdee: number | null;
-	status: DayStatus | null;
 	verdict: Verdict | null;
 	in_short: string | null;
 	summary_line: string | null;
-	meal_count: number | null;
 	weight_lb: number | null;
 	muscle_groups: string[] | null;
 	closed_at: string | null;
@@ -70,36 +65,27 @@ export interface DayRow {
 	day_number: number;
 	is_today: boolean;
 	closed: boolean;
-	status: DayStatus;
 	verdict: Verdict;
 	verdict_words: string;
 	summary: string;
 	in_short: string | null;
-	eaten: number | null;
 	earned: number | null;
-	allowance: number | null;
-	balance: number | null;
 	weight_lb: number | null;
 	muscle_groups: string[];
 }
 
 function rowFromSummary(row: SummaryRow, dayNumber: number): DayRow {
-	const status = row.status ?? "none";
-	const over = row.allowance == null || row.eaten == null ? null : row.eaten - row.allowance;
+	const verdict = row.verdict ?? "none";
 	return {
 		date: row.date,
 		day_number: dayNumber,
 		is_today: false,
 		closed: row.closed_at !== null,
-		status,
-		verdict: row.verdict ?? "none",
-		verdict_words: verdictWords(row.verdict ?? "none", status, over),
+		verdict,
+		verdict_words: verdictWords(verdict, row.summary_line !== "Nothing logged"),
 		summary: row.summary_line ?? "Nothing logged",
 		in_short: row.in_short,
-		eaten: row.eaten,
 		earned: row.earned,
-		allowance: row.allowance,
-		balance: row.tdee == null ? null : Math.round(row.tdee + (row.earned ?? 0) - (row.eaten ?? 0)),
 		weight_lb: row.weight_lb,
 		muscle_groups: row.muscle_groups ?? [],
 	};
@@ -111,15 +97,11 @@ function rowFromView(view: DayView): DayRow {
 		day_number: view.day_number,
 		is_today: view.is_today,
 		closed: view.closed_at !== null,
-		status: view.status,
 		verdict: view.verdict,
 		verdict_words: view.verdict_words,
 		summary: view.summary_line,
 		in_short: null,
-		eaten: view.eaten,
 		earned: view.earned,
-		allowance: view.allowance,
-		balance: view.balance,
 		weight_lb: view.weight.day,
 		muscle_groups: view.muscle_groups,
 	};
@@ -131,8 +113,7 @@ export function dayRouter(pool: pg.Pool, readings: DayReadings): Router {
 	async function summariesFor(userId: string, dates: IsoDate[]): Promise<Map<IsoDate, SummaryRow>> {
 		if (dates.length === 0) return new Map();
 		const { rows } = await pool.query<SummaryRow>(
-			`SELECT date, eaten, earned, allowance, tdee, status, verdict, in_short, summary_line,
-			        meal_count, weight_lb, muscle_groups, closed_at
+			`SELECT date, earned, verdict, in_short, summary_line, weight_lb, muscle_groups, closed_at
 			   FROM daily_summaries WHERE user_id = $1 AND date = ANY($2::date[])`,
 			[userId, dates]
 		);
@@ -213,13 +194,12 @@ export function dayRouter(pool: pg.Pool, readings: DayReadings): Router {
 			else days.push(rowFromView(await computeDay(pool, { userId, date, tzOffsetMin, now })));
 		}
 
-		// "−2,900 of −3,500 this week": Σ(TDEE + earned − eaten), positive = a deficit.
-		const balances = days.map((day) => day.balance).filter((value): value is number => value != null);
+		const earned = days.map((day) => day.earned).filter((value): value is number => value != null);
 		res.json({
 			end,
 			start: dates[0] ?? end,
 			days,
-			weekly_deficit: balances.length === 0 ? null : balances.reduce((a, b) => a + b, 0),
+			weekly_earned: earned.length === 0 ? null : earned.reduce((a, b) => a + b, 0),
 			served: days.filter((day) => day.verdict === "served").length,
 			judged: days.filter((day) => day.verdict === "served" || day.verdict === "missed").length,
 		});
@@ -250,8 +230,7 @@ export function dayRouter(pool: pg.Pool, readings: DayReadings): Router {
 		}
 
 		const { rows: summaries } = await pool.query<SummaryRow>(
-			`SELECT date, eaten, earned, allowance, tdee, status, verdict, in_short, summary_line,
-			        meal_count, weight_lb, muscle_groups, closed_at
+			`SELECT date, earned, verdict, in_short, summary_line, weight_lb, muscle_groups, closed_at
 			   FROM daily_summaries
 			  WHERE user_id = $1 AND date < $2::date AND date < $3::date
 			  ORDER BY date DESC LIMIT $4`,

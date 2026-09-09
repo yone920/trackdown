@@ -18,8 +18,6 @@ export type CardSpec = {
   sub?: string | null;
   chart?: MetricChart;
   valueColor?: string;
-  /** Full width rather than half of a two-up row. */
-  full?: boolean;
 };
 
 export const MUSCLE_GROUPS = [
@@ -43,7 +41,6 @@ const PUSH_PULL_LEGS: { label: string; muscles: string[] }[] = [
 ];
 
 const round = (n: number) => Math.round(n);
-const kcal = (n: number) => round(n).toLocaleString('en-US');
 
 function metric(goal: GoalWithProgress | null | undefined, measure: string): MetricProgress | null {
   return goal?.progress?.metrics?.find((m) => m.measure === measure) ?? null;
@@ -80,27 +77,6 @@ export type CardsInput = {
 // The shared cards
 // ---------------------------------------------------------------------------
 
-/** "1,450 eaten · 650 left" against today's allowance (concept-v2 §Calories). */
-function caloriesLeft(day: DayView, judge: boolean): CardSpec | null {
-  if (day.allowance == null || day.remaining == null) return null;
-  const over = day.remaining < 0;
-  return {
-    key: 'calories-left',
-    full: true,
-    eyebrow: over ? 'Calories over' : 'Calories left',
-    value: kcal(Math.abs(day.remaining)),
-    unit: 'kcal',
-    sub: `${kcal(day.eaten)} eaten of ${kcal(day.allowance)}${day.earned > 0 ? ` · ${kcal(day.earned)} earned` : ''}`,
-    valueColor: judge ? (over ? C.accent : C.ink) : C.ink,
-    chart: {
-      kind: 'ring',
-      fraction: day.allowance > 0 ? day.eaten / day.allowance : 0,
-      color: judge ? (over ? C.accent : C.good) : C.mute,
-      caption: `${Math.round(day.allowance > 0 ? (day.eaten / day.allowance) * 100 : 0)}%`,
-    },
-  };
-}
-
 function weightTrend(day: DayView, goal: GoalWithProgress | null | undefined): CardSpec | null {
   const measure = metric(goal, 'body_weight');
   const current = day.weight.avg_7d ?? day.weight.day ?? measure?.current ?? null;
@@ -117,25 +93,6 @@ function weightTrend(day: DayView, goal: GoalWithProgress | null | undefined): C
         ? null
         : `${trend > 0 ? '+' : ''}${(Math.round(trend * 10) / 10).toFixed(1)} lb / week`,
     chart: series.length > 1 ? { kind: 'sparkline', points: series, target: measure?.target ?? null } : undefined,
-  };
-}
-
-/** Seven dots: a day is filled when it ran a deficit (concept-v2 §Calories: the week). */
-function weeklyDeficit(week: WeekView | null | undefined): CardSpec | null {
-  if (!week || week.weekly_deficit == null) return null;
-  return {
-    key: 'weekly-deficit',
-    eyebrow: 'This week',
-    value: `${week.weekly_deficit >= 0 ? '−' : '+'}${kcal(Math.abs(week.weekly_deficit))}`,
-    unit: 'kcal',
-    sub: `${week.served} of ${week.days.length} days served`,
-    chart: {
-      kind: 'segments',
-      segments: week.days.map((row) => ({
-        filled: row.balance != null && row.balance > 0,
-        color: C.good,
-      })),
-    },
   };
 }
 
@@ -175,22 +132,6 @@ function workoutsThisWeek(week: WeekView | null | undefined, judge: boolean): Ca
         color: judge ? C.accent : C.mute,
       })),
     },
-  };
-}
-
-function proteinCard(day: DayView): CardSpec | null {
-  const line = day.macros.protein_g;
-  if (line.eaten == null) return null;
-  return {
-    key: 'protein',
-    eyebrow: 'Protein',
-    value: `${round(line.eaten)}`,
-    unit: line.target == null ? 'g' : `of ${round(line.target)} g`,
-    sub: line.note,
-    chart:
-      line.target == null || line.target <= 0
-        ? undefined
-        : { kind: 'bar', fraction: line.eaten / line.target, color: C.good },
   };
 }
 
@@ -275,20 +216,22 @@ function pushPullLegs(day: DayView, week: WeekView | null | undefined): CardSpec
 // ---------------------------------------------------------------------------
 
 /**
- * The primary goal decides the cards. `null` — and `maintain` / `custom`, which have no
- * headline number of their own — get the no-judgement set: consistency and coverage in
- * `mute`, no green and no orange (concept-v2 §Goals).
+ * The primary goal decides the cards. `null` — and `custom`, which has no headline number
+ * of its own — get the no-judgement set: consistency and coverage in `mute`, no green and
+ * no orange (concept-v2 §Goals).
  */
 export function todayCards({ day, week, goal }: CardsInput): CardSpec[] {
   const kind: GoalKind | null = goal?.kind ?? null;
-  const judge = kind !== null && kind !== 'maintain' && kind !== 'custom';
+  const judge = kind !== null && kind !== 'custom';
 
   const cards: (CardSpec | null)[] = (() => {
     switch (kind) {
-      case 'lose_fat':
-        return [caloriesLeft(day, true), weeklyDeficit(week), weightTrend(day, goal)];
       case 'gain_muscle':
-        return [proteinCard(day), fromMeasure(goal, 'weekly_sets', 'Sets this week', 'sets'), coverageStrip(day, week, true)];
+        return [
+          fromMeasure(goal, 'weekly_sets', 'Sets this week', 'sets'),
+          coverageStrip(day, week, true),
+          weightTrend(day, goal),
+        ];
       case 'improve_endurance':
         return [
           fromMeasure(goal, 'weekly_cardio_min', 'Cardio this week', 'min'),

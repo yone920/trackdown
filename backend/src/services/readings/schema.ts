@@ -16,7 +16,7 @@ import { z } from "zod";
 // measured decision rather than a production 400.
 
 /** What the single next action asks the user to do. Each maps to a screen in the app. */
-export const ACTION_KINDS = ["log_meal", "weigh_in", "coach", "workout"] as const;
+export const ACTION_KINDS = ["weigh_in", "coach", "workout"] as const;
 export type ActionKind = (typeof ACTION_KINDS)[number];
 
 const ActionSchema = z.object({
@@ -67,24 +67,7 @@ export const DossierSchema = z.object({
 });
 export type Dossier = z.infer<typeof DossierSchema>;
 
-export const EATING_DIRECTION_SCHEMA_NAME = "eating_direction_reading";
-
-/**
- * The Eat page's one written layer: which way to steer the NUTRIENTS, given a week of
- * computed averages against their targets.
- *
- * One field, bounded short, and the bound is doing real work — this is a paragraph
- * somebody reads before deciding what to put on a plate, not a meal plan. The user was
- * plain about the line it must not cross: "it doesn't have to be a dish... general
- * direction of nutrients". Dishes are the model's favourite way to be useless here, and
- * the prompt forbids them; the ceiling is what stops it smuggling three of them in anyway.
- */
-export const EatingDirectionSchema = z.object({
-	text: z.string().trim().min(1).max(600),
-});
-export type EatingDirection = z.infer<typeof EatingDirectionSchema>;
-
-export type ReadingKind = "right_now" | "in_short" | "eating_direction";
+export type ReadingKind = "right_now" | "in_short";
 
 export interface Reading {
 	kind: ReadingKind;

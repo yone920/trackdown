@@ -4,7 +4,6 @@ import React from 'react';
 
 import { ApiError } from '@/lib/api';
 import { RECOVERY_DELAYS_MS } from '@/lib/coach-recovery';
-import { EatGuidance } from '@/components/eat-guidance';
 import { PlanSection as Coach } from '@/components/plan-section';
 import type { CoachBrief, CoachNext } from '@/lib/types';
 import { makeDay } from './fixtures';
@@ -133,19 +132,6 @@ function renderCoach() {
   return render(
     <QueryClientProvider client={client}>
       <Coach />
-    </QueryClientProvider>,
-  );
-}
-
-/**
- * The eating half of the brief. It moved out of the plan and in beside the meals on Today
- * (user decision 2026-09-01) — same brief, same arithmetic, drawn where eating is.
- */
-function renderEat() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  return render(
-    <QueryClientProvider client={client}>
-      <EatGuidance />
     </QueryClientProvider>,
   );
 }
@@ -448,58 +434,6 @@ it('draws the stretch finisher under the session', async () => {
   expect(await screen.findByTestId('coach-finisher')).toBeTruthy();
   expect(screen.getByText('Lat Stretch')).toBeTruthy();
   expect(screen.getByText('2 min · Both sides.')).toBeTruthy();
-});
-
-it('draws the Eat card from what is LEFT of the day, not from the brief target', async () => {
-  const answer = next();
-  answer.brief.nutrition_now = {
-    remaining_kcal: 412,
-    eaten_kcal: 1842,
-    allowance_kcal: 2254,
-    remaining_protein_g: 38,
-    eaten_protein_g: 122,
-    protein_target_g: 160,
-    past_target: false,
-    line: '412 kcal left · 38 g of protein to go.',
-  };
-  mockApi.mockResolvedValue(answer);
-  renderEat();
-
-  expect(await screen.findByTestId('eat-remaining')).toHaveTextContent('412');
-  expect(screen.getByText('kcal left')).toBeTruthy();
-  expect(screen.getByTestId('eat-line')).toHaveTextContent(/38 g of protein to go/);
-  expect(screen.getByText('1842 eaten of 2254 · ≤ 250 g carbs')).toBeTruthy();
-  // The day's target is not what the card counts down.
-  expect(screen.queryByText('2254')).toBeNull();
-});
-
-it('states a day past its allowance flatly, with nothing to do about it', async () => {
-  const answer = next();
-  answer.brief.nutrition_now = {
-    remaining_kcal: -320,
-    eaten_kcal: 2574,
-    allowance_kcal: 2254,
-    remaining_protein_g: 0,
-    eaten_protein_g: 170,
-    protein_target_g: 160,
-    past_target: true,
-    line: "320 kcal over today's allowance · protein is there.",
-  };
-  mockApi.mockResolvedValue(answer);
-  renderEat();
-
-  expect(await screen.findByTestId('eat-remaining')).toHaveTextContent('320');
-  expect(screen.getByText('kcal over')).toBeTruthy();
-  expect(screen.getByTestId('eat-line')).toHaveTextContent(/over today's allowance/);
-});
-
-it('still draws an Eat card from an older server that sends no live numbers', async () => {
-  mockApi.mockResolvedValue(next());
-  renderEat();
-
-  expect(await screen.findByTestId('eat-remaining')).toHaveTextContent('2254');
-  expect(screen.getByText('kcal')).toBeTruthy();
-  expect(screen.getByTestId('eat-line')).toHaveTextContent(/160 g protein/);
 });
 
 // ── Opening the page never generates ─────────────────────────────────────────────────
@@ -814,7 +748,7 @@ describe('the merged training section', () => {
     mockApi.mockImplementation((path: string) => {
       if (path.startsWith('/api/day/')) {
         return Promise.resolve(
-          makeDay({ earned, items: { meals: [], weights: [], activities: activities as never } }),
+          makeDay({ earned, items: { weights: [], activities: activities as never } }),
         );
       }
       return Promise.resolve(answer);
@@ -1166,7 +1100,6 @@ describe('the Why card, before and during a session', () => {
         return Promise.resolve(
           makeDay({
             items: {
-              meals: [],
               weights: [],
               activities: [
                 {

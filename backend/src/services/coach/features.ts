@@ -218,18 +218,10 @@ export interface CardioFeature {
 
 export interface AdherenceWindow {
 	days: number;
-	/** Days inside the window with a meal, an activity or a weigh-in. */
+	/** Days inside the window with an activity or a weigh-in. */
 	logged_days: number;
 	/** Days with nothing at all — the gap the nudge is allowed to mention. */
 	unlogged_days: IsoDate[];
-	kcal_avg: number | null;
-	kcal_target: number | null;
-	/** eaten − target, averaged over the days that were logged. Positive = over. */
-	kcal_delta_avg: number | null;
-	protein_avg: number | null;
-	protein_target: number | null;
-	carbs_avg: number | null;
-	carbs_max_g: number | null;
 	training_days: number;
 }
 
@@ -248,12 +240,8 @@ export interface DataQuality {
 	low_confidence_items: { date: IsoDate; exercise: string; reason: string }[];
 	/** Days in the last week with nothing logged at all. */
 	unlogged_days: IsoDate[];
-	/** True when the calorie target could not be computed — advice about eating is guesswork. */
-	no_calorie_target: boolean;
 	/** True when the user has not weighed themselves in WEIGH_IN_DUE_DAYS. */
 	weigh_in_due: boolean;
-	/** Meals with calories but no protein figure; the macro advice is thinner for them. */
-	meals_missing_macros: number;
 }
 
 export interface CoachFeatures {
@@ -296,8 +284,6 @@ export interface CoachFeaturesInput {
 	 * when neither does, and `target_source` says which of the three happened.
 	 */
 	cardioTargetStatedMin?: number | null;
-	/** What the day's eating is measured against (services/tdee.ts). */
-	targets?: { kcal: number | null; protein_g: number | null; carbs_max_g: number | null } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -625,37 +611,18 @@ export function cardioFeature(
 export function adherenceWindow(input: CoachFeaturesInput, days: number): AdherenceWindow {
 	const { facts } = input;
 	const dates = windowDates(facts.date, days);
-	const meals = facts.meals.filter((meal) => dates.includes(meal.date));
 	const activities = facts.activities.filter((activity) => dates.includes(activity.date));
 	const weights = facts.weights.filter((weight) => dates.includes(weight.date));
 
 	const loggedDates = new Set<IsoDate>([
-		...meals.map((meal) => meal.date),
 		...activities.map((activity) => activity.date),
 		...weights.map((weight) => weight.date),
 	]);
-
-	// Per day, so a three-meal day and a one-meal day are not averaged as six meals.
-	const perDay = (key: "kcal" | "protein_g" | "carbs_g"): number[] =>
-		[...new Set(meals.map((meal) => meal.date))].map((date) =>
-			meals.filter((meal) => meal.date === date).reduce((total, meal) => total + (meal[key] ?? 0), 0)
-		);
-
-	const kcal = perDay("kcal");
-	const kcalAvg = mean(kcal);
-	const kcalTarget = input.targets?.kcal ?? null;
 
 	return {
 		days,
 		logged_days: loggedDates.size,
 		unlogged_days: dates.filter((date) => !loggedDates.has(date)),
-		kcal_avg: kcalAvg == null ? null : Math.round(kcalAvg),
-		kcal_target: kcalTarget,
-		kcal_delta_avg: kcalAvg == null || kcalTarget == null ? null : Math.round(kcalAvg - kcalTarget),
-		protein_avg: mean(perDay("protein_g")) == null ? null : Math.round(mean(perDay("protein_g")) as number),
-		protein_target: input.targets?.protein_g ?? null,
-		carbs_avg: mean(perDay("carbs_g")) == null ? null : Math.round(mean(perDay("carbs_g")) as number),
-		carbs_max_g: input.targets?.carbs_max_g ?? null,
 		training_days: new Set(activities.map((activity) => activity.date)).size,
 	};
 }
@@ -701,16 +668,10 @@ export function dataQuality(input: CoachFeaturesInput, week: AdherenceWindow, we
 			reason: activity.source === "fused" ? "read from a photo, never confirmed" : "logged at low confidence",
 		}));
 
-	const mealsMissingMacros = facts.meals.filter(
-		(meal) => withinWindow(meal.date, facts.date, WEEK_DAYS) && meal.kcal != null && meal.protein_g == null
-	).length;
-
 	return {
 		low_confidence_items: lowConfidence,
 		unlogged_days: week.unlogged_days,
-		no_calorie_target: (input.targets?.kcal ?? null) == null,
 		weigh_in_due: weight.days_since_weigh_in == null || weight.days_since_weigh_in >= WEIGH_IN_DUE_DAYS,
-		meals_missing_macros: mealsMissingMacros,
 	};
 }
 

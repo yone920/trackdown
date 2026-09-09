@@ -35,9 +35,9 @@ import {
 // POST /api/log/confirm's half of the pipeline: take the preview the user just approved
 // (with whatever they edited) and write it, once, in one transaction.
 //
-// One sentence can be several things — a meal, a run and a weigh-in — so the body carries
+// One sentence can be several things — a run and a weigh-in — so the body carries
 // `results`, a list, and every part of it is written inside the SAME transaction. One Save
-// writes it all or none of it (concept-v2 §One input mechanism): a meal that saved while
+// writes it all or none of it (concept-v2 §One input mechanism): a workout that saved while
 // the weigh-in beside it failed is a day the user has to go and repair by hand.
 //
 // Idempotent by the client's uuid, still one per Save however many parts it holds. The
@@ -55,7 +55,7 @@ export const MAX_CORRECTIONS = 20;
 /** One told change, as `/api/log/analyze` computed it (services/corrections.ts). */
 const CorrectionInput = z.object({
 	part: z.number().int().min(0).max(MAX_PARTS - 1),
-	/** Which item of an activities part; null (or absent) for a meal or a weigh-in. */
+	/** Which item of an activities part; null (or absent) for a weigh-in. */
 	item: z.number().int().min(0).max(19).nullable().default(null),
 	instruction: z.string().trim().min(1).max(500),
 	changes: z.array(FieldChangeSchema).min(1).max(40),
@@ -78,8 +78,8 @@ export const ConfirmBody = z
 		/** Evidence created by /api/log/analyze (the photos) — linked to what it became. */
 		evidence_ids: z.array(z.uuid()).max(8).default([]),
 		/**
-		 * Which part each evidence id belongs to, aligned with `evidence_ids`: the plate to
-		 * the meal, the machine to the exercise. Missing or short means part 0, which is the
+		 * Which part each evidence id belongs to, aligned with `evidence_ids`: the machine to
+		 * the exercise. Missing or short means part 0, which is the
 		 * only answer there is for a single-part log.
 		 */
 		evidence_parts: z.array(z.number().int().min(0)).max(8).default([]),
@@ -129,7 +129,6 @@ export function confirmParts(body: ConfirmBody): FusionResult[] {
 export interface SavedPart {
 	kind: FusionKind;
 	activity_ids: string[];
-	meal_id: string | null;
 	weight_id: string | null;
 	goal_id: string | null;
 	evidence_ids: string[];
@@ -142,10 +141,6 @@ export interface SavedLog {
 	/** What each part became, in the order the parts were sent. */
 	parts: SavedPart[];
 	activities: Row[];
-	/** The first meal saved; `meals` holds them all. */
-	meal: Row | null;
-	meals: Row[];
-	meal_items: Row[];
 	/** The first weigh-in saved; `weights` holds them all. */
 	weight: Row | null;
 	weights: Row[];
@@ -172,9 +167,6 @@ function emptySaved(kind: FusionKind): SavedLog {
 		kinds: [],
 		parts: [],
 		activities: [],
-		meal: null,
-		meals: [],
-		meal_items: [],
 		weight: null,
 		weights: [],
 		goal: null,
@@ -186,49 +178,11 @@ function emptySaved(kind: FusionKind): SavedLog {
 }
 
 function emptyPart(kind: FusionKind): SavedPart {
-	return { kind, activity_ids: [], meal_id: null, weight_id: null, goal_id: null, evidence_ids: [] };
-}
-
-async function insertMealItems(client: pg.PoolClient, mealId: string, items: MealItemInput[]): Promise<Row[]> {
-	if (items.length === 0) return [];
-	const params: unknown[] = [];
-	const tuples = items.map((item) => {
-		params.push(
-			mealId,
-			item.name,
-			item.kcal ?? null,
-			item.protein_g ?? null,
-			item.carbs_g ?? null,
-			item.fat_g ?? null,
-			item.fiber_g ?? null,
-			item.serving_amount ?? null
-		);
-		const n = params.length;
-		return `($${n - 7}, $${n - 6}, $${n - 5}, $${n - 4}, $${n - 3}, $${n - 2}, $${n - 1}, $${n})`;
-	});
-	const { rows } = await client.query(
-		`INSERT INTO meal_items (meal_id, name, kcal, protein_g, carbs_g, fat_g, fiber_g, serving_amount)
-		 VALUES ${tuples.join(", ")} RETURNING *`,
-		params
-	);
-	return rows;
-}
-
-interface MealItemInput {
-	name: string;
-	kcal: number | null;
-	protein_g: number | null;
-	carbs_g: number | null;
-	fat_g: number | null;
-	fiber_g: number | null;
-	serving_amount: string | null;
+	return { kind, activity_ids: [], weight_id: null, goal_id: null, evidence_ids: [] };
 }
 
 /** Plan columns a constraint/preference may set, and their profile column names. */
 const PROFILE_FIELD_COLUMNS = [
-	"diet_style",
-	"protein_g",
-	"carbs_max_g",
 	"training_days",
 	// How long a normal session is (migration 0014). A plan field like the rest: stated by
 	// talking, dated in stated_at, and read by the coach's session sizing.
@@ -238,7 +192,6 @@ const PROFILE_FIELD_COLUMNS = [
 	"cardio_minutes_target",
 	"environment",
 	"equipment",
-	"eatback",
 	// The training background (migration 0011). `reference_loads` is not here: it is a
 	// jsonb array and it merges rather than replaces — see mergeReferenceLoads below.
 	"experience",
@@ -388,7 +341,7 @@ export function evidenceByPart(
 
 /**
  * Write one confirmed preview — every part of it. Runs inside a caller's transaction, so
- * the meal, the run and the weigh-in in one sentence are all-or-nothing together with the
+ * the run and the weigh-in in one sentence are all-or-nothing together with the
  * evidence links and the idempotency ledger.
  */
 export async function saveConfirmed(
@@ -434,11 +387,9 @@ async function saveCorrections(
 				? activityId
 					? { activityId }
 					: null
-				: part.kind === "meal" && part.meal_id
-					? { mealId: part.meal_id }
-					: part.kind === "weight" && part.weight_id
-						? { weightId: part.weight_id }
-						: null;
+				: part.kind === "weight" && part.weight_id
+					? { weightId: part.weight_id }
+					: null;
 		if (!owner) continue;
 		await recordCorrection(client, userId, owner, correction.instruction, correction.changes);
 	}
@@ -504,34 +455,6 @@ async function savePart(
 					activity_id: rows[0]?.id as string | undefined,
 				})
 			);
-			break;
-		}
-
-		case "meal": {
-			const rows = await insertEntries(client, userId, "meals", [
-				{
-					description: result.description,
-					kcal: result.kcal ?? 0,
-					protein_g: result.protein_g,
-					carbs_g: result.carbs_g,
-					fat_g: result.fat_g,
-					fiber_g: result.fiber_g,
-					...(loggedAt ? { logged_at: loggedAt } : {}),
-				},
-			]);
-			const meal = rows[0] as Row;
-			saved.meals.push(meal);
-			saved.meal ??= meal;
-			const mealId = meal.id as string;
-			part.meal_id = mealId;
-			saved.meal_items.push(...(await insertMealItems(client, mealId, result.items)));
-			if (result.meal_type) {
-				// meal_type is a meals-only column, so it is not part of insertEntries'
-				// shared shape; one small update beats a special case in that helper.
-				await client.query(`UPDATE meals SET meal_type = $2 WHERE id = $1`, [mealId, result.meal_type]);
-				meal.meal_type = result.meal_type;
-			}
-			keep(await linkEvidence(client, userId, evidenceIds, { meal_id: mealId }));
 			break;
 		}
 

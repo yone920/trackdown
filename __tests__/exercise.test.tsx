@@ -206,7 +206,6 @@ describe('opening it from a screen', () => {
               is_today: false,
               muscle_summary: [{ muscle: 'chest', sets: 6, exercises: ['Bench Press'] }],
               items: {
-                meals: [],
                 weights: [],
                 activities: [
                   {

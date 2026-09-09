@@ -6,7 +6,6 @@ import { loadFacts } from "../goals/store.js";
 import { listGoals } from "../goals/store.js";
 import { addDays, localDay, type IsoDate } from "../localTime.js";
 import { currentPlaceSummary } from "../places.js";
-import { loadTargets } from "../profile.js";
 import { buildDossierPrompt, buildDossierSheet, type DossierInputs } from "./prompt.js";
 import { DOSSIER_SCHEMA_NAME, DossierSchema } from "./schema.js";
 
@@ -64,10 +63,8 @@ interface PlanRow {
 	training_days: number | null;
 	session_minutes: number | null;
 	cardio_minutes_target: number | null;
-	diet_style: string | null;
 	environment: string | null;
 	equipment: string[] | null;
-	eatback: string | null;
 	experience: string | null;
 	background: string | null;
 	reference_loads: { exercise: string; load_lb: number; reps: number | null }[] | null;
@@ -78,9 +75,9 @@ interface PlanRow {
 
 /**
  * Everything the dossier is written from, in one pass. Nothing here is computed twice: the
- * plan is the profile row, the targets are `loadTargets`, the goals are the goals store the
- * Progress tab reads, and the observed half is `computeFeatures` — the same object the coach
- * and the training board are built on.
+ * plan is the profile row, the goals are the goals store the Progress tab reads, and the
+ * observed half is `computeFeatures` — the same object the coach and the training board are
+ * built on.
  */
 export async function loadDossierInputs(
 	db: Queryable,
@@ -92,8 +89,8 @@ export async function loadDossierInputs(
 	const plan =
 		(
 			await db.query<PlanRow>(
-				`SELECT training_days, session_minutes, cardio_minutes_target, diet_style, environment,
-				        equipment, eatback, experience, background, reference_loads, constraints,
+				`SELECT training_days, session_minutes, cardio_minutes_target, environment,
+				        equipment, experience, background, reference_loads, constraints,
 				        preferences, stated_at
 				   FROM profiles WHERE id = $1`,
 				[userId]
@@ -101,7 +98,6 @@ export async function loadDossierInputs(
 		).rows[0] ?? null;
 
 	const facts = await loadFacts(db, userId, { date, from: addDays(date, -(WINDOW_DAYS - 1)), tzOffsetMin });
-	const targets = await loadTargets(db, userId, date, tzOffsetMin);
 	const goalsView = await listGoals(db, userId, { tzOffsetMin, now });
 	const place = await currentPlaceSummary(db, userId);
 
@@ -117,7 +113,6 @@ export async function loadDossierInputs(
 		trainingDaysTarget: plan?.training_days ?? null,
 		cardioTargetMin,
 		cardioTargetStatedMin: plan?.cardio_minutes_target ?? null,
-		targets: { kcal: targets.target, protein_g: targets.macros?.protein_g ?? null, carbs_max_g: null },
 	});
 
 	return {
@@ -126,10 +121,8 @@ export async function loadDossierInputs(
 			training_days: plan?.training_days ?? null,
 			session_minutes: plan?.session_minutes ?? null,
 			cardio_minutes_target: plan?.cardio_minutes_target ?? null,
-			diet_style: plan?.diet_style ?? null,
 			environment: plan?.environment ?? null,
 			equipment: Array.isArray(plan?.equipment) ? plan.equipment : [],
-			eatback: plan?.eatback ?? null,
 			experience: plan?.experience ?? null,
 			background: plan?.background ?? null,
 			reference_loads: Array.isArray(plan?.reference_loads) ? plan.reference_loads : [],
@@ -137,15 +130,6 @@ export async function loadDossierInputs(
 			preferences: Array.isArray(plan?.preferences) ? plan.preferences : [],
 			place: place ? { name: place.name, kind: place.kind, equipment_count: place.equipment_count } : null,
 			stated_at: (plan?.stated_at ?? {}) as Record<string, string>,
-		},
-		targets: {
-			tdee: targets.tdee,
-			eat_target: targets.target,
-			protein_g: targets.macros?.protein_g ?? null,
-			carbs_g: targets.macros?.carbs_g ?? null,
-			source: targets.source,
-			eatback: (plan?.eatback as string) ?? "half",
-			weight_lb: targets.weight_lb,
 		},
 		goals: goalsView.active.map((goal) => ({
 			title: goal.title,

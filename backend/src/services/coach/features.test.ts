@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activity, daysAgo, facts, meal, TODAY, weight } from "../../test/fixtures/facts.js";
+import { activity, daysAgo, facts, TODAY, weight } from "../../test/fixtures/facts.js";
 import {
 	adherenceWindow,
 	cardioFeature,
@@ -266,22 +266,15 @@ describe("cardio", () => {
 describe("adherence over 1, 3 and 7 days", () => {
 	const input = {
 		facts: facts({
-			meals: [
-				meal(TODAY, { kcal: 700, protein_g: 50, carbs_g: 60 }),
-				meal(TODAY, { kcal: 500, protein_g: 30, carbs_g: 40 }),
-				meal(daysAgo(1), { kcal: 2400, protein_g: 150, carbs_g: 260 }),
-				meal(daysAgo(5), { kcal: 2000, protein_g: 120, carbs_g: 200 }),
-			],
-			activities: [bench(daysAgo(1))],
+			activities: [bench(daysAgo(1)), bench(daysAgo(5))],
 			weights: [weight(TODAY, 193.4)],
 		}),
-		targets: { kcal: 2250, protein_g: 160, carbs_max_g: 250 },
 	};
 
-	it("averages per day, not per meal", () => {
-		expect(adherenceWindow(input, 1)).toMatchObject({ days: 1, logged_days: 1, kcal_avg: 1200, kcal_delta_avg: -1050 });
-		// Two logged days in the last three: 1,200 and 2,400.
-		expect(adherenceWindow(input, 3)).toMatchObject({ logged_days: 2, kcal_avg: 1800, training_days: 1 });
+	it("counts logged and training days inside the window", () => {
+		expect(adherenceWindow(input, 1)).toMatchObject({ days: 1, logged_days: 1, training_days: 0 });
+		// Two logged days in the last three: today's weigh-in and yesterday's bench.
+		expect(adherenceWindow(input, 3)).toMatchObject({ logged_days: 2, training_days: 1 });
 	});
 
 	it("names the days with nothing logged", () => {
@@ -290,12 +283,6 @@ describe("adherence over 1, 3 and 7 days", () => {
 		expect(week.unlogged_days).toHaveLength(4);
 		expect(week.unlogged_days).toContain(daysAgo(2));
 		expect(week.unlogged_days).not.toContain(daysAgo(5));
-	});
-
-	it("has no calorie delta without a target", () => {
-		const bare = adherenceWindow({ facts: input.facts }, 7);
-		expect(bare.kcal_target).toBeNull();
-		expect(bare.kcal_delta_avg).toBeNull();
 	});
 });
 
@@ -331,30 +318,19 @@ describe("data quality — what the coach must discount", () => {
 			facts: facts({
 				activities: [bench(daysAgo(1), { confidence: "low", source: "fused" }), pulldown(daysAgo(1), { confidence: "high" })],
 				weights: [weight(daysAgo(4), 194)],
-				meals: [meal(daysAgo(1), { kcal: 600, protein_g: null })],
 			}),
-			targets: { kcal: 2250, protein_g: 160, carbs_max_g: null },
 		});
 
 		expect(features.data_quality.low_confidence_items).toEqual([
 			{ date: daysAgo(1), exercise: "Bench Press", reason: "read from a photo, never confirmed" },
 		]);
 		expect(features.data_quality.weigh_in_due).toBe(true);
-		expect(features.data_quality.meals_missing_macros).toBe(1);
-		expect(features.data_quality.no_calorie_target).toBe(false);
 		expect(features.data_quality.unlogged_days.length).toBeGreaterThan(0);
-	});
-
-	it("says so when there is no calorie target to advise against", () => {
-		const features = computeFeatures({ facts: facts(), targets: { kcal: null, protein_g: null, carbs_max_g: null } });
-		expect(features.data_quality.no_calorie_target).toBe(true);
-		expect(features.data_quality.weigh_in_due).toBe(true);
 	});
 
 	it("does not flag a confirmed item or a fresh weigh-in", () => {
 		const features = computeFeatures({
 			facts: facts({ activities: [bench(TODAY, { confidence: "high" })], weights: [weight(TODAY, 193)] }),
-			targets: { kcal: 2250, protein_g: 160, carbs_max_g: null },
 		});
 		expect(features.data_quality.low_confidence_items).toHaveLength(0);
 		expect(features.data_quality.weigh_in_due).toBe(false);

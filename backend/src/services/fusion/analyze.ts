@@ -1,12 +1,10 @@
 import { CATEGORIES } from "../../db/exercises.js";
 import type { ImageMediaType, LlmContent, LlmPort } from "../../ports/llm.js";
-import { checkMeal, discrepancyLine } from "./arithmetic.js";
 import type { FusionContext } from "./context.js";
 import { suggestRefinement } from "./refine.js";
 import {
 	buildFusionSystemParts,
 	buildGoalDetailSystemPrompt,
-	buildMealReconcilePrompt,
 	buildPartDetailSystemPrompt,
 	buildPlanFieldsSystemPrompt,
 	buildRevisionSystemPrompt,
@@ -21,8 +19,6 @@ import {
 	FusionRouteOutputSchema,
 	GOAL_DETAIL_SCHEMA_NAME,
 	GoalDetailOutputSchema,
-	MEAL_DETAIL_SCHEMA_NAME,
-	MealDetailOutputSchema,
 	PLAN_FIELDS_SCHEMA_NAME,
 	PlanFieldsOutputSchema,
 	STATEMENT_DETAIL_SCHEMA_NAME,
@@ -39,7 +35,7 @@ import {
 // One log → one call, still, for the one thing people usually log.
 //
 // What changed (Field fixes, mixed input): a log is no longer assumed to be one kind.
-// "ate two eggs, ran 5k, weighed in at 181" is a meal, an activity and a weigh-in, and the
+// "ran 5k, weighed in at 181" is an activity and a weigh-in, and the
 // old pipeline kept whichever the model picked and silently dropped the rest. The routing
 // call now also *segments*: it answers with the first thing said, in full, plus
 // `more_kinds` — the bare list of what else is in there. Each of those is filled in by a
@@ -52,9 +48,9 @@ import {
 // nothing it could not read for itself.
 //
 // Why not a segmenter call in front of everything, as the design first read: it would put
-// a second round trip on the hot path — logging a workout or a meal — to answer a question
+// a second round trip on the hot path — logging a workout — to answer a question
 // that is already the routing decision. Folding it into routing keeps the call counts
-// exactly where they were: one for a single activities / meal / weight / coach context,
+// exactly where they were: one for a single activities / weight / coach context,
 // two for a goal or a constraint. A mixed input costs one more call per extra part, but
 // still only two round trips, because the detail calls are a single Promise.all.
 
@@ -76,8 +72,7 @@ export interface FusionAnalysis {
 	results: FusionResult[];
 	/**
 	 * Which part each photo belongs to: `photoParts[i]` indexes `results`. Same length as
-	 * the photos that went in, so the confirm can link the plate to the meal and the
-	 * machine to the exercise.
+	 * the photos that went in, so the confirm can link the machine to the exercise.
 	 */
 	photoParts: number[];
 }
@@ -204,74 +199,6 @@ export function withRefinements(result: FusionResult, context: FusionContext): F
 }
 
 export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
-	/**
-	 * The arithmetic gate (services/fusion/arithmetic.ts), applied to every meal this
-	 * analyzer produces — at analyze and at revise, on the routed part and on a segment.
-	 *
-	 * A meal whose macros and calories cannot both be true gets exactly ONE automatic re-ask:
-	 * the same meal detail call, the same message, with the discrepancy spelled out in the
-	 * system prompt. If the second answer adds up it is kept and the card says the numbers
-	 * were adjusted. If it does not — or the re-ask fails, or it comes back with the macros
-	 * quietly removed so there is nothing left to check — the reading is presented anyway and
-	 * the confidence is **forced to low**, whatever the model claimed.
-	 *
-	 * Presented anyway, always: the user said what they ate, and refusing to log it because
-	 * we cannot price it is the failure "always log" exists to prevent. What we can honestly
-	 * do is stop calling it high confidence.
-	 */
-	async function gateMeal(
-		result: FusionResult,
-		context: FusionContext,
-		messages: { role: "user"; content: LlmContent[] }[],
-		instruction?: string | null
-	): Promise<FusionResult> {
-		if (result.kind !== "meal") return result;
-		const first = checkMeal(result);
-		if (!first.checked || first.ok) return result;
-
-		let reread: FusionResult = result;
-		try {
-			// The photo claim is the first read's answer and stays it: which photos a part
-			// was read from is not what this call is being asked to reconsider.
-			const { photo_fields, photo_indexes: _claimed, ...meal } = await llm.parseStructured({
-				system: buildMealReconcilePrompt(context, compactPart(result), discrepancyLine(first), instruction),
-				schema: MealDetailOutputSchema,
-				schemaName: MEAL_DETAIL_SCHEMA_NAME,
-				maxTokens: DETAIL_MAX_TOKENS,
-				messages,
-			});
-			reread = toFusionResult({ kind: "meal", ...meal }, { photoFields: photo_fields });
-		} catch {
-			// A failed re-ask is not a failed log. The first reading stands, flagged below.
-			reread = result;
-		}
-
-		const second = checkMeal(reread);
-		const settled = second.checked && second.ok;
-		if (reread.kind !== "meal") return reread;
-		// Which pair of numbers the card should name. A settled re-ask leaves two figures that
-		// AGREE, and a sentence beginning "the numbers didn't add up" can only be read as
-		// nonsense when it then prints "876 kcal against 876 from the macros" — so what it
-		// reports is the disagreement that fired the gate. A flagged one still disagrees, and
-		// there the numbers on the card are the ones worth naming.
-		const shown = settled ? first : second;
-		return {
-			...reread,
-			// The whole point of the gate: a claim of "high" about numbers that do not add up
-			// is the one thing the user cannot check for themselves at a glance.
-			confidence: settled ? reread.confidence : "low",
-			consistency: {
-				// "restated" is a settled gate whose discrepancy the USER created by correcting
-				// the meal. Nothing went wrong there and the card must not imply it did: the app
-				// was told a number and moved the rest to it, which is the feature working. Only
-				// a disagreement the app found on its own is worth a warning.
-				outcome: settled ? (instruction?.trim() ? "restated" : "adjusted") : "flagged",
-				stated_kcal: shown.stated_kcal ?? reread.kcal,
-				implied_kcal: shown.implied_kcal,
-			},
-		};
-	}
-
 	/** The follow-up a routed record needs, if it needs one. */
 	async function detailFor(
 		route: FusionRoute,
@@ -313,10 +240,7 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 		kind: SegmentKind,
 		context: FusionContext,
 		messages: { role: "user"; content: LlmContent[] }[],
-		system: string = buildPartDetailSystemPrompt(context, kind),
-		// Set only on the revise path, where the gate must not overturn a number the user
-		// has just stated (services/fusion/prompt.ts §buildMealReconcilePrompt).
-		instruction?: string | null
+		system: string = buildPartDetailSystemPrompt(context, kind)
 	): Promise<{ result: FusionResult; photos: number[] }> {
 		const ask = <Output>(schema: Parameters<typeof llm.parseStructured<Output>>[0]["schema"], schemaName: string) =>
 			llm.parseStructured({ system, schema, schemaName, maxTokens: DETAIL_MAX_TOKENS, messages });
@@ -329,19 +253,6 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 				);
 				return {
 					result: toFusionResult({ kind: "activities", items }, { photoFields: photo_fields }),
-					photos: photo_indexes,
-				};
-			}
-			case "meal": {
-				const { photo_fields, photo_indexes, ...meal } = await ask(MealDetailOutputSchema, MEAL_DETAIL_SCHEMA_NAME);
-				return {
-					// Every meal goes through the arithmetic gate, wherever it was read.
-					result: await gateMeal(
-						toFusionResult({ kind: "meal", ...meal }, { photoFields: photo_fields }),
-						context,
-						messages,
-						instruction
-					),
 					photos: photo_indexes,
 				};
 			}
@@ -427,15 +338,8 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 			// more than a plain log, not three.
 			const parts = dropWeightStatedWithGoal(
 				await Promise.all([
-					detailFor(answer.result, context, messages).then(async (detail) => ({
-						// The routed part's meal fields came off the ROUTING call, which never
-						// reaches fillSegment — so the gate runs here too, and its re-ask is
-						// the meal detail call the routing path otherwise never makes.
-						result: await gateMeal(
-							toFusionResult(answer.result, { ...detail, photoFields: answer.photo_fields }),
-							context,
-							messages
-						),
+					detailFor(answer.result, context, messages).then((detail) => ({
+						result: toFusionResult(answer.result, { ...detail, photoFields: answer.photo_fields }),
 						photos: [] as number[],
 					})),
 					...segments.map((kind) => fillSegment(kind, context, messages)),
@@ -472,7 +376,7 @@ export function createFusionAnalyzer(llm: LlmPort): FusionAnalyzer {
 					const result =
 						previous.kind === "activities"
 							? await reviseActivities(previous, context, messages, system)
-							: (await fillSegment(kind, context, messages, system, said)).result;
+							: (await fillSegment(kind, context, messages, system)).result;
 					return withRefinements(carryForward(previous, result), context);
 				})
 			);

@@ -17,17 +17,17 @@ import { RIGHT_NOW_SCHEMA_NAME } from "../services/readings/schema.js";
 
 // npm run seed-demo -- <email> [--goal fat_loss|muscle|none] [--tz <minutes>] [--password <password>]
 //
-// Four days of realistic history for one account: a fat-loss goal, a profile the calorie
-// model can work from, three closed days and today half-lived. It exists because the app is
-// unreadable empty — Days, Progress and the closed-day reading all need history before they
-// can be looked at, and typing four days of logs by hand before a demo is not a plan.
+// Four days of realistic history for one account: a weight-loss goal, three closed days and
+// today half-lived. It exists because the app is unreadable empty — Days, Progress and the
+// closed-day reading all need history before they can be looked at, and typing four days of
+// logs by hand before a demo is not a plan.
 //
 // Everything is written through the same services the API uses (insertEntries normalises
 // exercise names against the catalogue, closeDueDays writes the summaries), so what the
 // demo shows is what the app does, not a fixture that resembles it.
 //
-// `--goal` picks the scenario: a fat-loss goal (the default, calorie cards), a muscle goal
-// (protein and sets cards), or `none` — the no-goal state, which is a first-class screen
+// `--goal` picks the scenario: a weight-loss goal (the default, a body-weight target), a
+// muscle goal (a load target), or `none` — the no-goal state, which is a first-class screen
 // (concept-v2 §Goals: with no goal the app runs on a standing intention and shows no
 // judgement colours) and therefore something the morning demo has to be able to show.
 //
@@ -108,23 +108,16 @@ function cannedLlm(): LlmPort {
 									{ name: "Doorway Chest Stretch", minutes: 2, note: null },
 								],
 							},
-							nutrition: {
-								kcal: 2250,
-								protein_g: 175,
-								carbs_max_g: 250,
-								ideas: ["Greek yoghurt and berries", "Chicken, rice and greens"],
-								why: "Yesterday ran high on carbs, so keep the starch to one meal.",
-							},
 							nudge: "Weigh in tomorrow morning — the trend is what the plan is steered by.",
 						}
 					: schemaName === RIGHT_NOW_SCHEMA_NAME
 						? {
-								text: "You are on track for the day with dinner still to come.",
-								next_action: { label: "Log dinner", kind: "log_meal", hint: "Dinner is the only slot left" },
+								text: "You are on track for the day with tonight's session still to come.",
+								next_action: { label: "Log a workout", kind: "workout", hint: "Tonight's session is still open" },
 								actions: [{ label: "Ask the coach", kind: "coach" }],
 							}
 						: {
-								text: "You trained and ate inside your allowance. The bench went up a step and the weigh-in came in lower than last week.",
+								text: "You trained today. The bench went up a step and the weigh-in came in lower than last week.",
 							};
 			// Parsed through the caller's own schema, exactly as a real adapter would: a
 			// stand-in that could return a shape the schema rejects is not a stand-in.
@@ -148,16 +141,6 @@ function at(date: string, clock: string): string {
 	).toISOString();
 }
 
-interface MealSeed {
-	clock: string;
-	description: string;
-	kcal: number;
-	protein_g: number;
-	carbs_g: number;
-	fat_g: number;
-	fiber_g: number;
-}
-
 interface LiftSeed {
 	clock: string;
 	exercise: string;
@@ -171,7 +154,6 @@ interface LiftSeed {
 const DAYS: {
 	offset: number;
 	weight_lb: number;
-	meals: MealSeed[];
 	lifts: LiftSeed[];
 	/** A Health workout: `overlaps` means it covers the gym block rather than standing alone. */
 	health?: { name: string; clock: string; minutes: number; kcal: number; distance_mi?: number; overlaps: boolean };
@@ -179,11 +161,6 @@ const DAYS: {
 	{
 		offset: -3,
 		weight_lb: 195.4,
-		meals: [
-			{ clock: "07:40", description: "eggs, sourdough toast, coffee", kcal: 520, protein_g: 34, carbs_g: 42, fat_g: 22, fiber_g: 4 },
-			{ clock: "12:50", description: "chicken, rice and broccoli", kcal: 690, protein_g: 58, carbs_g: 72, fat_g: 16, fiber_g: 7 },
-			{ clock: "19:10", description: "salmon, potatoes, salad", kcal: 760, protein_g: 52, carbs_g: 58, fat_g: 34, fiber_g: 8 },
-		],
 		// The first gym visit: every lift is a "first time", which is what a real first week
 		// looks like and what the deltas on the following days are measured against.
 		lifts: [
@@ -196,12 +173,6 @@ const DAYS: {
 	{
 		offset: -2,
 		weight_lb: 194.8,
-		meals: [
-			{ clock: "07:30", description: "greek yoghurt, berries, granola", kcal: 430, protein_g: 30, carbs_g: 48, fat_g: 12, fiber_g: 6 },
-			{ clock: "13:10", description: "turkey sandwich and an apple", kcal: 640, protein_g: 42, carbs_g: 68, fat_g: 20, fiber_g: 9 },
-			{ clock: "19:30", description: "stir fry with tofu and noodles", kcal: 820, protein_g: 38, carbs_g: 96, fat_g: 28, fiber_g: 10 },
-			{ clock: "21:15", description: "two squares of dark chocolate", kcal: 110, protein_g: 2, carbs_g: 10, fat_g: 8, fiber_g: 2 },
-		],
 		// A rest day from the gym — the walk is the only activity, and it comes from Health.
 		lifts: [],
 		health: { name: "Walking", clock: "07:55", minutes: 42, kcal: 190, distance_mi: 2.2, overlaps: false },
@@ -209,11 +180,6 @@ const DAYS: {
 	{
 		offset: -1,
 		weight_lb: 194.2,
-		meals: [
-			{ clock: "07:45", description: "oats, banana, peanut butter", kcal: 560, protein_g: 24, carbs_g: 74, fat_g: 18, fiber_g: 9 },
-			{ clock: "12:40", description: "burrito bowl", kcal: 780, protein_g: 46, carbs_g: 88, fat_g: 24, fiber_g: 12 },
-			{ clock: "19:20", description: "steak, sweet potato, greens", kcal: 830, protein_g: 62, carbs_g: 54, fat_g: 38, fiber_g: 9 },
-		],
 		// Second visit: the bench and the row go up a step, the pulldown holds, the press
 		// gains a set — one of each delta the Day screen has to render.
 		lifts: [
@@ -227,12 +193,8 @@ const DAYS: {
 	{
 		offset: 0,
 		weight_lb: 193.6,
-		// Today is deliberately half-lived: breakfast and lunch in, dinner still expected,
-		// so the Today screen has something to say and a next action to offer.
-		meals: [
-			{ clock: "07:35", description: "eggs, avocado toast, coffee", kcal: 540, protein_g: 33, carbs_g: 40, fat_g: 26, fiber_g: 7 },
-			{ clock: "12:45", description: "poke bowl", kcal: 700, protein_g: 50, carbs_g: 78, fat_g: 18, fiber_g: 8 },
-		],
+		// Today is deliberately half-lived: a morning walk in, tonight's session still
+		// expected, so the Today screen has something to say and a next action to offer.
 		lifts: [],
 		health: { name: "Walking", clock: "08:20", minutes: 35, kcal: 160, distance_mi: 1.8, overlaps: false },
 	},
@@ -264,9 +226,8 @@ async function seedProfile(userId: string): Promise<void> {
 			display_name = COALESCE(display_name, 'Demo'),
 			sex = 'male', birth_year = $2, height_cm = 180, activity_level = 'moderate',
 			goal_pace = 'standard', goal_weight_lb = 170, units = 'imperial',
-			diet_style = 'higher protein', protein_g = 175, carbs_max_g = 250,
-			training_days = 4, environment = 'gym', eatback = 'half',
-			stated_at = stated_at || jsonb_build_object('diet_style', NOW()::text, 'training_days', NOW()::text)
+			training_days = 4, environment = 'gym',
+			stated_at = stated_at || jsonb_build_object('training_days', NOW()::text)
 		 WHERE id = $1`,
 		[userId, birthYear]
 	);
@@ -275,7 +236,7 @@ async function seedProfile(userId: string): Promise<void> {
 /** The specs behind `--goal`, in the shape POST /api/goals takes. */
 const GOAL_SPECS = {
 	fat_loss: {
-		kind: "lose_fat",
+		kind: "custom",
 		title: "Down to 170 lb",
 		metrics: [
 			{
@@ -291,7 +252,7 @@ const GOAL_SPECS = {
 	},
 	muscle: {
 		kind: "gain_muscle",
-		title: "Bench 185 and eat for it",
+		title: "Bench 185",
 		metrics: [
 			{
 				measure: "exercise_load",
@@ -299,15 +260,6 @@ const GOAL_SPECS = {
 				target: 185,
 				unit: "lb",
 				direction: "increase" as const,
-				rate: null,
-				by: null,
-			},
-			{
-				measure: "protein_g",
-				scope: null,
-				target: 175,
-				unit: "g",
-				direction: "at_least" as const,
 				rate: null,
 				by: null,
 			},
@@ -362,20 +314,6 @@ async function seedDays(userId: string): Promise<void> {
 		const date = day(seed.offset);
 
 		await insertWeights(pool, userId, [{ weight_lb: seed.weight_lb, logged_at: at(date, "07:05") }]);
-		await insertEntries(
-			pool,
-			userId,
-			"meals",
-			seed.meals.map((meal) => ({
-				description: meal.description,
-				kcal: meal.kcal,
-				protein_g: meal.protein_g,
-				carbs_g: meal.carbs_g,
-				fat_g: meal.fat_g,
-				fiber_g: meal.fiber_g,
-				logged_at: at(date, meal.clock),
-			}))
-		);
 		if (seed.lifts.length > 0) {
 			await insertEntries(
 				pool,
@@ -429,7 +367,7 @@ async function seedDays(userId: string): Promise<void> {
 		}
 
 		console.log(
-			`📅 ${date}: ${seed.meals.length} meals, ${seed.lifts.length} lifts${seed.health ? `, ${seed.health.name} from Health` : ""}`
+			`📅 ${date}: ${seed.lifts.length} lifts${seed.health ? `, ${seed.health.name} from Health` : ""}`
 		);
 	}
 }
@@ -479,7 +417,7 @@ async function main(): Promise<void> {
 	await readings.rightNow(pool, userId, view);
 
 	console.log(
-		`\n✅ ${email} is ready. Sign in with the password "${password}".\n   Today: ${view.eaten} kcal eaten, ${view.earned} earned, allowance ${view.allowance ?? "—"}, day ${view.day_number}.`
+		`\n✅ ${email} is ready. Sign in with the password "${password}".\n   Today: ${view.earned} kcal earned, day ${view.day_number}.`
 	);
 }
 

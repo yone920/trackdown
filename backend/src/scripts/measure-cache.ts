@@ -21,7 +21,6 @@ function contextWithRealCatalogue(catalog: FusionContext["catalog"]): FusionCont
 		localTime: "10:00",
 		tzOffsetMin: -240,
 		todayActivities: [],
-		todayMeals: [],
 		todayWeights: [],
 		recentExercises: ["Bench Press", "Lat Pulldown"],
 		catalog,

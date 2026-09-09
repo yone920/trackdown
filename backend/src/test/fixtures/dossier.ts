@@ -1,6 +1,6 @@
 import { computeFeatures } from "../../services/coach/features.js";
 import type { DossierInputs } from "../../services/readings/prompt.js";
-import { activity, daysAgo, facts, meal, TODAY, weight } from "./facts.js";
+import { activity, daysAgo, facts, TODAY, weight } from "./facts.js";
 
 // One person, in as much detail as the dossier is ever given. Lives here rather than inside
 // readings.test.ts for the reason `dayView.ts` does: the contract test asks the REAL model
@@ -49,11 +49,6 @@ export function dossierInputsFixture(overrides: Partial<DossierInputs> = {}): Do
 			bench(daysAgo(19), 135),
 			walk(daysAgo(20), 30),
 		],
-		meals: [
-			meal(daysAgo(1), { kcal: 2180, protein_g: 150, carbs_g: 190 }),
-			meal(daysAgo(2), { kcal: 2050, protein_g: 138, carbs_g: 175 }),
-			meal(daysAgo(3), { kcal: 2300, protein_g: 145, carbs_g: 210 }),
-		],
 		weights: [weight(daysAgo(1), 210.4), weight(daysAgo(8), 212.0)],
 	});
 
@@ -64,10 +59,8 @@ export function dossierInputsFixture(overrides: Partial<DossierInputs> = {}): Do
 			// Never stated: the invitation the second paragraph should reach for first.
 			session_minutes: null,
 			cardio_minutes_target: null,
-			diet_style: "higher protein",
 			environment: "gym",
 			equipment: ["barbell", "cable stack", "dumbbells"],
-			eatback: "half",
 			experience: "intermediate",
 			background: null,
 			reference_loads: [],
@@ -76,26 +69,15 @@ export function dossierInputsFixture(overrides: Partial<DossierInputs> = {}): Do
 			place: { name: "New Millennium", kind: "gym", equipment_count: 14 },
 			stated_at: {
 				training_days: "2026-08-14T09:12:00.000Z",
-				diet_style: "2026-08-14T09:12:00.000Z",
 				environment: "2026-08-14T09:12:00.000Z",
 				equipment: "2026-08-18T18:40:00.000Z",
 				experience: "2026-08-14T09:12:00.000Z",
 			},
 		},
-		targets: {
-			tdee: 2680,
-			eat_target: 2180,
-			protein_g: 168,
-			carbs_g: 200,
-			// Worked out from their stats — not a number they gave, and not a bare default.
-			source: "derived",
-			eatback: "half",
-			weight_lb: 210.4,
-		},
 		goals: [
 			{
 				title: "Down to 195 lb",
-				kind: "lose_fat",
+				kind: "custom",
 				active_from: "2026-08-14",
 				active_to: "2026-12-01",
 				percent: 0.11,
@@ -106,7 +88,6 @@ export function dossierInputsFixture(overrides: Partial<DossierInputs> = {}): Do
 		features: computeFeatures({
 			facts: day,
 			trainingDaysTarget: 4,
-			targets: { kcal: 2180, protein_g: 168, carbs_max_g: null },
 		}),
 		...overrides,
 	};

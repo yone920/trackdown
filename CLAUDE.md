@@ -1,7 +1,9 @@
 # TrackDown - Weight Loss Tracking App
 
 ## Mission Statement
-TrackDown is a React Native (Expo) iOS/Android app for weight loss tracking with AI-powered food logging, exercise tracking, and weight monitoring.
+TrackDown is a React Native (Expo) iOS/Android app for workout and weight tracking. Meal/food
+logging was fully removed 2026-09-08 to focus the app on training and body weight only — see
+the migration `backend/migrations/0021_drop_meals.sql` for the schema-level cut.
 
 ## Tech Stack
 - **Framework:** React Native with Expo SDK, Expo Router
@@ -11,7 +13,7 @@ TrackDown is a React Native (Expo) iOS/Android app for weight loss tracking with
 - **Charts:** Victory Native / Skia
 - **Backend:** `backend/` — Express 5 + Better Auth (email + password, bearer tokens) + self-hosted Postgres 17 in Docker. Migrated off Supabase 2026-08-28; see `docs/supabase-migration-plan.md`
 - **AI text parsing:** Claude Haiku 4.5 via `backend/src/services/parseLog.ts` (the former `parse-log` edge function)
-- **AI Vision (planned):** Claude Sonnet for food/scale/equipment photo analysis
+- **AI Vision (planned):** Claude Sonnet for scale/equipment photo analysis
 
 Every third-party service sits behind a port. `backend/src/ports/*` holds the interfaces
 (`LlmPort` takes messages of text **and** base64 images), `backend/src/adapters/**` the SDK
@@ -22,32 +24,31 @@ Routes and services import ports only; ESLint fails a build that imports `@anthr
 Tests use the fakes in `backend/src/test/fakes/`; each adapter has a contract test that runs
 only when that provider's key is in `backend/.env`.
 - **Voice:** OpenAI Whisper for voice transcription
-- **Nutrition APIs:** Open Food Facts API + USDA FoodData Central
 - **Monitoring:** Sentry + PostHog
 
 ## Core Features
-- AI photo meal logging (snap food photo -> auto-log calories/macros)
 - AI gym equipment photo recognition for calorie burn estimation
 - AI scale photo reading for weight logging
-- Voice and text food logging
-- Macro tracking (carbs, fat, protein, fiber)
-- Red/green daily net calorie indicator
+- Voice and text activity/weight logging, fused into one record by AI (`backend/src/services/fusion/`)
 - Weight trend chart
 - Streak system
-- Adaptive TDEE targets
-- Weekly AI meal suggestions
+- Goal tracking (strength, endurance, muscle, custom/weight-target), judged daily against training and weight trend
 
 ## Database Schema (Postgres — `backend/migrations/`)
 Tables:
 - `user`, `session`, `account`, `verification` - Better Auth (0001, `account.issuer` added in 0003)
-- `profiles` - User profiles, goals, TDEE settings
-- `meals` - Meal entries (breakfast, lunch, dinner, snacks)
-- `meal_items` - Individual food items within meals
-- `calorie_expenditure` - Exercise/activity calorie burn records
+- `profiles` - User profiles and training plan fields (goals, equipment, experience, etc.)
+- `activities` - Exercise/workout records, including a per-workout calorie-burn estimate (renamed from `calorie_expenditure` in 0004)
 - `weight_logs` - Weight measurements over time
-- `daily_summaries` - Aggregated daily calorie/macro totals
-- `body_photos` - Progress photos
-- `meal_templates` - Saved/favorite meals for quick logging
+- `daily_summaries` - One row per closed day: training earned, verdict, blocks, muscle groups, the day's reading
+- `evidence` - Polymorphic photo/transcript/text evidence, owned by an activity, a weigh-in, or a goal plan
+- `goals` - Training/weight goals and their metrics, judged daily against training and weight trend
+- `coach_briefs` - Cached on-demand workout coaching briefs
+- `day_readings` - Cached "Right now"/"In short" AI narrative text per day
+- `record_corrections` - History of user-driven corrections to a logged activity or weigh-in
+
+`meals`/`meal_items` and the whole calorie-budget/macro/TDEE column set on `daily_summaries`
+and `profiles` were dropped in migration 0021 (meal-tracking removal, 2026-09-08).
 
 ## Common Commands
 

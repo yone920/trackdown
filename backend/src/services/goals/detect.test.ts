@@ -11,7 +11,7 @@ function goal(partial: Partial<DetectableGoal> & Pick<DetectableGoal, "metrics">
 }
 
 const downTo170 = goal({
-	kind: "lose_fat",
+	kind: "custom",
 	metrics: [{ measure: "body_weight", target: 170, direction: "decrease" }],
 });
 
@@ -205,7 +205,7 @@ describe("stalling", () => {
 
 	it("cannot have stalled since before the goal existed", () => {
 		const young = goal({
-			kind: "lose_fat",
+			kind: "custom",
 			active_from: daysAgo(10),
 			metrics: [{ measure: "body_weight", target: 170, direction: "decrease" }],
 		});

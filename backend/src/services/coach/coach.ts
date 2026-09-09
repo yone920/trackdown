@@ -15,7 +15,6 @@ import type { ReferenceLoad } from "../fusion/schema.js";
 import { listGoals } from "../goals/store.js";
 import { formatClock, localDay, localMinutesOf, type IsoDate } from "../localTime.js";
 import { currentPlace, placeEquipment } from "../places.js";
-import { loadTargets } from "../profile.js";
 import { catalogFactsFor, introductionCandidates } from "./catalog.js";
 import { completionOf, planIsComplete, sameMovement, type ExerciseCompletion } from "./completion.js";
 import { computeFeatures } from "./features.js";
@@ -118,15 +117,7 @@ export interface CoachBriefRecord {
 	headline: string;
 	why: string;
 	workout: BriefWorkout;
-	nutrition: Brief["nutrition"];
 	nudge: string;
-	/**
-	 * The Eat card's live numbers — allowance − eaten, protein target − eaten (user decision
-	 * 2026-08-31: "Eat goes live"). Computed on every read from the day, exactly like
-	 * `completion`, and never stored: the model's `nutrition.kcal` is the day's TARGET and
-	 * stays what it was, while this is what is left of it right now.
-	 */
-	nutrition_now?: NutritionNow;
 	/** What the app can do about the nudge; null when there is nothing to act on. */
 	nudge_action: NudgeAction | null;
 	model: string | null;
@@ -134,21 +125,6 @@ export interface CoachBriefRecord {
 	created_at: string;
 	/** True when this answer came from the cache rather than the model. */
 	cached: boolean;
-}
-
-export interface NutritionNow {
-	/** allowance − eaten. Negative once the day is past its allowance. Null with no target. */
-	remaining_kcal: number | null;
-	eaten_kcal: number;
-	allowance_kcal: number | null;
-	/** target − eaten, floored at 0: "you still owe 40 g" stops at zero, it does not go under. */
-	remaining_protein_g: number | null;
-	eaten_protein_g: number | null;
-	protein_target_g: number | null;
-	/** True once the allowance is spent. The card's quiet factual line, never a scolding. */
-	past_target: boolean;
-	/** One line, already worded: "412 kcal and 38 g of protein left today." */
-	line: string;
 }
 
 interface BriefRow {
@@ -159,7 +135,6 @@ interface BriefRow {
 	headline: string | null;
 	rationale: string | null;
 	workout: Brief["workout"] | null;
-	nutrition: Brief["nutrition"] | null;
 	nudge: string | null;
 	nudge_action: NudgeAction | null;
 	model: string | null;
@@ -167,7 +142,7 @@ interface BriefRow {
 	created_at: string;
 }
 
-const BRIEF_COLUMNS = `id, date, asked_at, context, headline, rationale, workout, nutrition,
+const BRIEF_COLUMNS = `id, date, asked_at, context, headline, rationale, workout,
 	nudge, nudge_action, model, inputs_hash, created_at`;
 
 /**
@@ -257,7 +232,6 @@ function toRecord(row: BriefRow, cached: boolean): CoachBriefRecord {
 		// `rationale` is 0004's name for the brief's `why`; 0008's note explains the pairing.
 		why: row.rationale ?? "",
 		workout: toWorkout(row.workout as StoredWorkout | null),
-		nutrition: row.nutrition ?? { kcal: 0, protein_g: 0, carbs_max_g: null, ideas: [], why: "" },
 		nudge: row.nudge ?? "",
 		nudge_action: row.nudge_action,
 		model: row.model,
@@ -305,13 +279,11 @@ export async function dayContexts(db: Queryable, userId: string, date: IsoDate):
 // ---------------------------------------------------------------------------
 
 interface PlanRow {
-	diet_style: string | null;
 	training_days: number | null;
 	environment: string | null;
 	equipment: string[] | null;
 	constraints: string[] | null;
 	preferences: string[] | null;
-	eatback: string | null;
 	goal_pace: string | null;
 	experience: string | null;
 	background: string | null;
@@ -334,14 +306,7 @@ function cardioTargetFrom(goals: readonly CoachGoal[]): number | null {
 
 function todayFrom(view: DayView): CoachToday {
 	return {
-		eaten: view.eaten,
 		earned: view.earned,
-		target: view.target,
-		allowance: view.allowance,
-		remaining: view.remaining,
-		protein_g: view.macros.protein_g.eaten,
-		protein_target_g: view.macros.protein_g.target,
-		status: view.status,
 		trained: view.blocks.map((block) => block.title),
 		logged: view.items.activities.map((activity) => ({
 			exercise: activity.exercise,
@@ -380,12 +345,11 @@ export async function loadCoachInputs(
 	{ date, tzOffsetMin, now = new Date(), context = null }: LoadInputsOptions
 ): Promise<CoachBriefInputs> {
 	const view = await computeDay(db, { userId, date, tzOffsetMin, now });
-	const targets = await loadTargets(db, userId, date, tzOffsetMin);
 
 	const plan = (
 		await db.query<PlanRow>(
-			`SELECT diet_style, training_days, environment, equipment, constraints, preferences,
-			        eatback, goal_pace, experience, background, reference_loads, session_minutes,
+			`SELECT training_days, environment, equipment, constraints, preferences,
+			        goal_pace, experience, background, reference_loads, session_minutes,
 			        cardio_minutes_target
 			   FROM profiles WHERE id = $1`,
 			[userId]
@@ -423,11 +387,6 @@ export async function loadCoachInputs(
 		// The standing aim, under the goal and over the guideline (migration 0016). The board
 		// resolves it the same way, so the brief and the tab quote one target.
 		cardioTargetStatedMin: plan?.cardio_minutes_target ?? null,
-		targets: {
-			kcal: view.target,
-			protein_g: view.macros.protein_g.target,
-			carbs_max_g: view.macros.carbs_g.target,
-		},
 	});
 
 	const catalogFacts = await catalogFactsFor(db, [
@@ -462,13 +421,11 @@ export async function loadCoachInputs(
 
 	const coachPlan: CoachPlan = {
 		goal_pace: plan?.goal_pace ?? null,
-		diet_style: plan?.diet_style ?? null,
 		training_days: plan?.training_days ?? null,
 		environment: plan?.environment ?? null,
 		equipment: plan?.equipment ?? [],
 		constraints: plan?.constraints ?? [],
 		preferences: plan?.preferences ?? [],
-		eatback: plan?.eatback ?? "half",
 		experience: background.experience,
 		background: background.background,
 		session_minutes: rules.sizing.minutes,
@@ -478,13 +435,6 @@ export async function loadCoachInputs(
 				? { name: place.name, kind: place.kind, equipment: observed.map((row) => row.label) }
 				: null,
 		units: "lb",
-		targets: {
-			kcal: view.target,
-			protein_g: view.macros.protein_g.target,
-			carbs_max_g: view.macros.carbs_g.target,
-			fat_g: view.macros.fat_g.target,
-			tracking_only: targets.trackingOnly,
-		},
 	};
 
 	return {
@@ -569,12 +519,12 @@ async function storeBrief(
 ): Promise<CoachBriefRecord> {
 	const { rows } = await db.query<BriefRow>(
 		`INSERT INTO coach_briefs (user_id, date, asked_at, context, headline, rationale, workout,
-		                           nutrition, nudge, nudge_action, model, inputs_hash)
-		 VALUES ($1, $2::date, NOW(), $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, $10, $11)
+		                           nudge, nudge_action, model, inputs_hash)
+		 VALUES ($1, $2::date, NOW(), $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9, $10)
 		 ON CONFLICT (user_id, date, inputs_hash) WHERE inputs_hash IS NOT NULL DO UPDATE SET
 		   asked_at = NOW(), context = EXCLUDED.context, headline = EXCLUDED.headline,
 		   rationale = EXCLUDED.rationale, workout = EXCLUDED.workout,
-		   nutrition = EXCLUDED.nutrition, nudge = EXCLUDED.nudge,
+		   nudge = EXCLUDED.nudge,
 		   nudge_action = EXCLUDED.nudge_action, model = EXCLUDED.model
 		 RETURNING ${BRIEF_COLUMNS}`,
 		[
@@ -584,7 +534,6 @@ async function storeBrief(
 			brief.headline,
 			brief.why,
 			JSON.stringify(brief.workout),
-			JSON.stringify(brief.nutrition),
 			brief.nudge,
 			inputs.rules.nudge.action ? JSON.stringify(inputs.rules.nudge.action) : null,
 			model,
@@ -673,40 +622,6 @@ export function withLiveState(brief: CoachBriefRecord, inputs: CoachBriefInputs)
 	return {
 		...brief,
 		workout: { ...brief.workout, exercises, complete: planIsComplete(exercises) },
-		nutrition_now: nutritionNow(inputs, brief.nutrition),
-	};
-}
-
-/** "412 kcal and 38 g of protein left today", or the flat line when the day is spent. */
-export function nutritionNow(inputs: CoachBriefInputs, nutrition: Brief["nutrition"]): NutritionNow {
-	const { today } = inputs;
-	// The allowance is the day's own arithmetic (target + eat-back of what was earned); the
-	// brief's `nutrition.kcal` is the target the coach was given. The card shows what is
-	// LEFT, so it reads the day, and falls back to the brief only when the day has no target
-	// at all — which is the account that has not said enough to have one.
-	const allowance = today.allowance ?? (nutrition.kcal > 0 ? nutrition.kcal : null);
-	const remaining = allowance == null ? null : Math.round(allowance - today.eaten);
-	const proteinTarget = today.protein_target_g ?? (nutrition.protein_g > 0 ? nutrition.protein_g : null);
-	const proteinEaten = today.protein_g;
-	const proteinLeft =
-		proteinTarget == null || proteinEaten == null ? null : Math.max(0, Math.round(proteinTarget - proteinEaten));
-
-	const pastTarget = remaining != null && remaining <= 0;
-	const parts: string[] = [];
-	if (remaining != null) parts.push(pastTarget ? `${Math.abs(remaining)} kcal over today's allowance` : `${remaining} kcal left`);
-	if (proteinLeft != null && proteinLeft > 0) parts.push(`${proteinLeft} g of protein to go`);
-	else if (proteinLeft === 0 && proteinTarget != null) parts.push("protein is there");
-
-	return {
-		remaining_kcal: remaining,
-		eaten_kcal: today.eaten,
-		allowance_kcal: allowance,
-		remaining_protein_g: proteinLeft,
-		eaten_protein_g: proteinEaten,
-		protein_target_g: proteinTarget,
-		past_target: pastTarget,
-		// Stated, never judged (concept-v2 §Principles 8 — nothing is owed).
-		line: parts.length > 0 ? `${parts.join(" · ")}.` : "No calorie target yet, so nothing to count against.",
 	};
 }
 
@@ -1001,8 +916,7 @@ function alreadyOnPlan(name: string, planned: readonly { name: string }[]): bool
  *     what makes an append look like a regeneration on screen, which is the bug.
  *   * **`why` is the plan's, then the model's sentence about the addition.** Both are true
  *     and the second explains the divider; clampBrief trims the pair to 600 characters.
- *   * **The nutrition card and the nudge are the plan's.** "Add core" is not a statement
- *     about eating, and the Eat card's numbers are computed live on every read anyway.
+ *   * **The nudge is the plan's.** "Add core" is not a statement that changes the day's nudge.
  *   * **The type is the plan's**, unless the plan was a rest day and something has now been
  *     added to it — at which point it is whatever the model called the addition.
  */
@@ -1040,7 +954,6 @@ export function appendToBrief(current: CoachBriefRecord, answer: RevisedBrief, c
 					? answer.workout.finisher
 					: current.workout.finisher.map(({ exercise_id: _id, media_count: _media, ...item }) => item),
 		},
-		nutrition: current.nutrition,
 		nudge: current.nudge,
 	};
 	return { brief, skipped };
@@ -1132,7 +1045,6 @@ function toBrief(record: CoachBriefRecord): Brief {
 			),
 			finisher: record.workout.finisher.map(({ exercise_id: _id, media_count: _media, ...item }) => item),
 		},
-		nutrition: record.nutrition,
 		nudge: record.nudge,
 	};
 }

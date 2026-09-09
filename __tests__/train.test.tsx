@@ -3,9 +3,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import React from 'react';
 
 import Train from '@/app/(tabs)/train';
-import { clock } from '@/lib/format';
-import type { CoachStatus, DayActivity, DayMeal } from '@/lib/types';
-import { makeDay, makeGoal, makeMetric, makeWeek } from './fixtures';
+import type { CoachStatus, DayActivity } from '@/lib/types';
+import { makeDay, makeWeek } from './fixtures';
 
 // Today rendered against a fake API: the header, the goal banner and — the part that is a
 // decision rather than a rendering — the cards the primary goal chose.
@@ -128,7 +127,7 @@ describe('Train', () => {
       health: null,
     };
     serve({
-      day: makeDay({ blocks: [block], earned: 264, items: { meals: [], weights: [], activities: [lift()] } }),
+      day: makeDay({ blocks: [block], earned: 264, items: { weights: [], activities: [lift()] } }),
     });
     renderToday();
 
@@ -142,93 +141,6 @@ describe('Train', () => {
     // And the block's own title is still not a heading anybody sees.
     expect(screen.queryByText('Chest & Triceps')).toBeNull();
   });
-
-  // A day that has one lift and one meal in it, so a delete has something to change.
-  const ACTIVITY: DayActivity = {
-    id: 'a1',
-    logged_at: '2026-08-30T08:10:00.000Z',
-    description: '3 × 8 bench at 135 lb',
-    exercise: 'Bench Press',
-    exercise_id: 'ex-bench',
-    media_count: 2,
-    equipment: null,
-    category: 'strength',
-    muscle_groups: ['chest'],
-    sets: 3,
-    reps: 8,
-    load_lb: 135,
-    duration_min: null,
-    distance_mi: null,
-    kcal: 264,
-    source: 'manual',
-    confidence: 'high',
-    block_id: 'b1',
-    delta_vs_last: null,
-    evidence: [],
-  };
-
-  const MEAL: DayMeal = {
-    id: 'm1',
-    logged_at: '2026-08-30T07:30:00.000Z',
-    description: 'eggs and toast',
-    slot: 'breakfast',
-    stated_slot: null,
-    kcal: 480,
-    protein_g: 32,
-    carbs_g: 40,
-    fat_g: 20,
-    fiber_g: 4,
-    evidence: [],
-  };
-
-  const BLOCK = {
-    id: 'b1',
-    title: 'Chest',
-    start: '2026-08-30T08:00:00.000Z',
-    end: '2026-08-30T08:39:00.000Z',
-    minutes: 39,
-    kcal: 264,
-    kcal_from_health: false,
-    kcal_estimated: false,
-    exercise_count: 1,
-    activity_ids: ['a1'],
-    muscle_groups: ['chest'],
-    category: 'strength' as const,
-    health: null,
-  };
-
-  /**
-   * The API before and after the row is gone. The day is served from a flag the DELETE
-   * flips, which is what the server does: the screen re-reads and the numbers move.
-   */
-  function serveDeletable() {
-    const calls: { path: string; method?: string }[] = [];
-    let gone = false;
-    mockApi.mockImplementation((path: string, options?: { method?: string }) => {
-      calls.push({ path, method: options?.method });
-      if (options?.method === 'DELETE') {
-        gone = true;
-        return Promise.resolve(undefined);
-      }
-      if (path.startsWith('/api/day/')) {
-        return Promise.resolve(
-          gone
-            ? makeDay({ blocks: [], earned: 0, eaten: 0, items: { meals: [], activities: [], weights: [] } })
-            : makeDay({
-                blocks: [BLOCK],
-                earned: 264,
-                eaten: 480,
-                items: { meals: [MEAL], activities: [ACTIVITY], weights: [] },
-              }),
-        );
-      }
-      if (path === '/api/week') return Promise.resolve(makeWeek());
-      if (path === '/api/goals') return Promise.resolve({ active: [], history: [], no_goal: true });
-      if (path === '/api/profile') return Promise.resolve({ id: 'u', targets: {} });
-      return Promise.resolve(null);
-    });
-    return calls;
-  }
 
 });
 describe('Train — the plan and what was done, on one page', () => {
@@ -269,11 +181,11 @@ describe('Train — the plan and what was done, on one page', () => {
     });
   }
 
-  it('draws the plan and what was done together, and nothing about food', async () => {
+  it('draws the plan and what was done together, with no whole-day framing', async () => {
     serveWithPlan(
       makeDay({
         earned: 264,
-        items: { meals: [], weights: [], activities: [lift()] },
+        items: { weights: [], activities: [lift()] },
       }),
       BRIEF,
     );
@@ -287,8 +199,7 @@ describe('Train — the plan and what was done, on one page', () => {
     // day's totals sit on the plan's own header (user decision 2026-09-01).
     expect(screen.queryByTestId('today-done')).toBeNull();
     expect(screen.getByText(/264 kcal earned/)).toBeTruthy();
-    // Nothing food-ward, and no whole-day framing: both moved off this tab.
-    expect(screen.queryByTestId('today-eat')).toBeNull();
+    // No whole-day framing: that moved off this tab.
     expect(screen.queryByTestId('goal-banner')).toBeNull();
     expect(screen.queryByTestId('metric-calories-left')).toBeNull();
     expect(screen.queryByText(/on track/)).toBeNull();
@@ -312,30 +223,14 @@ describe('Train — the plan and what was done, on one page', () => {
   });
 
   it('is one quiet card on a day nobody started a workout on', async () => {
-    // The rest-day expectation, said out loud by the user: meals and weigh-ins work
-    // identically whether or not a workout was ever started.
+    // The rest-day expectation, said out loud by the user: a weigh-in works identically
+    // whether or not a workout was ever started.
     serveWithPlan(
       makeDay({
         items: {
-          meals: [
-            {
-              id: 'm1',
-              logged_at: '2026-08-30T07:30:00.000Z',
-              description: 'eggs and toast',
-              slot: 'breakfast' as const,
-              stated_slot: null,
-              kcal: 480,
-              protein_g: 32,
-              carbs_g: 40,
-              fat_g: 20,
-              fiber_g: 4,
-              evidence: [],
-            },
-          ],
-          weights: [],
+          weights: [{ id: 'w1', logged_at: '2026-08-30T07:30:00.000Z', weight_lb: 181.4, source: 'manual' }],
           activities: [],
         },
-        eaten: 480,
       }),
       null,
     );
@@ -354,9 +249,6 @@ describe('Train — the plan and what was done, on one page', () => {
     // The training section is on the page even with nothing in it — it is training, and
     // this tab owns training. It says so plainly rather than hiding behind a door.
     expect(screen.getByText('Nothing logged yet')).toBeTruthy();
-    // The meal that was logged is Eat's business, not this tab's.
-    expect(screen.queryByTestId('today-eat')).toBeNull();
-    expect(screen.queryByText('eggs and toast')).toBeNull();
   });
 
   it('has no button to a plan page, because there is no plan page', async () => {
@@ -409,27 +301,11 @@ describe('Train — the door, and what is no longer on the page', () => {
     });
   }
 
-  const MEAL: DayMeal = {
-    id: 'm1',
-    logged_at: '2026-08-30T07:30:00.000Z',
-    description: 'eggs and toast',
-    slot: 'breakfast',
-    stated_slot: null,
-    kcal: 480,
-    protein_g: 32,
-    carbs_g: 40,
-    fat_g: 20,
-    fiber_g: 4,
-    evidence: [],
-  };
-
   it('says how the day is going in one line each, and opens the log on a tap', async () => {
     serveDay(
       makeDay({
         earned: 569,
-        eaten: 480,
-        allowance: 2865,
-        items: { meals: [MEAL], activities: [lift(), lift({ id: 'a2' })], weights: [] },
+        items: { activities: [lift(), lift({ id: 'a2' })], weights: [] },
       }),
     );
     renderToday();
@@ -441,11 +317,6 @@ describe('Train — the door, and what is no longer on the page', () => {
     // receipt is still reachable.
     fireEvent.press(screen.getByTestId('today-done-log'));
     expect(mockPush).toHaveBeenCalledWith('/train/log');
-
-    // Nothing on this tab links food-ward any more except the global + (user decision
-    // 2026-09-01: each tab owns one verb).
-    expect(screen.queryByTestId('today-eat')).toBeNull();
-    expect(mockPush).not.toHaveBeenCalledWith('/eat');
   });
 
 
@@ -489,7 +360,7 @@ describe('Train — the Done door survives only where there is no plan', () => {
   // should see it on the screen, not tucked away hidden."
   it('draws the session itself on a no-plan day, not a door to it', async () => {
     serveDay(
-      makeDay({ earned: 264, items: { meals: [], weights: [], activities: [lift()] } }),
+      makeDay({ earned: 264, items: { weights: [], activities: [lift()] } }),
       { date: '2026-08-30', brief: null, stale: false },
     );
     renderToday();
@@ -506,7 +377,7 @@ describe('Train — the Done door survives only where there is no plan', () => {
 
   it('opens a logged row for a correction, straight from the tab', async () => {
     serveDay(
-      makeDay({ earned: 264, items: { meals: [], weights: [], activities: [lift()] } }),
+      makeDay({ earned: 264, items: { weights: [], activities: [lift()] } }),
       { date: '2026-08-30', brief: null, stale: false },
     );
     renderToday();

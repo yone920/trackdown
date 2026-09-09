@@ -46,20 +46,22 @@ describe("npm run seed-demo", () => {
 		expect(stdout).toContain('password "demo-pass-123"');
 
 		const summaries = await db.pool.query(
-			`SELECT date, eaten, earned, allowance, status, verdict, in_short, summary_line, meal_count, tdee, blocks
+			`SELECT date, earned, verdict, in_short, summary_line, blocks
 			   FROM daily_summaries WHERE user_id = (SELECT id FROM "user" WHERE email = 'demo@example.com')
 			  ORDER BY date`
 		);
 		expect(summaries.rows).toHaveLength(3);
 		for (const row of summaries.rows) {
-			expect(row.verdict).toBe("served");
-			expect(row.status).toBe("on_track");
+			// The default goal is a custom body-weight target (170 lb) far from the seeded
+			// weigh-ins (~194 lb): a custom goal is judged against its literal target, so every
+			// day reads "missed" until the number itself is reached — expected, not a bug.
+			expect(row.verdict).toBe("missed");
 			// Every closed day has its reading — that is what the Days list shows.
 			expect(String(row.in_short).length).toBeGreaterThan(20);
-			expect(row.eaten).toBeGreaterThan(1500);
-			expect(row.tdee).toBeGreaterThan(2000);
-			expect(row.summary_line).toContain("kcal in");
 		}
+		// The gym days earned real calories; the rest day earned none from lifting.
+		expect((summaries.rows[2]!.earned as number)).toBeGreaterThan(0);
+		expect(summaries.rows[2]!.summary_line).toContain("earned");
 		// The gym days have a block of four exercises; the rest day has none.
 		expect(summaries.rows.map((row) => (row.blocks as unknown[]).length)).toEqual([1, 0, 1]);
 
@@ -104,13 +106,13 @@ describe("npm run seed-demo", () => {
 	it("switches the scenario with --goal, including the no-goal state", async () => {
 		// The morning demo has to be able to show a muscle goal…
 		const muscle = await seed("muscle@example.com", "--tz", "120", "--goal", "muscle");
-		expect(muscle.stdout).toContain("Bench 185 and eat for it");
+		expect(muscle.stdout).toContain("Goal: Bench 185");
 		const goal = await db.pool.query<{ kind: string; metrics: { measure: string }[]; active_to: string | null }>(
 			`SELECT kind, metrics, active_to FROM goals WHERE user_id = (SELECT id FROM "user" WHERE email = 'muscle@example.com')`
 		);
 		expect(goal.rows).toHaveLength(1);
 		expect(goal.rows[0]).toMatchObject({ kind: "gain_muscle" });
-		expect(goal.rows[0]?.metrics.map((metric) => metric.measure)).toEqual(["exercise_load", "protein_g"]);
+		expect(goal.rows[0]?.metrics.map((metric) => metric.measure)).toEqual(["exercise_load"]);
 
 		// …and the no-goal state, which is a screen of its own (concept-v2 §Goals).
 		const none = await seed("nogoal@example.com", "--tz", "120", "--goal", "none");

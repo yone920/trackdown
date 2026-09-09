@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { addDays } from "../localTime.js";
-import { activity, daysAgo, facts, meal, TODAY, weightTrend } from "../../test/fixtures/facts.js";
+import { activity, daysAgo, facts, sample, TODAY, weightTrend } from "../../test/fixtures/facts.js";
 import {
 	proposeTimeline,
 	toProposedTimeline,
@@ -24,7 +24,7 @@ const AT_195 = facts({ weights: weightTrend(7, 195, 0) });
 
 describe("fat loss", () => {
 	const toOneSeventy = spec({
-		kind: "lose_fat",
+		kind: "custom",
 		metrics: [{ measure: "body_weight", target: 170, unit: "lb", direction: "decrease" }],
 	});
 
@@ -54,7 +54,7 @@ describe("fat loss", () => {
 		const soon = addDays(TODAY, 28);
 		const proposal = proposeTimeline({
 			spec: spec({
-				kind: "lose_fat",
+				kind: "custom",
 				metrics: [{ measure: "body_weight", target: 170, unit: "lb", direction: "decrease", by: soon }],
 			}),
 			facts: AT_195,
@@ -76,7 +76,7 @@ describe("fat loss", () => {
 		const brisk = addDays(TODAY, 16 * 7);
 		const proposal = proposeTimeline({
 			spec: spec({
-				kind: "lose_fat",
+				kind: "custom",
 				metrics: [{ measure: "body_weight", target: 170, unit: "lb", direction: "decrease", by: brisk }],
 			}),
 			facts: AT_195,
@@ -91,7 +91,7 @@ describe("fat loss", () => {
 		const later = addDays(TODAY, 200);
 		const proposal = proposeTimeline({
 			spec: spec({
-				kind: "lose_fat",
+				kind: "custom",
 				metrics: [{ measure: "body_weight", target: 170, unit: "lb", direction: "decrease", by: later }],
 			}),
 			facts: AT_195,
@@ -105,7 +105,7 @@ describe("fat loss", () => {
 	it("calls a date in the past unrealistic rather than projecting backwards", () => {
 		const proposal = proposeTimeline({
 			spec: spec({
-				kind: "lose_fat",
+				kind: "custom",
 				metrics: [{ measure: "body_weight", target: 170, unit: "lb", direction: "decrease", by: daysAgo(10) }],
 			}),
 			facts: AT_195,
@@ -136,7 +136,7 @@ describe("fat loss", () => {
 		// said it is twelve pounds away.
 		const stale = facts({ weights: weightTrend(7, 181.2, 0) });
 		const toTwoHundred = {
-			kind: "lose_fat",
+			kind: "custom",
 			title: "Down to 200 lb",
 			metrics: [{ measure: "body_weight", target: 200, unit: "lb", direction: "decrease" }],
 		};
@@ -236,8 +236,8 @@ describe("standing intentions and unprojectable measures", () => {
 
 	it("refuses to invent a journey out of a daily target", () => {
 		const proposal = proposeTimeline({
-			spec: spec({ metrics: [{ measure: "protein_g", target: 200, unit: "g", direction: "increase" }] }),
-			facts: facts({ meals: [meal(TODAY, { protein_g: 120 })] }),
+			spec: spec({ metrics: [{ measure: "resting_hr", target: 55, unit: "bpm", direction: "decrease" }] }),
+			facts: facts({ healthSamples: [sample(TODAY, "resting_hr", 60)] }),
 			today: TODAY,
 		});
 		expect(proposal.projected_date).toBeNull();
@@ -274,7 +274,7 @@ describe("the confirm card's shape", () => {
 	it("carries the date the goal will be saved with", () => {
 		const proposal = proposeTimeline({
 			spec: spec({
-				kind: "lose_fat",
+				kind: "custom",
 				metrics: [{ measure: "body_weight", target: 170, unit: "lb", direction: "decrease" }],
 			}),
 			facts: AT_195,
@@ -284,7 +284,7 @@ describe("the confirm card's shape", () => {
 
 		const withTheirDate = proposeTimeline({
 			spec: spec({
-				kind: "lose_fat",
+				kind: "custom",
 				metrics: [
 					{ measure: "body_weight", target: 170, unit: "lb", direction: "decrease", by: addDays(TODAY, 28) },
 				],

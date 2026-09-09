@@ -40,21 +40,21 @@ describe('groupByWeek', () => {
   });
 
   it('lets GET /api/week win for the week it is about, and computes the rest itself', () => {
-    const week = makeWeek({ end: '2026-08-30', served: 4, judged: 7, weekly_deficit: 1400 });
+    const week = makeWeek({ end: '2026-08-30', served: 4, judged: 7, weekly_earned: 1400 });
     const groups = groupByWeek(
       [
-        makeDayRow({ date: '2026-08-30', is_today: true, balance: 100 }),
-        makeDayRow({ date: '2026-08-20', verdict: 'served', balance: 300 }),
-        makeDayRow({ date: '2026-08-19', verdict: 'missed', balance: -100 }),
+        makeDayRow({ date: '2026-08-30', is_today: true, earned: 100 }),
+        makeDayRow({ date: '2026-08-20', verdict: 'served', earned: 300 }),
+        makeDayRow({ date: '2026-08-19', verdict: 'missed', earned: 200 }),
       ],
       week,
     );
     // The current week takes the server's tally, not the one page it happens to hold.
     expect(groups[0].tally).toContain('4 of 7 served');
-    expect(groups[0].tally).toContain('−1,400');
+    expect(groups[0].tally).toContain('1,400 earned');
     // The older week is counted from its own rows.
     expect(groups[1].tally).toContain('1 of 2 served');
-    expect(groups[1].tally).toContain('−200');
+    expect(groups[1].tally).toContain('500 earned');
   });
 });
 
@@ -69,9 +69,9 @@ describe('tallyFor', () => {
 
   it('drops a part rather than showing a zero for a fact it does not have', () => {
     const tally = tallyFor([
-      makeDayRow({ date: '2026-08-24', verdict: 'unlogged', balance: null, weight_lb: null }),
+      makeDayRow({ date: '2026-08-24', verdict: 'unlogged', earned: null, weight_lb: null }),
     ]);
-    // Nothing judged, no balance and one weigh-in short of a change: nothing to say.
+    // Nothing judged, no earned and one weigh-in short of a change: nothing to say.
     expect(tally).toBeNull();
   });
 });

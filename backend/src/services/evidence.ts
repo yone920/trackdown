@@ -20,7 +20,6 @@ export interface EvidenceRow {
 	id: string;
 	user_id: string;
 	activity_id: string | null;
-	meal_id: string | null;
 	plan_id: string | null;
 	weight_id: string | null;
 	kind: EvidenceKind;
@@ -100,7 +99,6 @@ export async function getOwnedEvidence(db: Queryable, userId: string, id: string
 /** Which record the evidence belongs to. At most one is set — the table CHECKs it. */
 export interface EvidenceOwner {
 	activity_id?: string | null;
-	meal_id?: string | null;
 	plan_id?: string | null;
 	weight_id?: string | null;
 }
@@ -124,20 +122,12 @@ export async function linkEvidence(
 	const { rows } = await db.query<EvidenceRow>(
 		`UPDATE evidence
 		    SET activity_id = COALESCE($3, activity_id),
-		        meal_id     = COALESCE($4, meal_id),
-		        plan_id     = COALESCE($5, plan_id),
-		        weight_id   = COALESCE($6, weight_id),
+		        plan_id     = COALESCE($4, plan_id),
+		        weight_id   = COALESCE($5, weight_id),
 		        confirmed_at = NOW()
 		  WHERE user_id = $1 AND id = ANY($2::uuid[])
 		  RETURNING *`,
-		[
-			userId,
-			valid,
-			owner.activity_id ?? null,
-			owner.meal_id ?? null,
-			owner.plan_id ?? null,
-			owner.weight_id ?? null,
-		]
+		[userId, valid, owner.activity_id ?? null, owner.plan_id ?? null, owner.weight_id ?? null]
 	);
 	return rows;
 }
@@ -165,7 +155,7 @@ export async function sweepUnlinkedEvidence(
 	const { rows } = await db.query<{ storage_key: string | null }>(
 		`DELETE FROM evidence
 		  WHERE confirmed_at IS NULL
-		    AND activity_id IS NULL AND meal_id IS NULL AND plan_id IS NULL AND weight_id IS NULL
+		    AND activity_id IS NULL AND plan_id IS NULL AND weight_id IS NULL
 		    AND created_at < NOW() - make_interval(hours => $1)
 		  RETURNING storage_key`,
 		[olderThanHours]

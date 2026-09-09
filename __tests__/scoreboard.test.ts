@@ -20,8 +20,11 @@ import { BENCH, CHIN, COVERAGE, EMPTY_BOARD, makeBoard, makeDayRow, makeGoal, ma
 const TODAY = '2026-08-31';
 
 describe('the goal row', () => {
+  // `build_strength` stands in for "a judged kind" — there is no dedicated weight-loss
+  // goal kind any more (gain_muscle / build_strength / improve_endurance / custom), and
+  // the delta/tone arithmetic under test here is the same for any judged kind.
   const weightGoal = () => ({
-    ...makeGoal('lose_fat', [
+    ...makeGoal('build_strength', [
       makeMetric({
         measure: 'body_weight',
         unit: 'lb',
@@ -63,15 +66,15 @@ describe('the goal row', () => {
     });
     expect(away.delta).toEqual({ text: '+1.4 lb since Sat, Aug 29', tone: 'accent' });
 
-    const maintain = goalRow({ ...weightGoal(), kind: 'maintain' }, {
+    const unjudged = goalRow({ ...weightGoal(), kind: 'custom' }, {
       today: TODAY,
       weighIns: [
         { date: '2026-08-29', value: 209 },
         { date: '2026-08-31', value: 210.4 },
       ],
     });
-    expect(maintain.judge).toBe(false);
-    expect(maintain.delta?.tone).toBe('mute');
+    expect(unjudged.judge).toBe(false);
+    expect(unjudged.delta?.tone).toBe('mute');
   });
 
   it('says nothing about a move nobody can measure yet', () => {
@@ -229,7 +232,7 @@ describe('the days row', () => {
     expect(rows.map((row) => row.date)).toEqual(['2026-08-31', '2026-08-30', '2026-08-29', '2026-08-28']);
     expect(rows[0]).toMatchObject({ line: 'Today · Pull day + walk', right: '175 earned', open: true });
     expect(rows[1]?.right).toBe('300 earned');
-    expect(rows[1]?.line).toBe('Served your goal · Chest and triceps · 1,450 kcal');
+    expect(rows[1]?.line).toBe('Served your goal · Chest and triceps');
     // The bar heights read the number, not the sentence.
     expect(rows[0]?.earned).toBe(175);
     expect(rows[3]?.earned).toBe(0);

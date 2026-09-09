@@ -22,7 +22,7 @@ export default function CoverageDetail() {
   const goals = useGoals();
 
   const active = goals.data?.active ?? [];
-  const judge = active.length > 0 && active.some((goal) => goal.kind !== 'maintain' && goal.kind !== 'custom');
+  const judge = active.length > 0 && active.some((goal) => goal.kind !== 'custom');
 
   const frequency = board.data?.frequency ?? null;
   const columns = frequency ? frequencyColumns(frequency.weeks, judge) : null;

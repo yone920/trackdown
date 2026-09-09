@@ -73,7 +73,7 @@ function nextFusion(result: FusionRoute, goalDetail?: unknown, photoFields: stri
 }
 
 /**
- * One input that is several things — a meal and a run and a weigh-in. `result` is the first
+ * One input that is several things — a goal and a run and a weigh-in. `result` is the first
  * of them in full, `moreKinds` names the rest, and `details` are their focused answers in
  * the same order.
  */
@@ -252,43 +252,8 @@ describe("reset-password script", () => {
 
 describe("entries", () => {
 	let token: string;
-	let otherToken: string;
 	beforeAll(async () => {
 		token = await signUp("dana@example.com");
-		otherToken = await signUp("eve@example.com");
-	});
-
-	it("creates, lists, reads, updates and deletes a meal — scoped to the owner", async () => {
-		const created = await request(app)
-			.post("/api/entries/meals")
-			.set("Authorization", `Bearer ${token}`)
-			.send({ description: "eggs, toast, coffee", kcal: 265, protein_g: 16, carbs_g: 23, fat_g: 11.5, fiber_g: 2 });
-		expect(created.status).toBe(201);
-		const [meal] = created.body;
-		expect(meal).toMatchObject({ description: "eggs, toast, coffee", kcal: 265, protein_g: 16, fat_g: 11.5 });
-		expect(typeof meal.logged_at).toBe("string");
-
-		const list = await request(app).get("/api/entries/meals").set("Authorization", `Bearer ${token}`);
-		expect(list.body.map((r: { id: string }) => r.id)).toContain(meal.id);
-
-		const otherList = await request(app).get("/api/entries/meals").set("Authorization", `Bearer ${otherToken}`);
-		expect(otherList.body).toEqual([]);
-		const otherRead = await request(app).get(`/api/entries/meals/${meal.id}`).set("Authorization", `Bearer ${otherToken}`);
-		expect(otherRead.status).toBe(404);
-
-		const patched = await request(app)
-			.patch(`/api/entries/meals/${meal.id}`)
-			.set("Authorization", `Bearer ${token}`)
-			.send({ kcal: 300, fiber_g: null });
-		expect(patched.status).toBe(200);
-		expect(patched.body).toMatchObject({ kcal: 300, fiber_g: null, protein_g: 16 });
-
-		const otherDelete = await request(app).delete(`/api/entries/meals/${meal.id}`).set("Authorization", `Bearer ${otherToken}`);
-		expect(otherDelete.status).toBe(404);
-		const deleted = await request(app).delete(`/api/entries/meals/${meal.id}`).set("Authorization", `Bearer ${token}`);
-		expect(deleted.status).toBe(204);
-		const gone = await request(app).get(`/api/entries/meals/${meal.id}`).set("Authorization", `Bearer ${token}`);
-		expect(gone.status).toBe(404);
 	});
 
 	it("filters by a logged_at range and orders", async () => {
@@ -312,8 +277,8 @@ describe("entries", () => {
 	it("rejects unknown kinds and invalid bodies", async () => {
 		const auth = { Authorization: `Bearer ${token}` };
 		expect((await request(app).get("/api/entries/snacks").set(auth)).status).toBe(404);
-		expect((await request(app).post("/api/entries/meals").set(auth).send({ kcal: -1 })).status).toBe(400);
-		expect((await request(app).patch("/api/entries/meals/00000000-0000-0000-0000-000000000000").set(auth).send({})).status).toBe(400);
+		expect((await request(app).post("/api/entries/movement").set(auth).send({ kcal: -1 })).status).toBe(400);
+		expect((await request(app).patch("/api/entries/movement/00000000-0000-0000-0000-000000000000").set(auth).send({})).status).toBe(400);
 	});
 
 	it("logs and lists weights, and updates the profile", async () => {
@@ -449,15 +414,9 @@ describe("entries", () => {
 		expect(kept.changes).toContainEqual({ field: "sets", from: 4, to: 2 });
 	});
 
-	it("refuses to split a meal, and 404s a record that is not there", async () => {
+	it("404s a record that is not there and refuses a single-part split", async () => {
 		const auth = { Authorization: `Bearer ${token}` };
 		const part = { description: "half of it", kcal: 30, sets: 1, reps: 10 };
-		const meal = await request(app)
-			.post("/api/entries/meals/00000000-0000-0000-0000-000000000000/split")
-			.set(auth)
-			.send({ correction_instruction: "split it", parts: [part, part] });
-		expect(meal.status).toBe(404);
-
 		const missing = await request(app)
 			.post("/api/entries/movement/00000000-0000-0000-0000-000000000000/split")
 			.set(auth)
@@ -493,28 +452,25 @@ describe("entries", () => {
 });
 
 describe("free-text log", () => {
-	it("parses and saves meals, movement and weight in one call, returning ids in input order", async () => {
+	it("parses and saves movement and weight in one call, returning ids in input order", async () => {
 		const token = await signUp("frank@example.com");
 		const auth = { Authorization: `Bearer ${token}` };
 		nextParse([
 			{ type: "movement", description: "30 min walk", kcal: 120, confidence: "medium" },
-			{ type: "meal", description: "protein shake", kcal: 150, protein_g: 25, carbs_g: 5, fat_g: 3, fiber_g: 1, confidence: "high" },
 			{ type: "weight", description: "weigh-in", weight_lb: 181, confidence: "high" },
 		]);
-		const res = await request(app).post("/api/log").set(auth).send({ text: "protein shake after my 30 min walk, 181 on the scale" });
+		const res = await request(app).post("/api/log").set(auth).send({ text: "30 min walk, 181 on the scale" });
 		expect(res.status).toBe(201);
-		expect(res.body.items).toHaveLength(3);
-		expect(res.body.items.map((i: { type: string }) => i.type)).toEqual(["movement", "meal", "weight"]);
+		expect(res.body.items).toHaveLength(2);
+		expect(res.body.items.map((i: { type: string }) => i.type)).toEqual(["movement", "weight"]);
 		for (const item of res.body.items) expect(item.id).toMatch(/^[0-9a-f-]{36}$/);
 
-		const meals = await request(app).get("/api/entries/meals").set(auth);
-		expect(meals.body[0]).toMatchObject({ description: "protein shake", kcal: 150, protein_g: 25 });
 		const weights = await request(app).get("/api/weight").set(auth);
 		expect(weights.body[0]).toMatchObject({ weight_lb: 181 });
 
 		const parseOnly = await request(app).post("/api/parse-log").set(auth).send({ text: "anything" });
 		expect(parseOnly.status).toBe(200);
-		expect(parseOnly.body.items).toHaveLength(3);
+		expect(parseOnly.body.items).toHaveLength(2);
 		expect((await request(app).post("/api/log").set(auth).send({ text: "   " })).status).toBe(400);
 	});
 });
@@ -731,36 +687,6 @@ describe("fusion — confirm", () => {
 		}
 	});
 
-	it("saves a meal with its items and its slot", async () => {
-		const res = await confirm({
-			kind: "meal",
-			description: "chicken burrito with a soda",
-			meal_type: "lunch",
-			kcal: 950,
-			protein_g: 38,
-			carbs_g: 130,
-			fat_g: 28,
-			fiber_g: 8,
-			items: [
-				{ name: "chicken burrito", kcal: 800, protein_g: 38, carbs_g: 110, fat_g: 28, fiber_g: 8, serving_amount: "1" },
-				{ name: "soda", kcal: 150, protein_g: 0, carbs_g: 20, fat_g: 0, fiber_g: 0, serving_amount: "12 oz" },
-			],
-			confidence: "medium",
-			sources: null,
-			consistency: null,
-		});
-
-		expect(res.status).toBe(201);
-		expect(res.body.meal).toMatchObject({ description: "chicken burrito with a soda", kcal: 950, protein_g: 38, meal_type: "lunch" });
-		expect(res.body.meal_items.map((i: { name: string }) => i.name)).toEqual(["chicken burrito", "soda"]);
-
-		const stored = await db.pool.query(`SELECT * FROM meal_items WHERE meal_id = $1 ORDER BY kcal DESC`, [
-			res.body.meal.id,
-		]);
-		expect(stored.rows).toHaveLength(2);
-		expect(stored.rows[0]).toMatchObject({ name: "chicken burrito", kcal: 800, serving_amount: "1" });
-	});
-
 	it("saves a weight", async () => {
 		const res = await confirm({ kind: "weight", weight_lb: 181.4, confidence: "high", sources: null, check: null });
 		expect(res.status).toBe(201);
@@ -773,7 +699,7 @@ describe("fusion — confirm", () => {
 		const first = await confirm({
 			kind: "goal",
 			spec: {
-				kind: "lose_fat",
+				kind: "custom",
 				title: "Down to 170 lb",
 				metrics: [
 					{ measure: "body_weight", scope: null, target: 170, unit: "lb", direction: "decrease", rate: "0.5 %/week", by: "2026-12-01" },
@@ -785,7 +711,7 @@ describe("fusion — confirm", () => {
 			facts: null,
 		});
 		expect(first.status).toBe(201);
-		expect(first.body.goal).toMatchObject({ kind: "lose_fat", title: "Down to 170 lb", status: "active", priority: 1 });
+		expect(first.body.goal).toMatchObject({ kind: "custom", title: "Down to 170 lb", status: "active", priority: 1 });
 		// The accepted timeline becomes the goal's end date.
 		expect(first.body.goal.active_to).toBe("2026-12-01");
 		expect(first.body.goal.metrics[0]).toMatchObject({ measure: "body_weight", target: 170 });
@@ -820,17 +746,13 @@ describe("fusion — confirm", () => {
 
 		const preference = await confirm({
 			kind: "preference",
-			text: "switching to keto, four days a week",
+			text: "training four days a week, mornings only",
 			fields: {
-				diet_style: "keto",
-				protein_g: null,
-				carbs_max_g: 50,
 				training_days: 4,
 				session_minutes: null,
 				cardio_minutes_target: null,
 				environment: "gym",
 				equipment: null,
-				eatback: null,
 				place_name: null,
 				place_kind: null,
 				experience: null,
@@ -840,16 +762,11 @@ describe("fusion — confirm", () => {
 		});
 		expect(preference.status).toBe(201);
 		expect(preference.body.profile).toMatchObject({
-			diet_style: "keto",
-			carbs_max_g: 50,
 			training_days: 4,
 			environment: "gym",
-			preferences: ["switching to keto, four days a week"],
-			// Untouched by this statement, so left alone.
-			protein_g: null,
-			eatback: "half",
+			preferences: ["training four days a week, mornings only"],
 		});
-		expect(preference.body.profile.stated_at.diet_style).toBeTruthy();
+		expect(preference.body.profile.stated_at.training_days).toBeTruthy();
 		expect(preference.body.profile.constraints).toEqual(["bad left knee"]);
 	});
 
@@ -860,15 +777,11 @@ describe("fusion — confirm", () => {
 			kind: "preference",
 			text: "I want to get 200 minutes of cardio a week",
 			fields: {
-				diet_style: null,
-				protein_g: null,
-				carbs_max_g: null,
 				training_days: null,
 				session_minutes: null,
 				cardio_minutes_target: 200,
 				environment: null,
 				equipment: null,
-				eatback: null,
 				place_name: null,
 				place_kind: null,
 				experience: null,
@@ -979,17 +892,39 @@ describe("fusion — one input, several things", () => {
 	let auth: { Authorization: string };
 	let userId: string;
 
-	const eggs: FusionRoute = {
-		kind: "meal",
-		description: "two eggs and toast",
-		meal_type: "breakfast",
-		kcal: 320,
-		protein_g: 18,
-		carbs_g: 30,
-		fat_g: 14,
-		fiber_g: 3,
-		items: [],
-		confidence: "medium",
+	const firstActivity: FusionRoute = {
+		kind: "activities",
+		items: [
+			{
+				exercise: "Treadmill Run",
+				equipment: null,
+				description: "5 km run in 28 minutes",
+				sets: null,
+				reps: null,
+				load_lb: null,
+				duration_min: 28,
+				distance_mi: 3.11,
+				kcal: 300,
+				confidence: "medium",
+			},
+		],
+	};
+	const weightRoute: FusionRoute = { kind: "weight", weight_lb: 181, confidence: "high" };
+	const contextDetail = {
+		scope: "coach_context" as const,
+		text: "only had about 20 minutes for all this",
+		fields: {
+			training_days: null,
+			session_minutes: null,
+			cardio_minutes_target: null,
+			environment: null,
+			equipment: null,
+			place_name: null,
+			place_kind: null,
+			experience: null,
+			background: null,
+			reference_loads: null,
+		},
 	};
 	const run = {
 		items: [
@@ -1018,19 +953,19 @@ describe("fusion — one input, several things", () => {
 		userId = session.body.user.id;
 	});
 
-	it("reads a meal, a run and a weigh-in out of one sentence and saves them in one go", async () => {
-		nextMixedFusion(eggs, ["activities", "weight"], run, weighIn);
+	it("reads a run, a weigh-in and a note for the coach out of one sentence and saves them in one go", async () => {
+		nextMixedFusion(firstActivity, ["weight", "statement"], weighIn, contextDetail);
 
 		const analyzed = await request(app)
 			.post("/api/log/analyze")
 			.set(auth)
-			.field("text", "ate two eggs and toast, then ran 5k, weighed in at 181");
+			.field("text", "ran 5k, weighed in at 181, and only had about 20 minutes for all this");
 
 		expect(analyzed.status).toBe(200);
 		expect(analyzed.body.results.map((result: FusionResult) => result.kind)).toEqual([
-			"meal",
 			"activities",
 			"weight",
+			"coach_context",
 		]);
 		// Several parts, so there is no single `result` to name for an old client.
 		expect(analyzed.body.result).toBeUndefined();
@@ -1042,34 +977,33 @@ describe("fusion — one input, several things", () => {
 			.send({
 				client_id: randomUUID(),
 				results: analyzed.body.results,
-				text: "ate two eggs and toast, then ran 5k, weighed in at 181",
+				text: "ran 5k, weighed in at 181, and only had about 20 minutes for all this",
 				text_kind: "transcript",
 			});
 
 		expect(saved.status).toBe(201);
 		// The ids come back in the order the parts were said.
-		expect(saved.body.kinds).toEqual(["meal", "activities", "weight"]);
+		expect(saved.body.kinds).toEqual(["activities", "weight", "coach_context"]);
 		expect(saved.body.parts.map((part: { kind: string }) => part.kind)).toEqual([
-			"meal",
 			"activities",
 			"weight",
+			"coach_context",
 		]);
-		expect(saved.body.parts[0].meal_id).toEqual(saved.body.meal.id);
-		expect(saved.body.parts[1].activity_ids).toEqual([saved.body.activities[0].id]);
-		expect(saved.body.parts[2].weight_id).toEqual(saved.body.weight.id);
+		expect(saved.body.parts[0].activity_ids).toEqual([saved.body.activities[0].id]);
+		expect(saved.body.parts[1].weight_id).toEqual(saved.body.weight.id);
 		// And the rows are really there, each in its own table.
-		expect(saved.body.meal).toMatchObject({ kcal: 320, protein_g: 18 });
 		expect(saved.body.activities[0]).toMatchObject({
 			exercise: "Treadmill Run",
 			category: "cardio",
 			distance_mi: 3.11,
 		});
 		expect(saved.body.weight).toMatchObject({ weight_lb: 181 });
+		expect(saved.body.coach_context).toMatchObject({ text: "only had about 20 minutes for all this" });
 		// A log is not a question for the coach: saving one asks the model nothing.
 		expect(coach.inputs).toHaveLength(before);
 
 		// The transcript is kept against each record it became, so the DayLog can show the
-		// words under all three rather than only under the meal.
+		// words under all three rather than only under the run.
 		const evidence = await db.pool.query<{ n: number }>(
 			`SELECT count(*)::int AS n FROM evidence WHERE user_id = $1 AND kind = 'transcript'`,
 			[userId]
@@ -1078,17 +1012,17 @@ describe("fusion — one input, several things", () => {
 	});
 
 	it("files each photo against the part it was read for", async () => {
-		nextMixedFusion(eggs, ["activities"], { ...run, photo_indexes: [1] });
+		nextMixedFusion(weightRoute, ["activities"], { ...run, photo_indexes: [1] });
 
 		const analyzed = await request(app)
 			.post("/api/log/analyze")
 			.set(auth)
-			.field("text", "had this, then this machine")
-			.attach("photos", await png(120, 60), { filename: "plate.png", contentType: "image/png" })
+			.field("text", "weighed in, then this machine")
+			.attach("photos", await png(120, 60), { filename: "scale.png", contentType: "image/png" })
 			.attach("photos", await png(120, 60), { filename: "machine.png", contentType: "image/png" });
 
 		expect(analyzed.status).toBe(200);
-		// The plate stayed with the meal, the machine went to the run.
+		// The scale stayed with the weigh-in, the machine went to the run.
 		expect(analyzed.body.evidence.map((item: { part: number }) => item.part)).toEqual([0, 1]);
 
 		const ids = analyzed.body.evidence.map((item: { id: string }) => item.id);
@@ -1103,45 +1037,32 @@ describe("fusion — one input, several things", () => {
 			});
 
 		expect(saved.status).toBe(201);
-		const rows = await db.pool.query<{ id: string; meal_id: string | null; activity_id: string | null }>(
-			`SELECT id, meal_id, activity_id FROM evidence WHERE id = ANY($1::uuid[]) ORDER BY created_at`,
+		const rows = await db.pool.query<{ id: string; weight_id: string | null; activity_id: string | null }>(
+			`SELECT id, weight_id, activity_id FROM evidence WHERE id = ANY($1::uuid[]) ORDER BY created_at`,
 			[ids]
 		);
-		expect(rows.rows[0]).toMatchObject({ meal_id: saved.body.meal.id, activity_id: null });
-		expect(rows.rows[1]).toMatchObject({ meal_id: null, activity_id: saved.body.activities[0].id });
+		expect(rows.rows[0]).toMatchObject({ weight_id: saved.body.weight.id, activity_id: null });
+		expect(rows.rows[1]).toMatchObject({ weight_id: null, activity_id: saved.body.activities[0].id });
 	});
 
 	it("writes every part or none of them", async () => {
-		const goodMeal: FusionResult = {
-			kind: "meal",
-			description: "a sandwich",
-			meal_type: "lunch",
-			kcal: 400,
-			protein_g: null,
-			carbs_g: null,
-			fat_g: null,
-			fiber_g: null,
-			items: [],
-			confidence: "medium",
-			sources: null,
-			consistency: null,
-		};
+		const goodWeight: FusionResult = { kind: "weight", weight_lb: 176, confidence: "medium", sources: null, check: null };
 		const res = await request(app)
 			.post("/api/log/confirm")
 			.set(auth)
 			.send({
 				client_id: randomUUID(),
 				// The second part is a question, not a record: nothing in this Save is written.
-				results: [goodMeal, { kind: "unclear", question: "How far did you run?" }],
+				results: [goodWeight, { kind: "unclear", question: "How far did you run?" }],
 			});
 
 		expect(res.status).toBe(422);
 		expect(res.body.error).toBe("How far did you run?");
-		const meals = await db.pool.query<{ n: number }>(
-			`SELECT count(*)::int AS n FROM meals WHERE user_id = $1 AND description = 'a sandwich'`,
+		const weights = await db.pool.query<{ n: number }>(
+			`SELECT count(*)::int AS n FROM weight_logs WHERE user_id = $1 AND weight_lb = 176`,
 			[userId]
 		);
-		expect(meals.rows[0]!.n).toBe(0);
+		expect(weights.rows[0]!.n).toBe(0);
 	});
 
 	it("still answers a single-kind log the way it always did", async () => {
@@ -1204,8 +1125,8 @@ describe("evidence sweep", () => {
 // windows and the close all agree with it.
 
 const READING = {
-	text: "You are 1,840 kcal short of your allowance with dinner still open.",
-	next_action: { label: "Log dinner", kind: "log_meal", hint: "Dinner is the only slot left" },
+	text: "No workout logged yet today.",
+	next_action: { label: "Log a workout", kind: "workout", hint: "Nothing logged yet today" },
 	actions: [{ label: "Ask the coach", kind: "coach" }],
 };
 
@@ -1243,7 +1164,7 @@ describe("day — the live day", () => {
 			.set(headers)
 			.send({
 				sex: "male",
-				// Relative, so the age the TDEE is computed from is 38 in any year the suite runs.
+				// Relative, so this stays 38 in any year the suite runs.
 				birth_year: new Date().getUTCFullYear() - 38,
 				height_cm: 180,
 				activity_level: "moderate",
@@ -1267,15 +1188,6 @@ describe("day — the live day", () => {
 				logged_at: localInstant(lastWeek, "18:10", tz),
 			});
 
-		await request(app)
-			.post("/api/entries/meals")
-			.set(headers)
-			.send({ description: "eggs and toast", kcal: 480, protein_g: 32, carbs_g: 40, fat_g: 20, fiber_g: 4, logged_at: localInstant(today, "07:30", tz) });
-		await request(app)
-			.post("/api/entries/meals")
-			.set(headers)
-			.send({ description: "chicken and rice", kcal: 700, protein_g: 55, carbs_g: 70, fat_g: 18, fiber_g: 6, logged_at: localInstant(today, "12:30", tz) });
-
 		// One gym block: three lifts inside ninety minutes of each other.
 		await request(app)
 			.post("/api/entries/movement")
@@ -1291,13 +1203,12 @@ describe("day — the live day", () => {
 			.send({ description: "4 × 12 dumbbell row at 45 lb", exercise: "Dumbbell Row", sets: 4, reps: 12, load_lb: 45, kcal: 90, logged_at: localInstant(today, "14:05", tz) });
 	}, 60_000);
 
-	it("computes the day: one block, the calorie model, macros, weight trend and the delta", async () => {
+	it("computes the day: one block, weight trend and the delta", async () => {
 		const res = await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
 		expect(res.status).toBe(200);
 		const day = res.body;
 
 		expect(day).toMatchObject({ date: today, is_today: true, closed_at: null, tz_offset_min: tz });
-		expect(day.items.meals).toHaveLength(2);
 		expect(day.items.activities).toHaveLength(3);
 
 		// One block, because the three lifts are within ninety minutes of each other.
@@ -1306,20 +1217,7 @@ describe("day — the live day", () => {
 		expect(day.blocks[0].title).toMatch(/back|chest/i);
 		for (const activity of day.items.activities) expect(activity.block_id).toBe(day.blocks[0].id);
 
-		// eaten = Σ meals; earned = Σ block calories; allowance = target + half of earned.
-		expect(day.eaten).toBe(1180);
 		expect(day.earned).toBe(310);
-		// 193.4 lb, 180 cm, 38, moderate → Mifflin-St Jeor 1,817 BMR × 1.55, minus the
-		// standard pace's 20 %, plus half of what the gym earned.
-		expect(day.tdee).toBe(2817);
-		expect(day.target).toBe(2254);
-		expect(day.eatback).toBe("half");
-		expect(day.allowance).toBe(2254 + 155);
-		expect(day.remaining).toBe(day.allowance - 1180);
-		expect(day.balance).toBe(2817 + 310 - 1180);
-
-		expect(day.macros.protein_g).toMatchObject({ eaten: 87, note: "under" });
-		expect(day.macros.protein_g.target).toBeGreaterThan(150);
 
 		expect(day.weight).toMatchObject({ day: 193.4, avg_7d: 193.4 });
 		// The 7-day average has moved down from last week's single 195 lb reading.
@@ -1332,13 +1230,11 @@ describe("day — the live day", () => {
 		expect(row.delta_vs_last).toMatchObject({ text: "first time", direction: "new" });
 
 		expect(day.muscle_summary.map((m: { muscle: string }) => m.muscle)).toContain("back");
-		expect(day.eating_pattern).toContain("2 meals");
-		expect(day.expected.map((e: { kind: string }) => e.kind)).toContain("meal");
 		expect(day.arc.some((event: { kind: string }) => event.kind === "now")).toBe(true);
 		expect(day.arc.some((event: { kind: string }) => event.kind === "block")).toBe(true);
 
 		// No goal, so no judgement colours anywhere (concept-v2 §Goals).
-		expect(day).toMatchObject({ status: "none", verdict: "none", goal: null, goal_involves_calories: false });
+		expect(day).toMatchObject({ verdict: "none", goal: null });
 
 		// The 28-day fact window is server-side only.
 		expect(day.facts).toBeUndefined();
@@ -1348,27 +1244,27 @@ describe("day — the live day", () => {
 		const before = coachLlm.requests.length;
 		const first = await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
 		expect(first.body.reading).toMatchObject({ kind: "right_now", text: READING.text, model: "fake-coach-model" });
-		expect(first.body.reading.next_action).toMatchObject({ kind: "log_meal", label: "Log dinner" });
+		expect(first.body.reading.next_action).toMatchObject({ kind: "workout", label: "Log a workout" });
 
 		// The clock moved; nothing else did. No second call.
 		const again = await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
 		expect(again.body.reading.inputs_hash).toBe(first.body.reading.inputs_hash);
 		expect(coachLlm.requests.length).toBe(before);
 
-		coachLlm.nextOutput = { ...READING, text: "Dinner is logged; you are 320 kcal under your allowance." };
+		coachLlm.nextOutput = { ...READING, text: "Another set logged." };
 		await request(app)
-			.post("/api/entries/meals")
+			.post("/api/entries/movement")
 			.set(headers)
-			.send({ description: "salmon and potatoes", kcal: 820, protein_g: 48, logged_at: localInstant(today, "14:40", tz) });
+			.send({ description: "10 min row erg", exercise: "Rowing", kcal: 90, logged_at: localInstant(today, "20:00", tz) });
 
 		const after = await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
-		expect(after.body.reading.text).toContain("Dinner is logged");
+		expect(after.body.reading.text).toContain("Another set logged");
 		expect(after.body.reading.inputs_hash).not.toBe(first.body.reading.inputs_hash);
 		expect(coachLlm.requests.length).toBe(before + 1);
 		// The prompt is the computed day — totals, blocks and deltas — not the rows.
 		const sheet = coachLlm.requests.at(-1)?.system as string;
 		expect(sheet).toContain("vs last time: +5 lb");
-		expect(sheet).toContain("Allowance (target + eat-back)");
+		expect(sheet).toContain("Earned from activity");
 		expect(sheet).not.toContain(first.body.blocks[0].id);
 		coachLlm.nextOutput = READING;
 	});
@@ -1384,7 +1280,8 @@ describe("day — the live day", () => {
 	// already covered, what was not is that the computed day agrees with it afterwards.
 	it("recomputes the day when a logged row is deleted, and takes its evidence with it", async () => {
 		const before = (await request(app).get(`/api/day/today?tz=${tz}`).set(headers)).body;
-		expect(before.earned).toBe(310);
+		// 310 from the strength block, plus the 90 kcal rowing entry from the previous test.
+		expect(before.earned).toBe(400);
 		const row = before.items.activities.find((a: { exercise: string }) => a.exercise === "Dumbbell Row");
 		const muscle = row.muscle_groups[0] as string;
 		const setsBefore = before.muscle_summary.find((m: { muscle: string }) => m.muscle === muscle).sets;
@@ -1401,12 +1298,10 @@ describe("day — the live day", () => {
 		expect((await request(app).delete(`/api/entries/movement/${row.id}`).set(headers)).status).toBe(204);
 
 		const after = (await request(app).get(`/api/day/today?tz=${tz}`).set(headers)).body;
-		expect(after.earned).toBe(310 - row.kcal);
+		expect(after.earned).toBe(before.earned - row.kcal);
 		expect(after.items.activities).toHaveLength(before.items.activities.length - 1);
 		expect(after.blocks[0].exercise_count).toBe(before.blocks[0].exercise_count - 1);
-		expect(after.blocks[0].kcal).toBe(after.earned);
-		// The allowance is target + half of what is left, so the ring moves with it.
-		expect(after.allowance).toBe(after.target + Math.round(after.earned / 2));
+		expect(after.blocks[0].kcal).toBe(before.blocks[0].kcal - row.kcal);
 		const setsAfter = after.muscle_summary.find((m: { muscle: string }) => m.muscle === muscle)?.sets ?? 0;
 		expect(setsAfter).toBe(setsBefore - row.sets);
 		// The day changed, so the Right-now reading is not the one that was cached.
@@ -1533,19 +1428,6 @@ describe("day — a lifting session that reported no calories", () => {
 			.post("/api/weight")
 			.set(headers)
 			.send({ weight_lb: 190, logged_at: localInstant(yesterday, "07:00", tz) });
-		await request(app)
-			.post("/api/entries/meals")
-			.set(headers)
-			.send({
-				description: "the day's food",
-				kcal: 1900,
-				protein_g: 150,
-				carbs_g: 180,
-				fat_g: 60,
-				fiber_g: 25,
-				logged_at: localInstant(yesterday, "12:30", tz),
-			});
-
 		await liftingMorning(yesterday);
 		await liftingMorning(today);
 	}, 60_000);
@@ -1568,9 +1450,6 @@ describe("day — a lifting session that reported no calories", () => {
 		});
 		expect(day.earned).toBe(EXPECTED_EARNED);
 		expect(day.summary_line).toContain("264 earned");
-		// The allowance and the balance are built from the same number.
-		expect(day.allowance).toBe((day.target as number) + Math.round(EXPECTED_EARNED / 2));
-		expect(day.balance).toBe((day.tdee as number) + EXPECTED_EARNED - day.eaten);
 	});
 
 	it("writes nothing to the activities rows", async () => {
@@ -1585,14 +1464,12 @@ describe("day — a lifting session that reported no calories", () => {
 
 		const { rows } = await db.pool.query<{
 			earned: number;
-			kcal_burned: number;
 			blocks: { kcal: number; kcal_estimated: boolean }[];
-		}>(`SELECT earned, kcal_burned, blocks FROM daily_summaries WHERE user_id = $1 AND date = $2::date`, [
+		}>(`SELECT earned, blocks FROM daily_summaries WHERE user_id = $1 AND date = $2::date`, [
 			userId,
 			yesterday,
 		]);
 		expect(rows[0]?.earned).toBe(EXPECTED_EARNED);
-		expect(rows[0]?.kcal_burned).toBe(EXPECTED_EARNED);
 		expect(rows[0]?.blocks[0]).toMatchObject({ kcal: EXPECTED_EARNED, kcal_estimated: true });
 
 		// The week reads the frozen record for yesterday and recomputes today; both agree.
@@ -1600,8 +1477,8 @@ describe("day — a lifting session that reported no calories", () => {
 		const rowFor = (date: string) => week.days.find((day: { date: string }) => day.date === date);
 		expect(rowFor(yesterday).earned).toBe(EXPECTED_EARNED);
 		expect(rowFor(today).earned).toBe(EXPECTED_EARNED);
-		expect(week.weekly_deficit).toBe(
-			week.days.reduce((total: number, day: { balance: number | null }) => total + (day.balance ?? 0), 0)
+		expect(week.weekly_earned).toBe(
+			week.days.reduce((total: number, day: { earned: number | null }) => total + (day.earned ?? 0), 0)
 		);
 	});
 
@@ -1644,19 +1521,12 @@ describe("day close", () => {
 			});
 		await db.pool.query(
 			`INSERT INTO goals (user_id, kind, title, metrics, priority, status, active_from)
-			 VALUES ($1, 'lose_fat', 'Down to 135 lb', '[{"measure":"body_weight","target":135,"direction":"decrease","scope":null,"unit":"lb","rate":null,"by":null}]'::jsonb, 1, 'active', $2::date)`,
+			 VALUES ($1, 'custom', 'Under 160 lb', '[{"measure":"body_weight","target":160,"direction":"at_most","scope":null,"unit":"lb","rate":null,"by":null}]'::jsonb, 1, 'active', $2::date)`,
 			[userId, addDays(today, -30)]
 		);
 
-		for (const [date, kcal] of [
-			[twoDaysAgo, 1500],
-			[yesterday, 1600],
-		] as const) {
+		for (const date of [twoDaysAgo, yesterday]) {
 			await request(app).post("/api/weight").set(headers).send({ weight_lb: 150, logged_at: localInstant(date, "07:00", tz) });
-			await request(app)
-				.post("/api/entries/meals")
-				.set(headers)
-				.send({ description: "the day's food", kcal, protein_g: 110, carbs_g: 120, fat_g: 50, fiber_g: 20, logged_at: localInstant(date, "12:30", tz) });
 			await request(app)
 				.post("/api/entries/movement")
 				.set(headers)
@@ -1665,7 +1535,7 @@ describe("day close", () => {
 	}, 60_000);
 
 	it("closes every unclosed past day on the first request, and writes its reading once", async () => {
-		coachLlm.nextOutput = { ...READING, text: "You ate 1,600 kcal and walked 40 minutes; the day served the goal." };
+		coachLlm.nextOutput = { ...READING, text: "You walked 40 minutes; the day served the goal." };
 		const before = coachLlm.requests.length;
 
 		await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
@@ -1677,19 +1547,12 @@ describe("day close", () => {
 		expect(rows.map((r) => r.date)).toEqual([twoDaysAgo, yesterday]);
 		const closed = rows[1]!;
 		expect(closed).toMatchObject({
-			kcal_consumed: 1600,
-			kcal_burned: 150,
-			eaten: 1600,
 			earned: 150,
 			verdict: "served",
 			weight_lb: 150,
-			meal_count: 1,
 		});
-		expect(closed.status).toBe("on_track");
-		expect(Number(closed.protein_g)).toBe(110);
 		expect(closed.blocks).toHaveLength(1);
-		expect(closed.tdee).toBeGreaterThan(1500);
-		expect(closed.summary_line).toContain("kcal in 1 meal");
+		expect(closed.summary_line).toContain("earned");
 		expect(closed.closed_at).toBeTruthy();
 		expect(closed.in_short).toContain("served the goal");
 
@@ -1736,12 +1599,11 @@ describe("day close", () => {
 		expect(res.body.closed_at).toBeTruthy();
 		expect(res.body.reading).toMatchObject({ kind: "in_short" });
 		expect(res.body.reading.text).toContain("served the goal");
-		expect(res.body.goal).toMatchObject({ title: "Down to 135 lb" });
-		expect(res.body.expected).toEqual([]);
+		expect(res.body.goal).toMatchObject({ title: "Under 160 lb" });
 		expect(res.body.arc.some((event: { kind: string }) => event.kind === "now")).toBe(false);
 	});
 
-	it("gives the week its statuses, verdicts and deficit", async () => {
+	it("gives the week its statuses, verdicts and total earned", async () => {
 		const res = await request(app).get(`/api/week?tz=${tz}`).set(headers);
 		expect(res.status).toBe(200);
 		expect(res.body.days).toHaveLength(7);
@@ -1749,9 +1611,8 @@ describe("day close", () => {
 		expect(res.body.days.at(-1)).toMatchObject({ date: today, is_today: true });
 
 		const closed = res.body.days.find((day: { date: string }) => day.date === yesterday);
-		expect(closed).toMatchObject({ verdict: "served", status: "on_track", eaten: 1600, earned: 150, closed: true });
-		// Σ(TDEE + earned − eaten) over the days with data, positive = a deficit.
-		expect(res.body.weekly_deficit).toBeGreaterThan(0);
+		expect(closed).toMatchObject({ verdict: "served", earned: 150, closed: true });
+		expect(res.body.weekly_earned).toBeGreaterThan(0);
 		expect(res.body.served).toBe(2);
 		expect(res.body.judged).toBeGreaterThanOrEqual(2);
 
@@ -1935,24 +1796,24 @@ describe("day — timezone edges", () => {
 		expect(lateNight.slice(0, 10)).toBe(today);
 
 		await request(app)
-			.post("/api/entries/meals")
+			.post("/api/entries/movement")
 			.set(headers)
-			.send({ description: "late bowl of cereal", kcal: 320, logged_at: lateNight });
+			.send({ description: "late night walk", exercise: "Walk", category: "cardio", kcal: 90, logged_at: lateNight });
 
 		const theirDay = await request(app).get(`/api/day/${yesterday}?tz=${tz}`).set(headers);
-		expect(theirDay.body.items.meals.map((m: { description: string }) => m.description)).toEqual(["late bowl of cereal"]);
-		expect(theirDay.body.eaten).toBe(320);
+		expect(theirDay.body.items.activities.map((a: { description: string }) => a.description)).toEqual(["late night walk"]);
+		expect(theirDay.body.earned).toBe(90);
 
 		const nextDay = await request(app).get(`/api/day/${today}?tz=${tz}`).set(headers);
-		expect(nextDay.body.items.meals).toEqual([]);
+		expect(nextDay.body.items.activities).toEqual([]);
 
 		// And the close agrees with the day view about which day that was.
 		await request(app).post("/api/day/close").set(headers).send({ tz_offset_min: tz });
-		const { rows } = await db.pool.query<{ date: string; eaten: number }>(
-			`SELECT date, eaten FROM daily_summaries WHERE user_id = (SELECT id FROM "user" WHERE email = $1)`,
+		const { rows } = await db.pool.query<{ date: string; earned: number }>(
+			`SELECT date, earned FROM daily_summaries WHERE user_id = (SELECT id FROM "user" WHERE email = $1)`,
 			["quinn@example.com"]
 		);
-		expect(rows).toEqual([{ date: yesterday, eaten: 320 }]);
+		expect(rows).toEqual([{ date: yesterday, earned: 90 }]);
 	});
 });
 
@@ -1995,7 +1856,7 @@ describe("goals — the Goals screen's API", () => {
 			.set(headers)
 			.send({
 				spec: {
-					kind: "lose_fat",
+					kind: "custom",
 					title: "Down to 170 lb",
 					metrics: [{ measure: "body_weight", target: 170, unit: "lb", direction: "decrease" }],
 					active_from: addDays(today, -14),
@@ -2118,9 +1979,9 @@ describe("goals — the Goals screen's API", () => {
 		// A day with a goal on it, before anything is dropped.
 		const yesterday = addDays(today, -1);
 		await request(app)
-			.post("/api/entries/meals")
+			.post("/api/entries/movement")
 			.set(headers)
-			.send({ description: "the day's food", kcal: 1800, protein_g: 120, logged_at: localInstant(yesterday, "13:00", tz) });
+			.send({ description: "40 min walk", exercise: "Walk", category: "cardio", kcal: 150, logged_at: localInstant(yesterday, "13:00", tz) });
 		coachLlm.nextOutput = READING;
 		const before = await request(app).get(`/api/day/${yesterday}?tz=${tz}`).set(headers);
 		expect(before.body.goal.title).toBe("Down to 170 lb");
@@ -2147,7 +2008,6 @@ describe("goals — the Goals screen's API", () => {
 		const outside = await request(app).get(`/api/day/${yesterday}?tz=${tz}`).set(headers);
 		expect(outside.body.goal).toBeNull();
 		expect(outside.body.verdict).toBe("none");
-		expect(outside.body.status).toBe("none");
 	});
 
 	it("keeps the ended goal in history with its outcome", async () => {
@@ -2199,7 +2059,7 @@ describe("goals — reached and stalled at day close", () => {
 			.set(headers)
 			.send({
 				spec: {
-					kind: "lose_fat",
+					kind: "custom",
 					title: "Down to 150 lb",
 					metrics: [{ measure: "body_weight", target: 150, unit: "lb", direction: "decrease" }],
 					active_from: addDays(today, -30),
@@ -2252,79 +2112,19 @@ describe("profile — the plan and what it works out to", () => {
 		await request(app).post("/api/weight").set(headers).send({ weight_lb: 200, logged_at: localInstant(today, "07:00", tz) });
 	}, 60_000);
 
-	it("derives the targets the app used to compute for itself", async () => {
-		// Without sex/height/birth year there is no TDEE, and none is invented: the target
-		// falls back to the v1 `daily_calorie_target` the profile row is created with —
-		// which is the column's DEFAULT, not a number this user ever said, so the
-		// provenance is `default` and the Goals screen says so (field report 2026-08-31).
-		const empty = await request(app).get("/api/profile").set(headers);
-		expect(empty.body.targets).toMatchObject({ tdee: null, source: "default" });
-		expect(empty.body.targets.eat_target).toBe(empty.body.daily_calorie_target);
-		expect(empty.body.stated_at.daily_calorie_target).toBeUndefined();
-
-		// Say the number out loud and the same value becomes `stated`.
-		const said = await request(app).patch("/api/profile").set(headers).send({ daily_calorie_target: 2100 });
-		expect(said.body.targets).toMatchObject({ eat_target: 2100, source: "stated" });
-
-		await request(app)
-			.patch("/api/profile")
-			.set(headers)
-			.send({
-				sex: "male",
-				birth_year: new Date().getUTCFullYear() - 38,
-				height_cm: 180,
-				activity_level: "moderate",
-				goal_pace: "standard",
-			});
-
-		const res = await request(app).get(`/api/profile?tz=${tz}`).set(headers);
-		expect(res.status).toBe(200);
-		expect(res.body.targets).toMatchObject({ source: "derived", tracking_only: false, weight_lb: 200, date: today });
-		expect(res.body.targets.tdee).toBeGreaterThan(2500);
-		expect(res.body.targets.eat_target).toBeLessThan(res.body.targets.tdee);
-		expect(res.body.targets.deficit).toBe(res.body.targets.eat_target - res.body.targets.tdee);
-		expect(res.body.targets.protein_g).toBeGreaterThan(100);
-		expect(res.body.targets.eatback).toBe("half");
-	});
-
 	it("merges the plan and dates every field it touches", async () => {
-		const first = await request(app).patch("/api/profile").set(headers).send({ diet_style: "lower carb", training_days: 4 });
+		const first = await request(app).patch("/api/profile").set(headers).send({ environment: "home", training_days: 4 });
 		expect(first.status).toBe(200);
-		expect(first.body).toMatchObject({ diet_style: "lower carb", training_days: 4 });
+		expect(first.body).toMatchObject({ environment: "home", training_days: 4 });
 		const dated = first.body.stated_at as Record<string, string>;
-		expect(dated.diet_style).toBeTruthy();
+		expect(dated.environment).toBeTruthy();
 		expect(dated.training_days).toBeTruthy();
 
 		// A second patch does not erase the first field's date.
-		const second = await request(app).patch("/api/profile").set(headers).send({ environment: "home" });
-		expect(second.body.stated_at.diet_style).toBe(dated.diet_style);
-		expect(second.body.stated_at.environment).toBeTruthy();
-		expect(second.body.diet_style).toBe("lower carb");
-
-		// A stated macro beats the computed one, everywhere it is read.
-		const stated = await request(app).patch("/api/profile").set(headers).send({ protein_g: 210 });
-		expect(stated.body.targets.protein_g).toBe(210);
-	});
-
-	it("lets the ring's eat-back setting through to the day", async () => {
-		await request(app)
-			.post("/api/entries/movement")
-			.set(headers)
-			.send({ description: "an hour on the bike", exercise: "Cycling", category: "cardio", duration_min: 60, kcal: 400, logged_at: localInstant(today, "08:00", tz) });
-
-		const half = await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
-		expect(half.body.eatback).toBe("half");
-		expect(half.body.allowance).toBe(half.body.target + 200);
-
-		await request(app).patch("/api/profile").set(headers).send({ eatback: "none" });
-		coachLlm.nextOutput = READING;
-		const none = await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
-		expect(none.body.allowance).toBe(none.body.target);
-
-		await request(app).patch("/api/profile").set(headers).send({ eatback: "all" });
-		coachLlm.nextOutput = READING;
-		const all = await request(app).get(`/api/day/today?tz=${tz}`).set(headers);
-		expect(all.body.allowance).toBe(all.body.target + 400);
+		const second = await request(app).patch("/api/profile").set(headers).send({ experience: "intermediate" });
+		expect(second.body.stated_at.environment).toBe(dated.environment);
+		expect(second.body.stated_at.experience).toBeTruthy();
+		expect(second.body.environment).toBe("home");
 	});
 
 	it("appends spoken constraints and replaces edited ones", async () => {
@@ -2373,7 +2173,7 @@ describe("goals — set by talking", () => {
 			{ kind: "goal", title: "Down to 170 lb by December" },
 			{
 				spec: {
-					kind: "lose_fat",
+					kind: "custom",
 					title: "Down to 170 lb",
 					metrics: [
 						{
@@ -2417,7 +2217,7 @@ describe("goals — set by talking", () => {
 				tz_offset_min: tz,
 			});
 		expect(confirmed.status).toBe(201);
-		expect(confirmed.body.goal).toMatchObject({ kind: "lose_fat", title: "Down to 170 lb", status: "active", priority: 1 });
+		expect(confirmed.body.goal).toMatchObject({ kind: "custom", title: "Down to 170 lb", status: "active", priority: 1 });
 		// Their date needs about 1.5 lb a week — brisker than their standard pace but
 		// inside the safe band, so it stands as the goal's end date.
 		expect(confirmed.body.goal.active_to).toBe(theirDate);
@@ -2462,7 +2262,7 @@ describe("goals — set by talking", () => {
 			.set(headers)
 			.send({
 				spec: {
-					kind: "lose_fat",
+					kind: "custom",
 					title: "Down to 150 lb",
 					metrics: [{ measure: "body_weight", target: 150, unit: "lb", direction: "decrease", by: soon }],
 				},
@@ -2479,7 +2279,7 @@ describe("goals — set by talking", () => {
 			.set(headers)
 			.send({
 				spec: {
-					kind: "lose_fat",
+					kind: "custom",
 					title: "Down to 150 lb, sensibly",
 					metrics: [{ measure: "body_weight", target: 150, unit: "lb", direction: "decrease", by: soon }],
 				},
@@ -2516,7 +2316,7 @@ describe("goals — the facts stated alongside them", () => {
 			{ kind: "goal", title: "Down to 200 lb" },
 			{
 				spec: {
-					kind: "lose_fat",
+					kind: "custom",
 					title: "Down to 200 lb",
 					metrics: [
 						{ measure: "body_weight", scope: null, target: 200, unit: "lb", direction: "decrease", rate: null, by: null },
@@ -2581,7 +2381,7 @@ describe("goals — the facts stated alongside them", () => {
 			});
 		// 4. It saves. The blocking "Weekly sets needs a muscle" is gone.
 		expect(confirmed.status).toBe(201);
-		expect(confirmed.body.goal).toMatchObject({ kind: "lose_fat", title: "Down to 200 lb", status: "active" });
+		expect(confirmed.body.goal).toMatchObject({ kind: "custom", title: "Down to 200 lb", status: "active" });
 		expect(confirmed.body.goal.metrics[1]).toMatchObject({ measure: "weekly_sets", scope: null, target: 18 });
 
 		// 5. The 212 is a weigh-in, not a note that scrolled past.
@@ -2671,15 +2471,10 @@ describe("coach — the brief", () => {
 				goal_pace: "standard",
 				goal_weight_lb: 170,
 				training_days: 4,
-				diet_style: "higher protein",
 				environment: "gym",
 				constraints: ["bad left knee"],
 			});
 		await request(app).post("/api/weight").set(headers).send({ weight_lb: 193.4, logged_at: localInstant(today, "06:40", tz) });
-		await request(app)
-			.post("/api/entries/meals")
-			.set(headers)
-			.send({ description: "eggs and toast", kcal: 520, protein_g: 34, logged_at: localInstant(today, "07:30", tz) });
 
 		// Two sessions at 135 lb × 3 × 8 after a jump from 130 — the history the
 		// progression rules step from, and old enough that the step is not "this week".
@@ -2698,9 +2493,8 @@ describe("coach — the brief", () => {
 		const inputs = coach.inputs.at(-1)!;
 		expect(inputs.date).toBe(today);
 		// The plan the user stated, including the constraint that outranks everything.
-		expect(inputs.plan).toMatchObject({ diet_style: "higher protein", training_days: 4, environment: "gym", units: "lb" });
+		expect(inputs.plan).toMatchObject({ training_days: 4, environment: "gym", units: "lb" });
 		expect(inputs.plan.constraints).toContain("bad left knee");
-		expect(inputs.plan.targets.kcal).toBeGreaterThan(1500);
 
 		// Features off the real rows: three days since the last session, chest recovering.
 		expect(inputs.features.days_since_last_workout).toBe(3);
@@ -2840,7 +2634,7 @@ describe("coach — the nudge", () => {
 			.set(headers)
 			.send({
 				spec: {
-					kind: "lose_fat",
+					kind: "custom",
 					title: "Down to 170 lb",
 					metrics: [{ measure: "body_weight", target: 170, unit: "lb", direction: "decrease" }],
 				},
@@ -3126,7 +2920,7 @@ describe("coach — revising the brief, and never storing an empty one", () => {
 // had to change (user decision 2026-08-31 §A): the plan is ticked off rather than
 // re-issued, an ask after training is never a rest verdict, and an add-on appends.
 
-describe("the living plan — completion, add-ons and the live Eat card", () => {
+describe("the living plan — completion and add-ons", () => {
 	const tz = tzForLocalHour(14);
 	const today = localDay(new Date(), tz).date;
 	let headers: Record<string, string>;
@@ -3199,42 +2993,6 @@ describe("the living plan — completion, add-ons and the live Eat card", () => 
 		expect(JSON.stringify(stored.rows[0]!.workout)).not.toContain("completion");
 	});
 
-	it("draws the Eat card from the day, not from the brief's own targets", async () => {
-		await request(app)
-			.post("/api/entries/meals")
-			.set(headers)
-			.send({ description: "chicken and rice", kcal: 700, protein_g: 55, logged_at: localInstant(today, "12:30", tz) })
-			.expect(201);
-
-		const res = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
-		const now = res.body.brief.nutrition_now;
-		const day = await request(app).get(`/api/day/${today}?tz=${tz}`).set(headers);
-
-		expect(now.eaten_kcal).toBe(day.body.eaten);
-		expect(now.allowance_kcal).toBe(day.body.allowance);
-		expect(now.remaining_kcal).toBe(day.body.remaining);
-		expect(now.eaten_protein_g).toBe(day.body.macros.protein_g.eaten);
-		expect(now.past_target).toBe(false);
-		expect(now.line).toContain("kcal left");
-		// The model's own numbers are untouched — they are the day's TARGET, not what is left.
-		expect(res.body.brief.nutrition.kcal).toBe(SAMPLE_BRIEF.nutrition.kcal);
-	});
-
-	it("states a day past its allowance as a fact, with no advice attached", async () => {
-		await request(app)
-			.post("/api/entries/meals")
-			.set(headers)
-			.send({ description: "a very large dinner", kcal: 4200, logged_at: localInstant(today, "13:30", tz) })
-			.expect(201);
-
-		const res = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
-		const now = res.body.brief.nutrition_now;
-		expect(now.past_target).toBe(true);
-		expect(now.remaining_kcal).toBeLessThanOrEqual(0);
-		expect(now.line).toContain("over today's allowance");
-		expect(now.line).not.toMatch(/try|should|tomorrow|careful/i);
-	});
-
 	it("appends an add-on under the plan instead of regenerating it", async () => {
 		const before = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
 		const originals = before.body.brief.workout.exercises.map((e: { name: string }) => e.name);
@@ -3252,7 +3010,6 @@ describe("the living plan — completion, add-ons and the live Eat card", () => 
 				],
 				finisher: [],
 			},
-			nutrition: { ...SAMPLE_BRIEF.nutrition, kcal: 9999 },
 			nudge: "Ignore me too.",
 			revision_mode: "append",
 		});
@@ -3266,9 +3023,8 @@ describe("the living plan — completion, add-ons and the live Eat card", () => 
 		const names = res.body.brief.workout.exercises.map((e: { name: string }) => e.name);
 		// The plan stands and the two new items are under it, in order.
 		expect(names).toEqual([...originals, "Plank", "Hanging Leg Raise"]);
-		// The plan keeps its own headline, its own eating card and its own nudge.
+		// The plan keeps its own headline and its own nudge.
 		expect(res.body.brief.headline).toBe(before.body.brief.headline);
-		expect(res.body.brief.nutrition.kcal).toBe(before.body.brief.nutrition.kcal);
 		expect(res.body.brief.nudge).toBe(before.body.brief.nudge);
 		// The reasoning gains the sentence about the addition rather than losing the old one.
 		expect(res.body.brief.why).toContain(before.body.brief.why);
@@ -3449,13 +3205,12 @@ describe("the day's plan, read without writing one", () => {
 		const page = await request(app).get(`/api/coach/next?tz=${tz}&generate=false`).set(headers);
 		expect(page.status).toBe(200);
 		expect(page.body.brief.headline).toBe(SAMPLE_BRIEF.headline);
-		// The same live state the generating path attaches: ticks, and the Eat card's numbers.
+		// The same live state the generating path attaches: ticks.
 		expect(page.body.brief.workout.exercises.map((e: { completion: { done: boolean } }) => e.completion.done)).toEqual([
 			true,
 			true,
 		]);
 		expect(page.body.brief.workout.complete).toBe(true);
-		expect(page.body.brief.nutrition_now).toBeTruthy();
 		// The log has moved since the brief was written, and the page is told so.
 		expect(page.body.stale).toBe(true);
 
@@ -3864,13 +3619,9 @@ describe("training background — what the user brings with them", () => {
 			{ kind: "statement", scope: "preference", text: said },
 			{
 				fields: {
-					diet_style: null,
-					protein_g: null,
-					carbs_max_g: null,
 					training_days: null,
 					environment: null,
 					equipment: null,
-					eatback: null,
 					experience: "intermediate",
 					background: "three years of lifting",
 					reference_loads: [{ exercise: "Bench Press", load_lb: 165, reps: 5 }],
@@ -3925,13 +3676,9 @@ describe("training background — what the user brings with them", () => {
 			{ kind: "statement", scope: "preference", text: said },
 			{
 				fields: {
-					diet_style: null,
-					protein_g: null,
-					carbs_max_g: null,
 					training_days: null,
 					environment: null,
 					equipment: null,
-					eatback: null,
 					experience: null,
 					background: null,
 					reference_loads: [{ exercise: "Back Squat", load_lb: 225, reps: null }],
@@ -4622,13 +4369,9 @@ describe("places — what the room has been seen to contain", () => {
 			{ kind: "statement", scope: "preference", text: "my gym is New Millennium" },
 			{
 				fields: {
-					diet_style: null,
-					protein_g: null,
-					carbs_max_g: null,
 					training_days: null,
 					environment: "gym",
 					equipment: null,
-					eatback: null,
 					experience: null,
 					background: null,
 					reference_loads: null,
@@ -4781,19 +4524,7 @@ describe("fusion — revising by telling it", () => {
 	});
 
 	it("takes one saved row as `record` — the DayLog's make-a-change", async () => {
-		llm.outputs.push({
-			description: "chicken and rice",
-			meal_type: "lunch",
-			kcal: 620,
-			protein_g: 45,
-			carbs_g: 60,
-			fat_g: 18,
-			fiber_g: 6,
-			items: [],
-			confidence: "high",
-			photo_fields: [],
-			photo_indexes: [],
-		});
+		llm.outputs.push({ weight_lb: 181, confidence: "high", photo_fields: [], photo_indexes: [] });
 		const res = await request(app)
 			.post("/api/log/analyze")
 			.set(headers)
@@ -4801,27 +4532,15 @@ describe("fusion — revising by telling it", () => {
 			.field(
 				"revise",
 				JSON.stringify({
-					record: {
-						kind: "meal",
-						description: "chicken and rice",
-						meal_type: "dinner",
-						kcal: 620,
-						protein_g: 45,
-						carbs_g: 60,
-						fat_g: 18,
-						fiber_g: 6,
-						items: [],
-						confidence: "high",
-						sources: null,
-					},
-					instruction: "that meal was lunch not dinner",
+					record: { kind: "weight", weight_lb: 179, confidence: "high", sources: null, check: null },
+					instruction: "it was 181 not 179",
 				})
 			);
 
 		expect(res.status).toBe(200);
 		// One part in, one part out — and `result` for the single-part shape the card draws.
 		expect(res.body.results).toHaveLength(1);
-		expect(res.body.result).toMatchObject({ kind: "meal", meal_type: "lunch" });
+		expect(res.body.result).toMatchObject({ kind: "weight", weight_lb: 181 });
 	});
 
 	it("refuses a revision with no parts, no instruction, or photos attached", async () => {
@@ -4858,7 +4577,7 @@ describe("fusion — revising by telling it", () => {
 	it("re-projects a revised goal's timeline, like any other preview", async () => {
 		llm.outputs.push({
 			spec: {
-				kind: "lose_fat",
+				kind: "custom",
 				title: "Get to 165 lb",
 				metrics: [
 					{ measure: "body_weight", scope: null, target: 165, unit: "lb", direction: "decrease", rate: null, by: null },
@@ -4878,7 +4597,7 @@ describe("fusion — revising by telling it", () => {
 						{
 							kind: "goal",
 							spec: {
-								kind: "lose_fat",
+								kind: "custom",
 								title: "Get to 170 lb",
 								metrics: [
 									{ measure: "body_weight", scope: null, target: 170, unit: "lb", direction: "decrease", rate: null, by: null },
@@ -5080,35 +4799,48 @@ describe("the corrections, kept", () => {
 		auth = { Authorization: `Bearer ${await signUp("corrections@example.com")}` };
 	}, 60_000);
 
-	const lunch = {
-		kind: "meal" as const,
-		description: "tuna, eggs, vegetables and four slices of bread",
-		meal_type: "lunch" as const,
-		kcal: 918,
-		protein_g: 67,
-		carbs_g: 398,
-		fat_g: 35,
-		fiber_g: 12,
-		items: [],
-		confidence: "high" as const,
-		sources: null,
-		consistency: null,
+	const lift = {
+		kind: "activities" as const,
+		items: [
+			{
+				exercise: "Bench Press",
+				equipment: null,
+				description: "3 × 8 bench at 135 lb",
+				category: "strength",
+				muscle_groups: ["chest"],
+				sets: 3,
+				reps: 8,
+				load_lb: 135,
+				duration_min: null,
+				distance_mi: null,
+				kcal: 120,
+				confidence: "high" as const,
+				sources: null,
+				refine: null,
+			},
+		],
 	};
 
-	/** What the meal detail call answers with, on `MealDetailOutputSchema`. */
-	const mealAnswer = (over: Record<string, unknown>) => ({
-		description: lunch.description,
-		meal_type: "lunch",
-		kcal: 918,
-		protein_g: 67,
-		carbs_g: 398,
-		fat_g: 35,
-		fiber_g: 12,
-		items: [],
-		confidence: "medium",
+	/** What the activities-revision call answers with. */
+	const liftAnswer = (over: Record<string, unknown>) => ({
+		revision_mode: "amend",
+		items: [
+			{
+				exercise: "Bench Press",
+				equipment: null,
+				description: "3 × 8 bench at 135 lb",
+				sets: 3,
+				reps: 8,
+				load_lb: 135,
+				duration_min: null,
+				distance_mi: null,
+				kcal: 120,
+				confidence: "high",
+				...over,
+			},
+		],
 		photo_fields: [],
 		photo_indexes: [],
-		...over,
 	});
 
 	async function logEntries() {
@@ -5122,24 +4854,22 @@ describe("the corrections, kept", () => {
 	}
 
 	it("carries a told change from a pending preview all the way into the record's history", async () => {
-		// The told change. The gate passes on the way back (939 against 918), so this is the
-		// one call the revision costs.
-		llm.outputs.push(mealAnswer({ carbs_g: 89 }));
+		llm.outputs.push(liftAnswer({ load_lb: 140 }));
 		const revised = await request(app)
 			.post("/api/log/analyze")
 			.set(auth)
 			.field("tz_offset_min", String(tz))
-			.field("revise", JSON.stringify({ results: [lunch], instruction: "the carbs look wrong" }));
+			.field("revise", JSON.stringify({ results: [lift], instruction: "the load looks wrong" }));
 
 		expect(revised.status).toBe(200);
-		expect(revised.body.results[0]).toMatchObject({ carbs_g: 89 });
+		expect(revised.body.results[0].items[0]).toMatchObject({ load_lb: 140 });
 		// The diff is the SERVER's, taken between what it was handed and what it answered.
 		expect(revised.body.corrections).toEqual([
 			{
 				part: 0,
-				item: null,
-				instruction: "the carbs look wrong",
-				changes: [{ field: "carbs_g", from: 398, to: 89 }],
+				item: 0,
+				instruction: "the load looks wrong",
+				changes: [{ field: "load_lb", from: 135, to: 140 }],
 			},
 		]);
 
@@ -5153,51 +4883,51 @@ describe("the corrections, kept", () => {
 				client_id: randomUUID(),
 				results: revised.body.results,
 				corrections: revised.body.corrections,
-				text: "tuna, two eggs, quarter onion, a chilli, two cups of vegetables, four slices of this bread",
+				text: "bench press, three sets of eight at one thirty five",
 				text_kind: "transcript",
 				tz_offset_min: tz,
 				logged_at: localInstant(today, "13:45", tz),
 			});
 		expect(saved.status).toBe(201);
 
-		const [meal] = await logEntries();
-		expect(meal!.kind).toBe("meal");
-		expect(meal!.corrections).toHaveLength(1);
-		expect(meal!.corrections[0]).toMatchObject({
-			instruction: "the carbs look wrong",
-			changes: [{ field: "carbs_g", from: 398, to: 89 }],
+		const [activity] = await logEntries();
+		expect(activity!.kind).toBe("activity");
+		expect(activity!.corrections).toHaveLength(1);
+		expect(activity!.corrections[0]).toMatchObject({
+			instruction: "the load looks wrong",
+			changes: [{ field: "load_lb", from: 135, to: 140 }],
 		});
 		// It is written against the record, so it survives the read the screen actually does.
-		const row = await db.pool.query(`SELECT * FROM record_corrections WHERE meal_id = $1`, [meal!.id]);
+		const row = await db.pool.query(`SELECT * FROM record_corrections WHERE activity_id = $1`, [activity!.id]);
 		expect(row.rows).toHaveLength(1);
-		expect(row.rows[0]!.activity_id).toBeNull();
+		expect(row.rows[0]!.weight_id).toBeNull();
 	});
 
 	it("records a change told to a row that is ALREADY saved, with the server's own diff", async () => {
-		const [meal] = await logEntries();
+		const [activity] = await logEntries();
 		const patched = await request(app)
-			.patch(`/api/entries/meals/${meal!.id}`)
+			.patch(`/api/entries/movement/${activity!.id}`)
 			.set(auth)
-			.send({ kcal: 880, correction_instruction: "it was closer to 880 calories" });
+			.send({ load_lb: 145, correction_instruction: "it was closer to 145 pounds" });
 		expect(patched.status).toBe(200);
-		expect(patched.body.kcal).toBe(880);
+		expect(patched.body.load_lb).toBe(145);
 
 		const [after] = await logEntries();
 		// Chronological: the pending correction first, then this one.
 		expect(after!.corrections.map((c) => c.instruction)).toEqual([
-			"the carbs look wrong",
-			"it was closer to 880 calories",
+			"the load looks wrong",
+			"it was closer to 145 pounds",
 		]);
-		expect(after!.corrections[1]!.changes).toEqual([{ field: "kcal", from: 918, to: 880 }]);
+		expect(after!.corrections[1]!.changes).toEqual([{ field: "load_lb", from: 140, to: 145 }]);
 	});
 
 	it("writes nothing for an instruction that moved nothing", async () => {
-		const [meal] = await logEntries();
-		const before = meal!.corrections.length;
+		const [activity] = await logEntries();
+		const before = activity!.corrections.length;
 		const patched = await request(app)
-			.patch(`/api/entries/meals/${meal!.id}`)
+			.patch(`/api/entries/movement/${activity!.id}`)
 			.set(auth)
-			.send({ kcal: 880, correction_instruction: "make it 880" });
+			.send({ load_lb: 145, correction_instruction: "make it 145" });
 		expect(patched.status).toBe(200);
 		const [after] = await logEntries();
 		expect(after!.corrections).toHaveLength(before);
@@ -5261,22 +4991,22 @@ describe("the corrections, kept", () => {
 		});
 		// Each correction is filed against its own record, never against the log.
 		const rows = await db.pool.query(
-			`SELECT activity_id, meal_id, weight_id FROM record_corrections
+			`SELECT activity_id, weight_id FROM record_corrections
 			  WHERE user_id = (SELECT id FROM "user" WHERE email = 'corrections@example.com')`
 		);
 		for (const row of rows.rows) {
-			expect([row.activity_id, row.meal_id, row.weight_id].filter(Boolean)).toHaveLength(1);
+			expect([row.activity_id, row.weight_id].filter(Boolean)).toHaveLength(1);
 		}
 	});
 
 	it("takes its history with it when the record is deleted", async () => {
 		const entries = await logEntries();
-		const meal = entries.find((entry) => entry.kind === "meal")!;
-		expect(meal.corrections.length).toBeGreaterThan(0);
-		const gone = await request(app).delete(`/api/entries/meals/${meal.id}`).set(auth);
+		const activity = entries.find((entry) => entry.kind === "activity")!;
+		expect(activity.corrections.length).toBeGreaterThan(0);
+		const gone = await request(app).delete(`/api/entries/movement/${activity.id}`).set(auth);
 		expect(gone.status).toBe(204);
 		// The FK cascade does it; nothing in application code goes looking.
-		const rows = await db.pool.query(`SELECT id FROM record_corrections WHERE meal_id = $1`, [meal.id]);
+		const rows = await db.pool.query(`SELECT id FROM record_corrections WHERE activity_id = $1`, [activity.id]);
 		expect(rows.rows).toHaveLength(0);
 	});
 
@@ -5289,7 +5019,7 @@ describe("the corrections, kept", () => {
 				results: [{ kind: "weight", weight_lb: 179.9, confidence: "high", sources: null, check: null }],
 				// Part 1 is not there: the user dropped it with its ✕ before saving.
 				corrections: [
-					{ part: 1, item: null, instruction: "the carbs look wrong", changes: [{ field: "carbs_g", from: 398, to: 89 }] },
+					{ part: 1, item: 0, instruction: "the load looks wrong", changes: [{ field: "load_lb", from: 135, to: 140 }] },
 				],
 				tz_offset_min: tz,
 				logged_at: localInstant(today, "06:00", tz),
@@ -5314,7 +5044,7 @@ describe("the dossier", () => {
 	beforeAll(async () => {
 		const token = await signUp("dossier@example.com");
 		headers = { Authorization: `Bearer ${token}` };
-		await request(app).patch("/api/profile").set(headers).send({ training_days: 4, diet_style: "higher protein" });
+		await request(app).patch("/api/profile").set(headers).send({ training_days: 4 });
 		await request(app)
 			.post("/api/entries/movement")
 			.set(headers)
@@ -5405,161 +5135,6 @@ describe("the dossier", () => {
 
 	it("refuses a timezone that is not one", async () => {
 		expect((await request(app).get("/api/you?tz=9999").set(headers)).status).toBe(400);
-	});
-});
-
-// ── the Eat page ─────────────────────────────────────────────────────────────────────
-// Three layers, and only the middle one is arithmetic (concept-v2 §Principles 4). The one
-// that is written follows the READINGS rule: cached against the week's inputs hash, so
-// opening the page when nothing has moved costs nothing and generates nothing.
-
-describe("the Eat page", () => {
-	const tz = tzForLocalHour(15);
-	const today = localDay(new Date(), tz).date;
-	const yesterday = addDays(today, -1);
-	let headers: Record<string, string>;
-
-	beforeAll(async () => {
-		const token = await signUp("eater@example.com");
-		headers = { Authorization: `Bearer ${token}` };
-		await request(app)
-			.patch("/api/profile")
-			.set(headers)
-			.send({ sex: "male", birth_year: new Date().getUTCFullYear() - 38, height_cm: 180, protein_g: 160, carbs_max_g: 150 });
-
-		const meal = (date: string, time: string, body: Record<string, unknown>) =>
-			request(app)
-				.post("/api/entries/meals")
-				.set(headers)
-				.send({ logged_at: localInstant(date, time, tz), ...body });
-
-		await meal(yesterday, "13:00", { description: "rice and chicken", kcal: 900, protein_g: 60, carbs_g: 190, fat_g: 20, fiber_g: 6 });
-		await meal(today, "08:00", { description: "eggs and toast", kcal: 500, protein_g: 35, carbs_g: 40, fat_g: 22, fiber_g: 5 });
-		await meal(today, "13:00", { description: "salad", kcal: 600, protein_g: 45, carbs_g: 50, fat_g: 25, fiber_g: 9 });
-	});
-
-	it("answers with the day, the computed week and the written direction", async () => {
-		coachLlm.nextOutput = { text: "Protein is the one to move: you are averaging well under the mark." };
-		const res = await request(app).get(`/api/eating?tz=${tz}`).set(headers);
-		expect(res.status).toBe(200);
-
-		// Layer 1 — the day's own arithmetic, the SAME numbers Today shows.
-		expect(res.body.today.eaten).toBe(1100);
-		expect(res.body.today.macros.protein_g.eaten).toBe(80);
-		expect(res.body.today.macros.carbs_g.target).toBe(150);
-		expect(res.body.today.meals).toHaveLength(2);
-
-		// Layer 2 — the rolling week, computed over CLOSED days only. Today's two meals are
-		// in layer 1 and nowhere near this one: a day still being lived cannot be judged
-		// (field report 2026-09-01). So the divisor is ONE — yesterday.
-		expect(res.body.week.days_logged).toBe(1);
-		expect(res.body.week.protein.avg_per_day).toBe(60);
-		// And nothing in the week's judgements names today.
-		expect(JSON.stringify(res.body.week)).not.toContain(today);
-		expect(res.body.week.protein).toMatchObject({ target: 160, source: "stated", direction: "at_least" });
-		expect(res.body.week.carbs).toMatchObject({ target: 150, direction: "at_most" });
-		// Nobody states a fibre target; the guideline stands in and says so.
-		expect(res.body.week.fiber.source).toBe("guideline");
-
-		// Layer 3 — the written direction.
-		expect(res.body.direction.text).toMatch(/Protein is the one to move/);
-		expect(res.body.direction.kind).toBe("eating_direction");
-	});
-
-	it("generates nothing at all on a warm open", async () => {
-		// The reading contract, and the reason this is a reading rather than a brief.
-		coachLlm.nextOutput = { text: "This must never be reached." };
-		const before = coachLlm.requests.length;
-		const res = await request(app).get(`/api/eating?tz=${tz}`).set(headers);
-		expect(res.status).toBe(200);
-		expect(coachLlm.requests).toHaveLength(before);
-		expect(res.body.direction.text).toMatch(/Protein is the one to move/);
-	});
-
-	it("writes a new one once the week underneath it moves", async () => {
-		await request(app)
-			.post("/api/entries/meals")
-			.set(headers)
-			.send({
-				description: "steak",
-				kcal: 700,
-				protein_g: 80,
-				carbs_g: 5,
-				fat_g: 40,
-				fiber_g: 2,
-				logged_at: localInstant(today, "19:00", tz),
-			});
-		// Today's meals do not move the week — that is the fix — so the direction is asked
-		// again only because the DAY moved under the hash, not the closed-day averages.
-		const res = await request(app).get(`/api/eating?tz=${tz}`).set(headers);
-		expect(res.body.week.protein.avg_per_day).toBe(60);
-		expect(res.body.week.days_logged).toBe(1);
-	});
-
-	it("keeps the open day out of the week even when it is the only day logged", async () => {
-		const token = await signUp("today-only-eater@example.com");
-		const only = { Authorization: `Bearer ${token}` };
-		await request(app)
-			.post("/api/entries/meals")
-			.set(only)
-			.send({ description: "lunch", kcal: 620, protein_g: 45, logged_at: localInstant(today, "12:59", tz) });
-
-		const res = await request(app).get(`/api/eating?tz=${tz}&generate=false`).set(only);
-		// Layer 1 has it; layer 2 has nothing to say, and says nothing rather than judging.
-		expect(res.body.today.eaten).toBe(620);
-		expect(res.body.week.days_logged).toBe(0);
-		expect(res.body.week.protein.avg_per_day).toBeNull();
-		expect(res.body.week.outliers).toEqual([]);
-	});
-
-	it("says nothing rather than inventing a concern about an empty week", async () => {
-		const token = await signUp("never-eaten@example.com");
-		const res = await request(app)
-			.get(`/api/eating?tz=${tz}`)
-			.set({ Authorization: `Bearer ${token}` });
-
-		expect(res.status).toBe(200);
-		expect(res.body.week.days_logged).toBe(0);
-		expect(res.body.week.protein.avg_per_day).toBeNull();
-		// No paragraph, and no model call to produce one.
-		expect(res.body.direction).toBeNull();
-	});
-});
-
-describe("the Eat page's safe door", () => {
-	const tz = tzForLocalHour(15);
-
-	it("reads without writing when asked not to generate", async () => {
-		// A reading is one-per-day state, so a plain GET is a write when the cache is cold.
-		// `generate=false` is how this page is audited without changing it — the same pair
-		// the coach has, and for the same reason.
-		const token = await signUp("read-only-eater@example.com");
-		const headers = { Authorization: `Bearer ${token}` };
-		// Yesterday, so the WEEK has something in it: the open day is never in the week.
-		await request(app)
-			.post("/api/entries/meals")
-			.set(headers)
-			.send({
-				description: "eggs",
-				kcal: 400,
-				protein_g: 30,
-				carbs_g: 20,
-				fat_g: 20,
-				fiber_g: 4,
-				logged_at: localInstant(addDays(localDay(new Date(), tz).date, -1), "08:00", tz),
-			});
-
-		coachLlm.nextOutput = { text: "This must never be reached." };
-		const before = coachLlm.requests.length;
-		const res = await request(app).get(`/api/eating?tz=${tz}&generate=false`).set(headers);
-
-		expect(res.status).toBe(200);
-		// The computed layers are all there — they are arithmetic, not generation.
-		expect(res.body.week.days_logged).toBe(1);
-		expect(res.body.today.eaten).toBe(0);
-		// And nothing was written.
-		expect(coachLlm.requests).toHaveLength(before);
-		expect(res.body.direction).toBeNull();
 	});
 });
 
