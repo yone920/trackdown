@@ -1,0 +1,558 @@
+import type pg from "pg";
+import { z } from "zod";
+import { CATEGORIES, type ExerciseCategory, type LoadDirection } from "../db/exercises.js";
+import { CORRECTABLE_FIELDS, diffFields, recordCorrection } from "./corrections.js";
+import { buildExerciseIndex } from "./exerciseMatch.js";
+import { EXPERIENCE_LEVELS, ReferenceLoadSchema } from "./fusion/schema.js";
+
+// Data access for the four user-owned tables. Every function takes the session's
+// userId and scopes the SQL by it — this is what Supabase's RLS policies used to do.
+
+// "movement" is the v1 name the shipped app still calls; 0004_v2.sql renamed the table to
+// `activities` and gave it exercise/sets/reps/load columns. Keeping the alias here is what
+// lets /api/entries/movement go on working until WP6 replaces those screens.
+export const KINDS = { movement: "activities" } as const;
+export type Kind = keyof typeof KINDS;
+export function isKind(value: string): value is Kind {
+	return value in KINDS;
+}
+
+type Queryable = pg.Pool | pg.PoolClient;
+
+const isoDate = z.string().datetime({ offset: true });
+
+export const ACTIVITY_SOURCES = ["manual", "fused", "health"] as const;
+export const CONFIDENCE_LEVELS = ["low", "medium", "high"] as const;
+
+// The v2 activity fields (migration 0012 onward). All optional: a v1 client that sends none
+// is still writing a valid row.
+const activityFields = {
+	exercise: z.string().trim().min(1).max(120).nullable().optional(),
+	// What it was done ON (migration 0012). Separate from the movement, and never used to
+	// look one up: "cable stack" is not an exercise name.
+	equipment: z.string().trim().min(1).max(80).nullable().optional(),
+	category: z.enum(CATEGORIES).nullable().optional(),
+	muscle_groups: z.array(z.string().trim().min(1).max(40)).max(12).nullable().optional(),
+	sets: z.number().int().min(0).max(100).nullable().optional(),
+	reps: z.number().int().min(0).max(1000).nullable().optional(),
+	load_lb: z.number().min(0).max(2000).nullable().optional(),
+	duration_min: z.number().int().min(0).max(1440).nullable().optional(),
+	distance_mi: z.number().min(0).max(1000).nullable().optional(),
+	source: z.enum(ACTIVITY_SOURCES).nullable().optional(),
+	confidence: z.enum(CONFIDENCE_LEVELS).nullable().optional(),
+};
+
+export const RangeQuery = z.object({
+	from: isoDate.optional(),
+	to: isoDate.optional(),
+	order: z.enum(["asc", "desc"]).default("desc"),
+	limit: z.coerce.number().int().min(1).max(1000).optional(),
+});
+export type RangeQuery = z.infer<typeof RangeQuery>;
+
+export const NewEntry = z.object({
+	description: z.string().trim().min(1).max(500),
+	kcal: z.number().int().min(0).default(0),
+	logged_at: isoDate.optional(),
+	...activityFields,
+});
+export type NewEntry = z.infer<typeof NewEntry>;
+
+/**
+ * What the user SAID to make this change, when the change came from telling rather than
+ * from a screen (concept-v2 §Principles 7 — NO FORMS). Not a column: it is the instruction
+ * behind the correction, and it is filed with the field-level diff in `record_corrections`
+ * (migration 0015). Absent on any other write, and a patch carrying only this changes
+ * nothing and records nothing.
+ */
+const correctionInstruction = z.string().trim().min(1).max(500);
+
+export const EntryPatch = z
+	.object({
+		description: z.string().trim().min(1).max(500),
+		kcal: z.number().int().min(0),
+		logged_at: isoDate,
+		...activityFields,
+		correction_instruction: correctionInstruction,
+	})
+	.partial()
+	.refine((patch) => Object.keys(patch).length > 0, { message: "Empty patch." });
+export type EntryPatch = z.infer<typeof EntryPatch>;
+
+/**
+ * A correction that replaces ONE activity record with SEVERAL (migration 0018). Told, like
+ * every other correction: the user says "the last two sets I dropped to 70", the fusion
+ * revision answers with the parts, and this is the parts arriving to be written.
+ *
+ * A record carries one load, so a load that changed partway through the sets cannot be
+ * corrected into it. The PATCH beside this can only ever move the fields of one row, which
+ * is why a second door exists rather than a flag on the first: a PATCH that creates rows
+ * would be a lie about what a PATCH is.
+ */
+export const SplitPart = z.object({
+	description: z.string().trim().min(1).max(500),
+	kcal: z.number().int().min(0).default(0),
+	...activityFields,
+});
+export type SplitPart = z.infer<typeof SplitPart>;
+
+export const SplitEntry = z.object({
+	/** At least two: replacing one record with one record is a PATCH. */
+	parts: z.array(SplitPart).min(2).max(10),
+	correction_instruction: correctionInstruction,
+});
+export type SplitEntry = z.infer<typeof SplitEntry>;
+
+export const NewWeight = z.object({
+	weight_lb: z.number().positive().max(2000),
+	logged_at: isoDate.optional(),
+	/**
+	 * 'low' when the app doubted this reading and the user confirmed it anyway (migration
+	 * 0020). NULL means nobody had reason to ask, which is not the same as "high".
+	 */
+	confidence: z.enum(CONFIDENCE_LEVELS).nullable().optional(),
+});
+export type NewWeight = z.infer<typeof NewWeight>;
+
+/** A correction to a weigh-in — the DayLog's edit card (docs/design-system.md §DayLog). */
+export const WeightPatch = z
+	.object({
+		weight_lb: z.number().positive().max(2000),
+		logged_at: isoDate,
+		correction_instruction: correctionInstruction,
+	})
+	.partial()
+	.refine((patch) => Object.keys(patch).length > 0, { message: "Empty patch." });
+export type WeightPatch = z.infer<typeof WeightPatch>;
+
+export const ProfilePatch = z
+	.object({
+		display_name: z.string().trim().max(100).nullable(),
+		goal_weight_lb: z.number().positive().max(2000).nullable(),
+		units: z.enum(["imperial", "metric"]),
+		sex: z.enum(["male", "female"]).nullable(),
+		birth_year: z.number().int().min(1900).max(2100).nullable(),
+		height_cm: z.number().positive().max(300).nullable(),
+		activity_level: z.enum(["sedentary", "light", "moderate", "active", "very_active"]).nullable(),
+		// Not diet-specific: goals/proposal.ts uses this to pace EVERY goal's projected
+		// timeline (body-weight goals, exercise_load plate steps, …), so it survives the
+		// TDEE/calorie-budget removal even though it once fed that too.
+		goal_pace: z.enum(["gentle", "standard", "aggressive"]),
+		pregnant_or_lactating: z.boolean(),
+		health_concern: z.boolean(),
+		disclaimer_acknowledged_at: isoDate.nullable(),
+		training_days: z.number().int().min(0).max(7).nullable(),
+		/** How long a normal session is (migration 0014); null = never stated, not "sixty". */
+		session_minutes: z.number().int().min(10).max(240).nullable(),
+		/** Weekly cardio minutes aimed for (migration 0016); null = never stated, not "150". */
+		cardio_minutes_target: z.number().int().min(0).max(2000).nullable(),
+		environment: z.string().trim().max(80).nullable(),
+		equipment: z.array(z.string().trim().min(1).max(60)).max(30),
+		// A list edited on the Profile screen replaces the list; the spoken path appends
+		// and dedupes instead (services/fusion/confirm.ts), because saying "bad left knee"
+		// twice is one knee, and deleting a row is something only a tap can mean.
+		constraints: z.array(z.string().trim().min(1).max(200)).max(30),
+		preferences: z.array(z.string().trim().min(1).max(200)).max(30),
+		// The training background (migration 0011): what the user brings with them, so a
+		// cold start does not have to assume a beginner. Normally stated out loud through
+		// the Log sheet; editable here for the same reason every other plan field is.
+		experience: z.enum(EXPERIENCE_LEVELS).nullable(),
+		background: z.string().trim().max(600).nullable(),
+		reference_loads: z.array(ReferenceLoadSchema).max(20),
+	})
+	.partial()
+	.refine((patch) => Object.keys(patch).length > 0, { message: "Empty patch." });
+export type ProfilePatch = z.infer<typeof ProfilePatch>;
+
+// Written in this order by insertEntries; exercise_id is derived, never sent by a client.
+const ACTIVITY_COLUMNS = [
+	"exercise",
+	"exercise_id",
+	"equipment",
+	"category",
+	"muscle_groups",
+	"sets",
+	"reps",
+	"load_lb",
+	"duration_min",
+	"distance_mi",
+	"source",
+	"confidence",
+] as const;
+
+/** Patchable activity columns: everything above except the derived exercise_id. */
+const ACTIVITY_PATCH_COLUMNS = ACTIVITY_COLUMNS.filter((c) => c !== "exercise_id");
+
+export interface CatalogMatch {
+	id: string;
+	name: string;
+	category: ExerciseCategory;
+	primary_muscles: string[];
+	secondary_muscles: string[];
+	aliases: string[];
+	/** Which way its load points (migration 0013). See db/exercises.ts. */
+	load_direction: LoadDirection;
+	/**
+	 * What the movement is loaded with — "barbell", "dumbbell", "machine", "bench"…
+	 *
+	 * Carried on the match so a screen drawing a resolved load can say what the plates are
+	 * per side (field report 2026-09-02: a barbell total is stored and prescribed correctly,
+	 * but nobody loads a total — they load plates, and the arithmetic was being left to the
+	 * user in a gym). Only the catalogue may answer this; the name cannot, because "Bench
+	 * Press" is a barbell and does not say so.
+	 */
+	equipment: string[];
+	/**
+	 * How many illustrations the catalogue holds for it; 0 for the rows the import never
+	 * matched. Carried on the match so every screen that draws a resolved name can say,
+	 * *before* the tap, whether there is a picture behind it (field report 2026-09-01:
+	 * nothing indicated which names had illustrations).
+	 */
+	media_count: number;
+}
+
+/**
+ * Resolves spoken exercise names to catalogue rows, by name or alias, case-insensitively —
+ * "db bench" and "Dumbbell bench press" both find "Dumbbell Bench Press". Keyed by the
+ * lower-cased name that was asked for. Unknown names are simply absent: the catalogue
+ * normalises, it does not gate what the user is allowed to log.
+ *
+ * **It normalises spelling and nothing else.** A phrase carrying a qualifier the entry does
+ * not carry — "assisted chin up" against Chin-Up — is refused rather than snapped to the
+ * nearest name, and the caller keeps the user's own words with no `exercise_id`. That
+ * decision lives in services/exerciseMatch.ts, with the field report that paid for it.
+ *
+ * The whole catalogue is read (a curated list in the low hundreds) because the match is
+ * decided in TypeScript: expressing "every meaningful word is accounted for" in SQL would
+ * be a worse version of the same code.
+ */
+export async function lookupExercises(
+	db: Queryable,
+	names: readonly (string | null | undefined)[]
+): Promise<Map<string, CatalogMatch>> {
+	const wanted = [
+		...new Set(
+			names
+				.filter((n): n is string => typeof n === "string" && n.trim() !== "")
+				.map((n) => n.trim().toLowerCase())
+		),
+	];
+	const matches = new Map<string, CatalogMatch>();
+	if (wanted.length === 0) return matches;
+
+	const { rows } = await db.query<CatalogMatch>(
+		`SELECT id, name, category, primary_muscles, secondary_muscles, aliases, load_direction, equipment, media_count
+		   FROM exercise_catalog ORDER BY name`
+	);
+	const index = buildExerciseIndex(rows);
+	for (const key of wanted) {
+		const match = index.find(key);
+		if (match) matches.set(key, match);
+	}
+	return matches;
+}
+
+function rangeSql(q: RangeQuery, params: unknown[], startIndex: number): string {
+	const clauses: string[] = [];
+	if (q.from) {
+		params.push(q.from);
+		clauses.push(`AND logged_at >= $${startIndex + params.length - 1}`);
+	}
+	if (q.to) {
+		params.push(q.to);
+		clauses.push(`AND logged_at < $${startIndex + params.length - 1}`);
+	}
+	return clauses.join(" ");
+}
+
+export async function listEntries(db: Queryable, userId: string, kind: Kind, q: RangeQuery) {
+	const params: unknown[] = [userId];
+	const range = rangeSql(q, params, 1);
+	const limit = q.limit ? `LIMIT ${q.limit}` : "";
+	const { rows } = await db.query(
+		`SELECT * FROM ${KINDS[kind]} WHERE user_id = $1 ${range}
+		 ORDER BY logged_at ${q.order === "asc" ? "ASC" : "DESC"} ${limit}`,
+		params
+	);
+	return rows;
+}
+
+export async function getEntry(db: Queryable, userId: string, kind: Kind, id: string) {
+	const { rows } = await db.query(`SELECT * FROM ${KINDS[kind]} WHERE user_id = $1 AND id = $2`, [
+		userId,
+		id,
+	]);
+	return rows[0] ?? null;
+}
+
+export async function insertEntries(db: Queryable, userId: string, kind: Kind, entries: NewEntry[]) {
+	if (entries.length === 0) return [];
+	// One catalogue lookup for the whole batch.
+	const catalog = await lookupExercises(db, entries.map((e) => e.exercise));
+	const columns = ["user_id", "description", "kcal", "logged_at", ...ACTIVITY_COLUMNS];
+	const params: unknown[] = [];
+	const tuples = entries.map((e) => {
+		const values: unknown[] = [userId, e.description, e.kcal, e.logged_at ?? new Date().toISOString()];
+		const match = e.exercise ? (catalog.get(e.exercise.trim().toLowerCase()) ?? null) : null;
+		values.push(
+			// Store the catalogue's spelling when we recognise the name, so the coach's
+			// "last time you benched" matches across weeks of differently worded logs.
+			match?.name ?? e.exercise ?? null,
+			match?.id ?? null,
+			e.equipment ?? null,
+			e.category ?? match?.category ?? null,
+			e.muscle_groups ?? match?.primary_muscles ?? null,
+			e.sets ?? null,
+			e.reps ?? null,
+			e.load_lb ?? null,
+			e.duration_min ?? null,
+			e.distance_mi ?? null,
+			// NOT NULL in the schema: a row with no stated source was typed by the user.
+			e.source ?? "manual",
+			e.confidence ?? null
+		);
+		const placeholders = values.map((v) => {
+			params.push(v);
+			return `$${params.length}`;
+		});
+		return `(${placeholders.join(", ")})`;
+	});
+	const { rows } = await db.query(
+		`INSERT INTO ${KINDS[kind]} (${columns.join(", ")}) VALUES ${tuples.join(", ")} RETURNING *`,
+		params
+	);
+	return rows;
+}
+
+export async function updateEntry(db: Queryable, userId: string, kind: Kind, id: string, patch: EntryPatch) {
+	const allowed: string[] = ["description", "kcal", "logged_at", ...ACTIVITY_PATCH_COLUMNS];
+	// Read before writing only when there is a correction to file: this is the DayLog's
+	// "tap → make a change" and not the hot path (migration 0015).
+	const said = patch.correction_instruction;
+	const before = said ? await getEntry(db, userId, kind, id) : null;
+	const sets: string[] = [];
+	const params: unknown[] = [userId, id];
+	for (const [key, value] of Object.entries(patch)) {
+		if (!allowed.includes(key)) continue;
+		// source is NOT NULL; clearing it is not a correction anyone means to make.
+		if (key === "source" && value === null) continue;
+		// exercise is assigned below, together with the exercise_id it resolves to.
+		if (key === "exercise") continue;
+		params.push(value);
+		sets.push(`${key} = $${params.length}`);
+	}
+	// Correcting the exercise re-points exercise_id (or clears it, when the new name is not
+	// in the catalogue). category and muscle_groups are left as they are unless the patch
+	// names them: an edit should change what was asked for and nothing else.
+	if (patch.exercise !== undefined) {
+		const match = patch.exercise
+			? (await lookupExercises(db, [patch.exercise])).get(patch.exercise.trim().toLowerCase())
+			: undefined;
+		params.push(match?.name ?? patch.exercise ?? null);
+		sets.push(`exercise = $${params.length}`);
+		params.push(match?.id ?? null);
+		sets.push(`exercise_id = $${params.length}`);
+	}
+	if (sets.length === 0) return getEntry(db, userId, kind, id);
+	const { rows } = await db.query(
+		`UPDATE ${KINDS[kind]} SET ${sets.join(", ")} WHERE user_id = $1 AND id = $2 RETURNING *`,
+		params
+	);
+	const after = rows[0] ?? null;
+	// The told change, kept beside the row it changed. Written after the update and only
+	// for what actually moved — a correction that changed nothing is not history.
+	if (said && before && after) {
+		await recordCorrection(
+			db,
+			userId,
+			{ activityId: id },
+			said,
+			diffFields(before as Record<string, unknown>, after as Record<string, unknown>, CORRECTABLE_FIELDS.activity)
+		);
+	}
+	return after;
+}
+
+/**
+ * Replace one activity record with several, in one transaction (migration 0018).
+ *
+ * The original row is **corrected in place into the first part** rather than deleted and
+ * re-created, and that is the whole design. Its id survives, so its evidence, its photos
+ * and every correction ever made to it stay attached to the thing the user is looking at;
+ * a delete-and-insert would take the day's history away in the name of fixing it. The
+ * remaining parts are new rows that borrow the original's clock and source, each carrying a
+ * correction row with the same instruction and `replaces_activity_id` pointing back — so
+ * "why is this here?" has an answer on the row itself.
+ *
+ * Null when there is no such row: a 404 is the honest answer, and nothing has been written.
+ */
+export async function splitEntry(
+	pool: pg.Pool,
+	userId: string,
+	id: string,
+	body: SplitEntry
+): Promise<Record<string, unknown>[] | null> {
+	const client = await pool.connect();
+	try {
+		await client.query("BEGIN");
+		const before = await getEntry(client, userId, "movement", id);
+		if (!before) {
+			await client.query("ROLLBACK");
+			return null;
+		}
+		const [first, ...rest] = body.parts;
+		const said = body.correction_instruction;
+
+		// The original becomes part one. updateEntry files its own correction against it,
+		// with the field-level diff, exactly as an ordinary told change would.
+		const head = await updateEntry(client, userId, "movement", id, {
+			...first!,
+			correction_instruction: said,
+		});
+
+		// The rest are new rows on the same moment of the same day. `logged_at` is the
+		// original's, not now: the parts of a drop set happened when the set happened, and
+		// stamping them with the time of the correction would move a morning lift to the
+		// evening.
+		const loggedAt = new Date(before.logged_at as string | Date).toISOString();
+		const created = await insertEntries(
+			client,
+			userId,
+			"movement",
+			rest.map((part) => ({
+				...part,
+				logged_at: loggedAt,
+				source: part.source ?? (before.source as string | null) ?? "manual",
+				confidence: part.confidence ?? (before.confidence as string | null) ?? null,
+			})) as NewEntry[]
+		);
+
+		for (const row of created) {
+			await recordCorrection(
+				client,
+				userId,
+				{ activityId: row.id as string, replacesActivityId: id },
+				said,
+				diffFields(before as Record<string, unknown>, row as Record<string, unknown>, CORRECTABLE_FIELDS.activity)
+			);
+		}
+
+		await client.query("COMMIT");
+		return [head as Record<string, unknown>, ...(created as Record<string, unknown>[])];
+	} catch (error) {
+		await client.query("ROLLBACK");
+		throw error;
+	} finally {
+		client.release();
+	}
+}
+
+export async function deleteEntry(db: Queryable, userId: string, kind: Kind, id: string): Promise<boolean> {
+	const { rowCount } = await db.query(`DELETE FROM ${KINDS[kind]} WHERE user_id = $1 AND id = $2`, [userId, id]);
+	return (rowCount ?? 0) > 0;
+}
+
+export async function listWeights(db: Queryable, userId: string, q: RangeQuery) {
+	const params: unknown[] = [userId];
+	const range = rangeSql(q, params, 1);
+	const limit = q.limit ? `LIMIT ${q.limit}` : "";
+	const { rows } = await db.query(
+		`SELECT * FROM weight_logs WHERE user_id = $1 ${range}
+		 ORDER BY logged_at ${q.order === "asc" ? "ASC" : "DESC"} ${limit}`,
+		params
+	);
+	return rows;
+}
+
+export async function getWeight(db: Queryable, userId: string, id: string) {
+	const { rows } = await db.query(`SELECT * FROM weight_logs WHERE user_id = $1 AND id = $2`, [userId, id]);
+	return rows[0] ?? null;
+}
+
+export async function insertWeights(db: Queryable, userId: string, weights: NewWeight[]) {
+	if (weights.length === 0) return [];
+	const params: unknown[] = [];
+	const tuples = weights.map((w) => {
+		params.push(userId, w.weight_lb, w.logged_at ?? new Date().toISOString(), w.confidence ?? null);
+		const n = params.length;
+		return `($${n - 3}, $${n - 2}, $${n - 1}, $${n})`;
+	});
+	const { rows } = await db.query(
+		`INSERT INTO weight_logs (user_id, weight_lb, logged_at, confidence) VALUES ${tuples.join(", ")} RETURNING *`,
+		params
+	);
+	return rows;
+}
+
+export async function updateWeight(db: Queryable, userId: string, id: string, patch: WeightPatch) {
+	const sets: string[] = [];
+	const params: unknown[] = [userId, id];
+	const said = patch.correction_instruction;
+	const before = said ? await getWeight(db, userId, id) : null;
+	for (const [key, value] of Object.entries(patch)) {
+		if (key !== "weight_lb" && key !== "logged_at") continue;
+		params.push(value);
+		sets.push(`${key} = $${params.length}`);
+	}
+	if (sets.length === 0) return getWeight(db, userId, id);
+	// A CORRECTED reading is not the reading that was doubted, so the doubt goes with the
+	// old number (migration 0020). Leaving the mark on would leave "check" beside a figure
+	// the user has just been back and checked — which is the app failing to notice it was
+	// answered.
+	if (patch.weight_lb !== undefined) sets.push("confidence = NULL");
+	const { rows } = await db.query(
+		`UPDATE weight_logs SET ${sets.join(", ")} WHERE user_id = $1 AND id = $2 RETURNING *`,
+		params
+	);
+	const after = rows[0] ?? null;
+	if (said && before && after) {
+		await recordCorrection(
+			db,
+			userId,
+			{ weightId: id },
+			said,
+			diffFields(before as Record<string, unknown>, after as Record<string, unknown>, CORRECTABLE_FIELDS.weight)
+		);
+	}
+	return after;
+}
+
+export async function deleteWeight(db: Queryable, userId: string, id: string): Promise<boolean> {
+	const { rowCount } = await db.query(`DELETE FROM weight_logs WHERE user_id = $1 AND id = $2`, [userId, id]);
+	return (rowCount ?? 0) > 0;
+}
+
+/** Profile row, created on first read if the signup hook somehow did not run. */
+export async function getProfile(db: Queryable, userId: string) {
+	const { rows } = await db.query(
+		`INSERT INTO profiles (id) VALUES ($1) ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id RETURNING *`,
+		[userId]
+	);
+	return rows[0];
+}
+
+/**
+ * Merge a patch into the profile, dating every field it touches. concept-v2 §Goals and
+ * profile: "each field with the date it was last stated, so the coach knows how old a plan
+ * is" — which only works if every path that writes a field also stamps it. `stated_at` is
+ * merged, never replaced, so patching one field does not erase the dates of the others.
+ */
+export async function updateProfile(db: Queryable, userId: string, patch: ProfilePatch) {
+	await getProfile(db, userId);
+	const sets: string[] = [];
+	const params: unknown[] = [userId];
+	const stated: Record<string, string> = {};
+	const now = new Date().toISOString();
+	for (const [key, value] of Object.entries(patch)) {
+		// `reference_loads` is the one jsonb column here; pg would otherwise send the array
+		// as a Postgres array literal, which jsonb refuses.
+		const json = key === "reference_loads";
+		params.push(json ? JSON.stringify(value) : value);
+		sets.push(`${key} = $${params.length}${json ? "::jsonb" : ""}`);
+		stated[key] = now;
+	}
+	params.push(JSON.stringify(stated));
+	sets.push(`stated_at = stated_at || $${params.length}::jsonb`);
+	const { rows } = await db.query(`UPDATE profiles SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, params);
+	return rows[0];
+}

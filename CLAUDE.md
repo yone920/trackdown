@@ -1,7 +1,9 @@
 # TrackDown - Weight Loss Tracking App
 
 ## Mission Statement
-TrackDown is a React Native (Expo) iOS/Android app for weight loss tracking with AI-powered food logging, exercise tracking, and weight monitoring.
+TrackDown is a React Native (Expo) iOS/Android app for workout and weight tracking. Meal/food
+logging was fully removed 2026-09-08 to focus the app on training and body weight only — see
+the migration `backend/migrations/0021_drop_meals.sql` for the schema-level cut.
 
 ## Tech Stack
 - **Framework:** React Native with Expo SDK, Expo Router
@@ -9,35 +11,44 @@ TrackDown is a React Native (Expo) iOS/Android app for weight loss tracking with
 - **State Management:** Zustand
 - **Data Fetching:** TanStack Query
 - **Charts:** Victory Native / Skia
-- **Backend:** Supabase (Postgres + Auth + Storage + Edge Functions + Realtime)
-- **AI Vision:** Claude Sonnet (claude-sonnet-4-20250514) for food/scale/equipment photo analysis
+- **Backend:** `backend/` — Express 5 + Better Auth (email + password, bearer tokens) + self-hosted Postgres 17 in Docker. Migrated off Supabase 2026-08-28; see `docs/supabase-migration-plan.md`
+- **AI text parsing:** Claude Haiku 4.5 via `backend/src/services/parseLog.ts` (the former `parse-log` edge function)
+- **AI Vision (planned):** Claude Sonnet for scale/equipment photo analysis
+
+Every third-party service sits behind a port. `backend/src/ports/*` holds the interfaces
+(`LlmPort` takes messages of text **and** base64 images), `backend/src/adapters/**` the SDK
+calls (`llm/anthropic.ts`, `llm/openai.ts`, `email/smtp.ts`), and `backend/src/container.ts`
+picks one from `LLM_PROVIDER` / `COACH_LLM_PROVIDER` — an unknown name refuses to boot.
+Routes and services import ports only; ESLint fails a build that imports `@anthropic-ai/sdk`,
+`openai` or `nodemailer` outside `src/adapters/**`, or reads `process.env` outside `src/config/`.
+Tests use the fakes in `backend/src/test/fakes/`; each adapter has a contract test that runs
+only when that provider's key is in `backend/.env`.
 - **Voice:** OpenAI Whisper for voice transcription
-- **Nutrition APIs:** Open Food Facts API + USDA FoodData Central
 - **Monitoring:** Sentry + PostHog
 
 ## Core Features
-- AI photo meal logging (snap food photo -> auto-log calories/macros)
 - AI gym equipment photo recognition for calorie burn estimation
 - AI scale photo reading for weight logging
-- Voice and text food logging
-- Macro tracking (carbs, fat, protein, fiber)
-- Red/green daily net calorie indicator
+- Voice and text activity/weight logging, fused into one record by AI (`backend/src/services/fusion/`)
 - Weight trend chart
 - Streak system
-- Adaptive TDEE targets
-- Weekly AI meal suggestions
+- Goal tracking (strength, endurance, muscle, custom/weight-target), judged daily against training and weight trend
 
-## Database Schema (Supabase/Postgres)
+## Database Schema (Postgres — `backend/migrations/`)
 Tables:
-- `users` - Auth users
-- `profiles` - User profiles, goals, TDEE settings
-- `meals` - Meal entries (breakfast, lunch, dinner, snacks)
-- `meal_items` - Individual food items within meals
-- `calorie_expenditure` - Exercise/activity calorie burn records
+- `user`, `session`, `account`, `verification` - Better Auth (0001, `account.issuer` added in 0003)
+- `profiles` - User profiles and training plan fields (goals, equipment, experience, etc.)
+- `activities` - Exercise/workout records, including a per-workout calorie-burn estimate (renamed from `calorie_expenditure` in 0004)
 - `weight_logs` - Weight measurements over time
-- `daily_summaries` - Aggregated daily calorie/macro totals
-- `body_photos` - Progress photos
-- `meal_templates` - Saved/favorite meals for quick logging
+- `daily_summaries` - One row per closed day: training earned, verdict, blocks, muscle groups, the day's reading
+- `evidence` - Polymorphic photo/transcript/text evidence, owned by an activity, a weigh-in, or a goal plan
+- `goals` - Training/weight goals and their metrics, judged daily against training and weight trend
+- `coach_briefs` - Cached on-demand workout coaching briefs
+- `day_readings` - Cached "Right now"/"In short" AI narrative text per day
+- `record_corrections` - History of user-driven corrections to a logged activity or weigh-in
+
+`meals`/`meal_items` and the whole calorie-budget/macro/TDEE column set on `daily_summaries`
+and `profiles` were dropped in migration 0021 (meal-tracking removal, 2026-09-08).
 
 ## Common Commands
 
@@ -102,17 +113,26 @@ The phone must have **Tailscale on and connected** to scan this QR.
 curl -s http://localhost:8081/status   # should print "packager-status:running"
 ```
 
-### Supabase
+### Backend
 ```bash
-# Start local Supabase
-npx supabase start
-
-# Generate types from schema
-npx supabase gen types typescript --local > src/types/supabase.ts
-
-# Push migrations
-npx supabase db push
-
-# Create new migration
-npx supabase migration new <name>
+cd backend
+npm run dev                      # API on :8000 with hot reload (needs Postgres: `make pg`)
+npm test                         # integration tests on an embedded Postgres (no Docker)
+npm run db:migrate               # apply backend/migrations/*.sql to DATABASE_URL
+npm run db:migrate-from-supabase # one-time data copy, see docs/supabase-migration-plan.md
 ```
+Config lives in `backend/src/config/index.ts` (the only file that reads `process.env`);
+`.env.example` at the repo root documents every variable. The app reads the API base
+URL from `EXPO_PUBLIC_API_URL` (repo-root `.env`, inlined at bundle time).
+
+### Auth flow
+Email + password through Better Auth's `emailAndPassword` (min 8 characters):
+`POST /api/auth/sign-up/email` (name, email, password — auto-signs in) and
+`POST /api/auth/sign-in/email`. The v1 email-OTP endpoints are gone (404). The session
+token comes back in the `set-auth-token` header and is stored in `expo-secure-store`
+(`lib/token-store.ts`); every API call sends it as a bearer token.
+
+There is no SMTP server, so there is no self-service password reset. Recovery is an
+operator command on the host that owns the database:
+`cd backend && npm run reset-password -- <email> <newPassword>`. It also gives a v1
+OTP-era account (which has no password at all) its first one.

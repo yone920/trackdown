@@ -1,0 +1,588 @@
+import { describe, expect, it } from "vitest";
+import { attachHealthWorkouts, blockTitle, buildBlocks, healthWorkoutAsActivity } from "./blocks.js";
+import { deltaVsLast, withDeltas } from "./deltas.js";
+import { applyKcalEstimates, estimateWeightKg, FALLBACK_WEIGHT_KG } from "./estimate.js";
+import type { DayActivity, HealthWorkout } from "./types.js";
+import { buildFacts, summaryLine } from "../day.js";
+import { boundsOf, datesEndingOn, localDateOf, localDay, localMinutesOf } from "../localTime.js";
+import { emptyDayFacts } from "../goals/measures.js";
+import { judgeDay, verdictWords, type GoalRow } from "../goals/verdict.js";
+
+// The pure half of the day model: everything that can be true without a database. The SQL
+// half is exercised end to end in app.test.ts, against real rows in real Postgres.
+
+const DAY = "2026-08-29";
+
+/** 2026-08-29 at HH:MM in a zone `tz` minutes ahead of UTC. */
+function at(clock: string, tz = 0): string {
+	const [h, m] = clock.split(":").map(Number);
+	return new Date(Date.parse(`${DAY}T00:00:00Z`) + ((h as number) * 60 + (m as number) - tz) * 60_000).toISOString();
+}
+
+function activity(partial: Partial<DayActivity> & { logged_at: string }): DayActivity {
+	return {
+		id: partial.id ?? `a-${partial.logged_at}`,
+		description: partial.description ?? "an exercise",
+		exercise: partial.exercise ?? null,
+		exercise_id: partial.exercise_id ?? null,
+		equipment: partial.equipment ?? null,
+		category: partial.category ?? "strength",
+		muscle_groups: partial.muscle_groups ?? [],
+		sets: partial.sets ?? null,
+		reps: partial.reps ?? null,
+		load_lb: partial.load_lb ?? null,
+		duration_min: partial.duration_min ?? null,
+		distance_mi: partial.distance_mi ?? null,
+		kcal: partial.kcal ?? 0,
+		source: partial.source ?? "manual",
+		confidence: partial.confidence ?? null,
+		logged_at: partial.logged_at,
+		...(partial.external_id === undefined ? {} : { external_id: partial.external_id }),
+	};
+}
+
+describe("blocks — 90-minute clustering", () => {
+	it("groups a gym hour into one block and an evening walk into another", () => {
+		const blocks = buildBlocks([
+			activity({ logged_at: at("18:10"), exercise: "Bench Press", muscle_groups: ["chest"], sets: 3, kcal: 90 }),
+			activity({ logged_at: at("18:35"), exercise: "Lat Pulldown", muscle_groups: ["back"], sets: 3, kcal: 80 }),
+			activity({ logged_at: at("19:05"), exercise: "Dumbbell Row", muscle_groups: ["back"], sets: 4, kcal: 70 }),
+			activity({ logged_at: at("21:20"), exercise: "Walk", category: "cardio", kcal: 120, duration_min: 30 }),
+		]);
+
+		expect(blocks).toHaveLength(2);
+		expect(blocks[0]).toMatchObject({ exercise_count: 3, kcal: 240, category: "strength" });
+		// Back has 7 sets to chest's 3, so it leads the title.
+		expect(blocks[0]?.title).toBe("Back & Chest");
+		expect(blocks[0]?.muscle_groups.sort()).toEqual(["back", "chest"]);
+		expect(blocks[1]).toMatchObject({ exercise_count: 1, title: "Walk", kcal: 120 });
+	});
+
+	it("measures the gap from the end of the last activity, not its start", () => {
+		// A 60-minute bike at 6:00 ends at 7:00; a lift at 8:20 is 80 minutes later, so the
+		// same block. Measuring from 6:00 would call it 140 minutes and split them.
+		const blocks = buildBlocks([
+			activity({ logged_at: at("06:00"), exercise: "Stationary Bike", category: "cardio", duration_min: 60 }),
+			activity({ logged_at: at("08:20"), exercise: "Squat", muscle_groups: ["legs"], sets: 5 }),
+		]);
+		expect(blocks).toHaveLength(1);
+		expect(blocks[0]?.exercise_count).toBe(2);
+	});
+
+	it("splits on a gap of more than 90 minutes", () => {
+		const blocks = buildBlocks([
+			activity({ logged_at: at("07:00"), exercise: "Squat" }),
+			activity({ logged_at: at("08:31"), exercise: "Squat" }),
+		]);
+		expect(blocks).toHaveLength(2);
+	});
+
+	it("names a block from what it was, and falls back rather than inventing", () => {
+		expect(blockTitle([activity({ logged_at: at("07:00"), exercise: "Morning Walk", category: "cardio" })])).toBe("Walk");
+		expect(
+			blockTitle([
+				activity({ logged_at: at("07:00"), exercise: "Treadmill Run", category: "cardio" }),
+				activity({ logged_at: at("07:20"), exercise: "Trail run", category: "cardio" }),
+			])
+		).toBe("Run");
+		expect(blockTitle([activity({ logged_at: at("07:00"), exercise: "Bench Press", muscle_groups: [] })])).toBe("Gym");
+		expect(
+			blockTitle([
+				activity({ logged_at: at("07:00"), category: "cardio", exercise: "Rowing Machine" }),
+				activity({ logged_at: at("07:20"), category: "cardio", exercise: "Stationary Bike" }),
+			])
+		).toBe("Cardio");
+	});
+
+	it("leaves Health rows out of the clustering — they go through the overlap rules", () => {
+		const blocks = buildBlocks([
+			activity({ logged_at: at("18:10"), exercise: "Bench Press", muscle_groups: ["chest"] }),
+			activity({ logged_at: at("18:20"), exercise: "Walk", source: "health", category: "cardio", kcal: 300 }),
+		]);
+		expect(blocks).toHaveLength(1);
+		expect(blocks[0]?.exercise_count).toBe(1);
+	});
+});
+
+describe("the MET estimate for lifts that reported no calories", () => {
+	// The field report this exists for: four exercises, 8:00 to 8:39, nothing on any of
+	// them, and a day that said "0 kcal earned" after forty minutes in the gym.
+	const lifting = [
+		activity({ logged_at: at("08:00"), exercise: "Bench Press", muscle_groups: ["chest"] }),
+		activity({ logged_at: at("08:12"), exercise: "Incline Press", muscle_groups: ["chest"] }),
+		activity({ logged_at: at("08:25"), exercise: "Cable Fly", muscle_groups: ["chest"] }),
+		activity({ logged_at: at("08:39"), exercise: "Triceps Pushdown", muscle_groups: ["triceps"] }),
+	];
+
+	const estimate = (activities: DayActivity[], weightKg = FALLBACK_WEIGHT_KG) =>
+		applyKcalEstimates(buildBlocks(activities), activities, weightKg);
+
+	it("turns a 39-minute lifting block into a number instead of a zero", () => {
+		const kg = estimateWeightKg(180);
+		const { blocks, byActivity } = estimate(lifting, kg);
+
+		expect(blocks).toHaveLength(1);
+		// 39 minutes of the block's span, split four ways, at 4.5 MET for 81.6 kg:
+		// 4.5 × 3.5 × 81.65 / 200 × 9.75 = 62.7 each.
+		expect(blocks[0]).toMatchObject({ minutes: 39, kcal: 252, kcal_estimated: true });
+		expect([...byActivity.values()]).toEqual([63, 63, 63, 63]);
+		// The rows and the header add up: the block is the sum of the rounded shares.
+		expect([...byActivity.values()].reduce((a, b) => a + b, 0)).toBe(blocks[0]?.kcal);
+	});
+
+	it("floors a lift logged at a single instant at eight minutes rather than nothing", () => {
+		const one = [activity({ logged_at: at("08:00"), exercise: "Deadlift" })];
+		const { blocks } = estimate(one);
+		// No span at all → 8 minutes: 4.5 × 3.5 × 80 / 200 × 8 = 50.4.
+		expect(blocks[0]).toMatchObject({ minutes: 0, kcal: 50, kcal_estimated: true });
+	});
+
+	it("caps the estimate however long the block claims to be", () => {
+		const marathonBlock = [activity({ logged_at: at("06:00"), exercise: "Squat", duration_min: 200 })];
+		const { blocks } = estimate(marathonBlock);
+		// 200 minutes of block, 120 minutes of estimate: 6.3 × 120.
+		expect(blocks[0]?.minutes).toBe(200);
+		expect(blocks[0]?.kcal).toBe(756);
+	});
+
+	it("uses each category's own MET, so a stretch is not priced as a squat", () => {
+		const { blocks } = estimate([activity({ logged_at: at("08:00"), exercise: "Hamstring stretch", category: "mobility" })]);
+		// 2.5 × 3.5 × 80 / 200 × 8 = 28.
+		expect(blocks[0]).toMatchObject({ kcal: 28, kcal_estimated: true });
+	});
+
+	it("does not count the minutes an activity's own calories already paid for", () => {
+		const mixed = [
+			activity({ logged_at: at("08:00"), exercise: "Rowing Machine", category: "cardio", duration_min: 20, kcal: 180 }),
+			activity({ logged_at: at("08:25"), exercise: "Bench Press", muscle_groups: ["chest"] }),
+			activity({ logged_at: at("08:40"), exercise: "Lat Pulldown", muscle_groups: ["back"] }),
+		];
+		const { blocks } = estimate(mixed);
+		// A 40-minute block, 20 of them the machine's own; the remaining 20 split in two.
+		expect(blocks[0]?.minutes).toBe(40);
+		expect(blocks[0]).toMatchObject({ kcal: 180 + 63 + 63, kcal_estimated: true });
+	});
+
+	it("weighs an exercise that named its own duration by that duration", () => {
+		const uneven = [
+			activity({ logged_at: at("08:00"), exercise: "Squat", duration_min: 30 }),
+			activity({ logged_at: at("08:35"), exercise: "Plank", category: "mobility", duration_min: 10 }),
+		];
+		const { byActivity } = estimate(uneven);
+		// The block spans 8:00–8:45 = 45 minutes, split 30 : 10 → 33.75 and 11.25.
+		expect(byActivity.get("a-" + at("08:00"))).toBe(Math.round(6.3 * 33.75));
+		expect(byActivity.get("a-" + at("08:35"))).toBe(Math.round(3.5 * 11.25));
+	});
+
+	it("leaves a block alone when every exercise in it reported calories", () => {
+		const paid = [
+			activity({ logged_at: at("08:00"), exercise: "Bench Press", kcal: 120 }),
+			activity({ logged_at: at("08:30"), exercise: "Lat Pulldown", kcal: 100 }),
+		];
+		const { blocks, byActivity } = estimate(paid);
+		expect(blocks[0]).toMatchObject({ kcal: 220, kcal_estimated: false });
+		expect(byActivity.size).toBe(0);
+	});
+
+	it("never estimates cardio — a machine's number or a watch's, and no third guess", () => {
+		const { blocks } = estimate([
+			activity({ logged_at: at("08:00"), exercise: "Treadmill", category: "cardio", duration_min: 30 }),
+		]);
+		expect(blocks[0]).toMatchObject({ kcal: 0, kcal_estimated: false });
+	});
+
+	it("leaves a block a watch measured to the watch", () => {
+		const lifts = [
+			activity({ logged_at: at("18:10"), exercise: "Bench Press", muscle_groups: ["chest"] }),
+			activity({ logged_at: at("18:50"), exercise: "Lat Pulldown", muscle_groups: ["back"] }),
+		];
+		const { blocks: measured } = attachHealthWorkouts(buildBlocks(lifts), [
+			{
+				external_id: "hk-1",
+				name: "Traditional Strength Training",
+				start_at: at("18:05"),
+				end_at: at("19:00"),
+				kcal: 420,
+				duration_min: 55,
+				distance_mi: null,
+			},
+		]);
+		const { blocks } = applyKcalEstimates(measured, lifts, FALLBACK_WEIGHT_KG);
+		expect(blocks[0]).toMatchObject({ kcal: 420, kcal_from_health: true, kcal_estimated: false });
+	});
+
+	it("falls back from the weigh-in to the plan's goal weight, then to a default body", () => {
+		expect(estimateWeightKg(193.4, 170)).toBeCloseTo(87.7, 1);
+		expect(estimateWeightKg(null, 170)).toBeCloseTo(77.1, 1);
+		expect(estimateWeightKg(null, null)).toBe(FALLBACK_WEIGHT_KG);
+		expect(estimateWeightKg(0, null)).toBe(FALLBACK_WEIGHT_KG);
+
+		// A heavier body earns more for the same forty minutes — that is the whole point of
+		// asking which body did the work.
+		const heavier = applyKcalEstimates(buildBlocks(lifting), lifting, estimateWeightKg(240)).blocks[0]?.kcal ?? 0;
+		const lighter = applyKcalEstimates(buildBlocks(lifting), lifting, estimateWeightKg(140)).blocks[0]?.kcal ?? 0;
+		expect(heavier).toBeGreaterThan(lighter);
+	});
+});
+
+describe("Health overlap rules", () => {
+	const gym = () =>
+		buildBlocks([
+			activity({ logged_at: at("18:10"), exercise: "Bench Press", muscle_groups: ["chest"], kcal: 100 }),
+			activity({ logged_at: at("18:50"), exercise: "Lat Pulldown", muscle_groups: ["back"], kcal: 100 }),
+		]);
+
+	const workout = (partial: Partial<HealthWorkout> = {}): HealthWorkout => ({
+		external_id: partial.external_id ?? "hk-1",
+		name: partial.name ?? "Traditional Strength Training",
+		start_at: partial.start_at ?? at("18:05"),
+		end_at: partial.end_at ?? at("19:00"),
+		kcal: partial.kcal ?? 430,
+		duration_min: partial.duration_min ?? 55,
+		distance_mi: partial.distance_mi ?? null,
+		...(partial.activity_id === undefined ? {} : { activity_id: partial.activity_id }),
+	});
+
+	it("attaches an overlapping workout to the block and never adds its calories on top", () => {
+		const { blocks, standalone } = attachHealthWorkouts(gym(), [workout()]);
+		expect(standalone).toEqual([]);
+		expect(blocks[0]?.health?.external_id).toBe("hk-1");
+		// The user's own 200 stands: they know what they did, and the watch is an estimate too.
+		expect(blocks[0]?.kcal).toBe(200);
+		expect(blocks[0]?.kcal_from_health).toBe(false);
+		// The measured span is longer than the logged one, so the block takes it.
+		expect(blocks[0]?.minutes).toBe(55);
+	});
+
+	it("fills in the calories when the user gave none", () => {
+		const noKcal = buildBlocks([
+			activity({ logged_at: at("18:10"), exercise: "Bench Press", muscle_groups: ["chest"], kcal: 0 }),
+		]);
+		const { blocks } = attachHealthWorkouts(noKcal, [workout()]);
+		expect(blocks[0]).toMatchObject({ kcal: 430, kcal_from_health: true });
+	});
+
+	it("counts a workout that overlaps nothing as its own activity", () => {
+		const { blocks, standalone } = attachHealthWorkouts(gym(), [
+			workout({ external_id: "hk-walk", name: "Walking", start_at: at("07:00"), end_at: at("07:40"), kcal: 180, duration_min: 40 }),
+		]);
+		expect(blocks[0]?.health).toBeNull();
+		expect(standalone).toHaveLength(1);
+		const item = healthWorkoutAsActivity(standalone[0] as HealthWorkout);
+		expect(item).toMatchObject({ source: "health", kcal: 180, duration_min: 40, description: "Walking", id: null });
+	});
+
+	it("still attaches when the watch started before the first log and stopped after the last", () => {
+		const { standalone, blocks } = attachHealthWorkouts(gym(), [
+			workout({ start_at: at("17:58"), end_at: at("19:10") }),
+		]);
+		expect(standalone).toEqual([]);
+		expect(blocks[0]?.health).not.toBeNull();
+	});
+
+	it("does not attach a workout that finished a quarter of an hour before the block began", () => {
+		const { standalone } = attachHealthWorkouts(gym(), [
+			workout({ start_at: at("16:00"), end_at: at("17:30"), duration_min: 90 }),
+		]);
+		expect(standalone).toHaveLength(1);
+	});
+
+	it("keeps the longest of two workouts over the same block and counts neither twice", () => {
+		const { blocks, standalone } = attachHealthWorkouts(gym(), [
+			workout({ external_id: "short", duration_min: 20, kcal: 100 }),
+			workout({ external_id: "long", duration_min: 55, kcal: 430 }),
+		]);
+		expect(blocks[0]?.health?.external_id).toBe("long");
+		// The other one is dropped, not moved to standalone: it is the same minutes again.
+		expect(standalone).toEqual([]);
+	});
+});
+
+describe("delta_vs_last", () => {
+	const bench = (partial: Partial<DayActivity>) =>
+		activity({ logged_at: at("18:00"), exercise: "Bench Press", sets: 3, reps: 8, load_lb: 135, ...partial });
+
+	it("says 'same' when nothing moved", () => {
+		expect(deltaVsLast(bench({}), bench({ logged_at: at("18:00") }))).toMatchObject({ text: "same", direction: "same" });
+	});
+
+	it("reports the load first, then sets, then reps", () => {
+		expect(deltaVsLast(bench({ load_lb: 140 }), bench({})).text).toBe("+5 lb");
+		expect(deltaVsLast(bench({ load_lb: 125 }), bench({})).text).toBe("-10 lb");
+		expect(deltaVsLast(bench({ sets: 4 }), bench({})).text).toBe("+1 set");
+		expect(deltaVsLast(bench({ sets: 5 }), bench({})).text).toBe("+2 sets");
+		expect(deltaVsLast(bench({ reps: 10 }), bench({})).text).toBe("+2 reps");
+		expect(deltaVsLast(bench({ load_lb: 137.5 }), bench({})).text).toBe("+2.5 lb");
+	});
+
+	it("compares cardio on duration and distance", () => {
+		const run = (partial: Partial<DayActivity>) =>
+			activity({ logged_at: at("07:00"), exercise: "Treadmill Run", category: "cardio", duration_min: 30, distance_mi: 3, ...partial });
+		expect(deltaVsLast(run({ duration_min: 35 }), run({})).text).toBe("+5 min");
+		expect(deltaVsLast(run({ distance_mi: 3.5 }), run({})).text).toBe("+0.5 mi");
+	});
+
+	it("calls the first ever occurrence what it is", () => {
+		expect(deltaVsLast(bench({}), null)).toMatchObject({ text: "first time", direction: "new", previous: null });
+	});
+
+	it("compares against earlier today before reaching back into history", () => {
+		const history = [bench({ logged_at: "2026-08-22T18:00:00.000Z", load_lb: 115 })];
+		const today = [bench({ logged_at: at("18:00"), load_lb: 135 }), bench({ logged_at: at("19:40"), load_lb: 145 })];
+		const [first, second] = withDeltas(today, history);
+		expect(first?.delta_vs_last?.text).toBe("+20 lb");
+		expect(second?.delta_vs_last?.text).toBe("+10 lb");
+	});
+
+	it("has nothing to compare an unnamed activity with", () => {
+		const [only] = withDeltas([activity({ logged_at: at("12:00"), exercise: null })], []);
+		expect(only?.delta_vs_last).toBeNull();
+	});
+
+	const assisted = (partial: Partial<DayActivity>) =>
+		activity({ logged_at: at("18:00"), exercise: "Assisted Chin-Up", sets: 3, reps: 8, load_lb: 55, ...partial });
+
+	it("reads a heavier bar as progress and a lighter one as the thing to look at", () => {
+		expect(deltaVsLast(bench({ load_lb: 140 }), bench({}))).toMatchObject({ direction: "up", sentiment: "good" });
+		expect(deltaVsLast(bench({ load_lb: 125 }), bench({}))).toMatchObject({ direction: "down", sentiment: "watch" });
+		expect(deltaVsLast(bench({}), bench({}))).toMatchObject({ direction: "same", sentiment: "neutral" });
+		expect(deltaVsLast(bench({}), null)).toMatchObject({ direction: "new", sentiment: "neutral" });
+	});
+
+	it("reads five pounds LESS assistance as the good news — the field report, on the screen", () => {
+		expect(deltaVsLast(assisted({ load_lb: 50 }), assisted({}), "assistance")).toMatchObject({
+			text: "-5 lb",
+			direction: "down",
+			sentiment: "good",
+		});
+		expect(deltaVsLast(assisted({ load_lb: 60 }), assisted({}), "assistance")).toMatchObject({
+			text: "+5 lb",
+			direction: "up",
+			sentiment: "watch",
+		});
+		// The same rows with no catalogue flag: read as resistance, and the colours flip.
+		expect(deltaVsLast(assisted({ load_lb: 50 }), assisted({})).sentiment).toBe("watch");
+	});
+
+	it("only flips the load — an extra set is progress on any machine", () => {
+		expect(deltaVsLast(assisted({ sets: 4 }), assisted({}), "assistance")).toMatchObject({
+			field: "sets",
+			text: "+1 set",
+			sentiment: "good",
+		});
+	});
+
+	it("takes the direction per exercise from the catalogue map", () => {
+		const [row] = withDeltas([assisted({ load_lb: 50, logged_at: at("19:00") })], [assisted({})], {
+			"assisted chin-up": "assistance",
+		});
+		expect(row?.delta_vs_last).toMatchObject({ text: "-5 lb", sentiment: "good" });
+	});
+});
+
+describe("the verdict, per goal kind", () => {
+	const goal = (partial: Partial<GoalRow>): GoalRow => ({
+		id: "g1",
+		kind: "gain_muscle",
+		title: "Build muscle",
+		metrics: [],
+		priority: 1,
+		status: "active",
+		active_from: "2026-08-01",
+		active_to: null,
+		...partial,
+	});
+
+	const facts = (overrides: Partial<ReturnType<typeof emptyDayFacts>> = {}) => ({
+		...emptyDayFacts(DAY),
+		...overrides,
+	});
+
+	const input = {
+		facts: facts(),
+		logged: true,
+		trainedToday: true,
+		trainedYesterday: false,
+		sessionsLast7: 3,
+		trainingDaysTarget: 4,
+	};
+
+	it("judges nothing without a goal, and never blames an unlogged day", () => {
+		expect(judgeDay({ ...input, goal: null }).verdict).toBe("none");
+		expect(judgeDay({ ...input, goal: goal({}), logged: false }).verdict).toBe("unlogged");
+	});
+
+	it("judges muscle and strength on training, with a rest-day rule", () => {
+		const muscle = goal({ kind: "gain_muscle" });
+
+		expect(judgeDay({ ...input, goal: muscle }).verdict).toBe("served");
+		// Did not train — but trained yesterday, so it is a rest day.
+		expect(
+			judgeDay({ ...input, goal: muscle, trainedToday: false, trainedYesterday: true }).verdict
+		).toBe("served");
+		// Has not trained all week: not a rest day, just a gap.
+		expect(
+			judgeDay({
+				...input,
+				goal: muscle,
+				trainedToday: false,
+				trainedYesterday: false,
+				sessionsLast7: 0,
+			}).verdict
+		).toBe("missed");
+		expect(judgeDay({ ...input, goal: goal({ kind: "build_strength" }) }).verdict).toBe("served");
+	});
+
+	it("judges endurance on the week's cardio pace", () => {
+		const endurance = goal({
+			kind: "improve_endurance",
+			metrics: [{ measure: "weekly_cardio_min", target: 150, direction: "at_least" }],
+		});
+		const cardio = (minutes: number) =>
+			facts({
+				activities: [
+					{
+						date: DAY,
+						exercise: "Treadmill Run",
+						category: "cardio",
+						muscle_groups: [],
+						sets: null,
+						reps: null,
+						load_lb: null,
+						duration_min: minutes,
+						distance_mi: null,
+						kcal: 300,
+					},
+				],
+			});
+		expect(judgeDay({ ...input, goal: endurance, facts: cardio(140) }).verdict).toBe("served");
+		expect(judgeDay({ ...input, goal: endurance, facts: cardio(60) }).verdict).toBe("missed");
+		expect(judgeDay({ ...input, goal: endurance, facts: cardio(60) }).why).toContain("of 150 cardio minutes");
+	});
+
+	it("judges a custom goal on its own first metric, and says none when it cannot", () => {
+		const custom = goal({
+			kind: "custom",
+			metrics: [{ measure: "resting_hr", target: 60, direction: "at_most" }],
+		});
+		const fed = facts({ healthSamples: [{ date: DAY, kind: "resting_hr", value: 55 }] });
+		expect(judgeDay({ ...input, goal: custom, facts: fed }).verdict).toBe("served");
+		expect(judgeDay({ ...input, goal: goal({ kind: "custom", metrics: [] }) }).verdict).toBe("none");
+	});
+
+	it("puts the numbers in the words the Day screen shows", () => {
+		expect(verdictWords("served", true)).toBe("Served your goal");
+		expect(verdictWords("missed", true)).toBe("Missed your goal");
+		expect(verdictWords("unlogged", true)).toBe("Not logged");
+		expect(verdictWords("none", true)).toBe("Logged");
+		expect(verdictWords("none", false)).toBe("No goal set");
+	});
+});
+
+describe("local days", () => {
+	it("puts a log at 23:30 in Los Angeles on that local day, not the next UTC one", () => {
+		// 23:30 on the 29th at UTC−7 is 06:30 UTC on the 30th.
+		const instant = "2026-08-30T06:30:00.000Z";
+		expect(localDateOf(instant, -420)).toBe("2026-08-29");
+		expect(localMinutesOf(instant, -420)).toBe(23 * 60 + 30);
+
+		const { startUtc, endUtc } = boundsOf("2026-08-29", -420);
+		expect(startUtc.toISOString()).toBe("2026-08-29T07:00:00.000Z");
+		expect(Date.parse(instant)).toBeLessThan(endUtc.getTime());
+		expect(Date.parse(instant)).toBeGreaterThanOrEqual(startUtc.getTime());
+	});
+
+	it("puts a log at 00:30 in Auckland on the day that just started there", () => {
+		// 00:30 on the 30th at UTC+12 is 12:30 UTC on the 29th.
+		expect(localDateOf("2026-08-29T12:30:00.000Z", 720)).toBe("2026-08-30");
+		expect(localDay(new Date("2026-08-29T12:30:00.000Z"), 720).date).toBe("2026-08-30");
+	});
+
+	it("lists the week ending on a date", () => {
+		expect(datesEndingOn("2026-08-29", 7)).toEqual([
+			"2026-08-23",
+			"2026-08-24",
+			"2026-08-25",
+			"2026-08-26",
+			"2026-08-27",
+			"2026-08-28",
+			"2026-08-29",
+		]);
+	});
+});
+
+describe("the Days-list summary line", () => {
+	it("says what the day was in one line", () => {
+		const blocks = buildBlocks([
+			activity({ logged_at: at("18:10"), exercise: "Bench Press", muscle_groups: ["chest"], sets: 3, kcal: 120 }),
+		]);
+		expect(
+			summaryLine({
+				blocks,
+				earned: 120,
+				weight: { day: 182.4, avg_7d: 183, trend_per_week: -0.6 },
+			})
+		).toBe("Chest · 120 earned · 182.4 lb");
+	});
+
+	it("says so when there is nothing to say", () => {
+		expect(summaryLine({ blocks: [], earned: 0, weight: { day: null, avg_7d: null, trend_per_week: null } })).toBe(
+			"Nothing logged"
+		);
+	});
+});
+
+describe("the facts window carries the same estimates the day view shows", () => {
+	// The bug this closes: a lift that reported no calories of its own left every reader
+	// (the ring, the goal calculators, the coach) summing 0 unless it ran the same
+	// blocks → Health merge → estimate path. buildFacts does, so they agree.
+	const row = (clock: string, extra: Record<string, unknown> = {}) => ({
+		id: `a-${clock}`,
+		logged_at: at(clock),
+		description: "an exercise",
+		exercise: `Lift ${clock}`,
+		exercise_id: null,
+		equipment: null,
+		category: "strength" as const,
+		muscle_groups: ["chest"],
+		sets: 3,
+		reps: 10,
+		load_lb: null,
+		duration_min: null,
+		distance_mi: null,
+		kcal: 0,
+		source: "manual" as const,
+		confidence: null,
+		external_id: null,
+		...extra,
+	});
+
+	const built = () =>
+		buildFacts({
+			date: DAY,
+			tzOffsetMin: 0,
+			activityRows: [row("08:00"), row("08:12"), row("08:25"), row("08:39")],
+			weightRows: [{ id: "w1", logged_at: at("07:00"), weight_lb: 190 }],
+			healthRows: [],
+			dayWeightLb: 190,
+			goalWeightLb: null,
+		});
+
+	it("puts each lift's share of the block on its fact, and marks it estimated", () => {
+		const facts = built();
+		expect(facts.activities.map((a) => a.kcal)).toEqual([66, 66, 66, 66]);
+		for (const activity of facts.activities) expect(activity.kcal_estimated).toBe(true);
+	});
+
+	it("leaves a row that reported its own calories exactly as it is", () => {
+		const facts = buildFacts({
+			date: DAY,
+			tzOffsetMin: 0,
+			activityRows: [row("08:00", { kcal: 150 }), row("08:12", { kcal: 130 })],
+			weightRows: [],
+			healthRows: [],
+		});
+		expect(facts.activities.map((a) => a.kcal)).toEqual([150, 130]);
+		for (const activity of facts.activities) expect(activity.kcal_estimated).toBe(false);
+	});
+});

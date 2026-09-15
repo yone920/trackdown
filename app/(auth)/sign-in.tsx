@@ -5,151 +5,244 @@ import {
   Platform,
   Pressable,
   ScrollView,
-  Text,
+  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { UnderlineField } from '@/components/field';
-import { supabase } from '@/lib/supabase';
+import { IconEye, IconEyeOff } from '@/components/icons';
+import { Body, Disp, Eyebrow, Sub } from '@/components/type';
+import { MIN_PASSWORD_LENGTH, signIn, signUp } from '@/lib/auth';
+import { C, FONT, RADIUS, SPACE } from '@/lib/theme';
 
-type Step = 'email' | 'code';
+// Email + password (v1 emailed a 6-digit code; there is no SMTP server, so the code never
+// arrived — docs/build-plan.md §WP0a). Restyled to direction A: the auth screen is the
+// first thing anyone sees and it has to look like the rest of the app.
+
+type Mode = 'sign-in' | 'sign-up';
 
 export default function SignIn() {
-  const [step, setStep] = useState<Step>('email');
+  const [mode, setMode] = useState<Mode>('sign-in');
   const [email, setEmail] = useState('');
-  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  /**
+   * Typed twice when an account is being created, and never on sign-in.
+   *
+   * **There is no reset email** (docs/build-plan.md §WP0a: no SMTP server, so
+   * `sendResetPassword` is deliberately unset). A typo in a password nobody can see is
+   * therefore not an annoyance, it is a locked account with no way back in — recovery is a
+   * shell script on the server. Signing IN cannot lock anybody out, so it stays one field.
+   */
+  const [confirm, setConfirm] = useState('');
+  /** The one form in this app, so it is the one place a password may be looked at. */
+  const [reveal, setReveal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const sendCode = async () => {
+  const submit = async () => {
     if (!email.includes('@')) {
       setError('Enter a valid email.');
       return;
     }
-    setBusy(true);
-    setError(null);
-    const { error } = await supabase.auth.signInWithOtp({
-      email: email.trim().toLowerCase(),
-      options: { shouldCreateUser: true },
-    });
-    setBusy(false);
-    if (error) setError(error.message);
-    else setStep('code');
-  };
-
-  const verifyCode = async () => {
-    if (code.length !== 6) {
-      setError('Enter the 6-digit code.');
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+      return;
+    }
+    // Checked here rather than on the server: the two fields are a fact about this screen,
+    // and the server never sees the second one.
+    if (mode === 'sign-up' && confirm !== password) {
+      setError('Those passwords do not match.');
       return;
     }
     setBusy(true);
     setError(null);
-    const { error } = await supabase.auth.verifyOtp({
-      email: email.trim().toLowerCase(),
-      token: code,
-      type: 'email',
-    });
+    // Both calls end in a session, so a success needs no navigation here: the root
+    // layout swaps this screen out when useSession() reports one.
+    const { error: failure } = await (mode === 'sign-in'
+      ? signIn(email.trim().toLowerCase(), password)
+      : signUp(email.trim().toLowerCase(), password));
     setBusy(false);
-    if (error) setError(error.message);
+    if (failure) setError(failure);
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-cream" edges={['top', 'bottom']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        className="flex-1">
+        style={{ flex: 1 }}>
         <ScrollView
-          className="flex-1"
-          contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}
+          contentContainerStyle={{
+            flexGrow: 1,
+            justifyContent: 'center',
+            paddingHorizontal: SPACE.screen,
+          }}
           keyboardShouldPersistTaps="handled">
-          <View className="px-8">
-            <Text
-              className="text-[10px] text-ash"
-              style={{ letterSpacing: 3, textTransform: 'uppercase' }}>
-              Trackdown
-            </Text>
-            <Text
-              className="font-serif-light text-ink mt-6"
-              style={{ fontSize: 44, lineHeight: 50, letterSpacing: -1 }}>
-              {step === 'email' ? 'Welcome.' : 'Check your\ninbox.'}
-            </Text>
-            <Text className="text-[14px] text-graphite mt-4 leading-[22px]">
-              {step === 'email'
-                ? 'Enter your email and we’ll send a six-digit code. No password to remember — and new accounts are created on first sign-in.'
-                : `We sent a code to ${email}. Enter it below to continue.`}
-            </Text>
+          <Eyebrow>TrackDown</Eyebrow>
+          <Disp size={44} style={{ marginTop: 10 }}>
+            {mode === 'sign-in' ? 'Welcome back.' : 'Welcome.'}
+          </Disp>
+          <Sub style={{ marginTop: 10, lineHeight: 19 }}>
+            {mode === 'sign-in'
+              ? 'Sign in with your email and password.'
+              : `Pick a password of at least ${MIN_PASSWORD_LENGTH} characters. There is no reset email yet, so choose one you will remember.`}
+          </Sub>
 
-            {step === 'email' ? (
-              <View className="mt-12">
-                <UnderlineField
-                  label="Email"
-                  value={email}
-                  onChangeText={(t) => {
-                    setEmail(t);
-                    setError(null);
-                  }}
-                  placeholder="you@example.com"
-                  autoCapitalize="none"
-                  autoComplete="email"
-                  keyboardType="email-address"
-                  autoFocus
-                  textStyle={{ fontFamily: 'Fraunces_500Medium', fontSize: 18 }}
-                />
-              </View>
-            ) : (
-              <View className="mt-12">
-                <UnderlineField
-                  label="Code"
-                  value={code}
-                  onChangeText={(t) => {
-                    setCode(t.replace(/[^0-9]/g, '').slice(0, 6));
-                    setError(null);
-                  }}
-                  placeholder="000000"
-                  keyboardType="number-pad"
-                  autoFocus
-                  textStyle={{
-                    fontFamily: 'Fraunces_300Light',
-                    fontSize: 40,
-                    letterSpacing: 8,
-                  }}
-                />
-              </View>
-            )}
-
-            {error && <Text className="text-[13px] text-terracotta mt-4">{error}</Text>}
-
-            <Pressable
-              onPress={step === 'email' ? sendCode : verifyCode}
-              disabled={busy}
-              className="mt-10 self-start flex-row items-center">
-              {busy ? (
-                <ActivityIndicator size="small" color="#1A1714" />
-              ) : (
-                <>
-                  <Text className="font-serif text-[16px] text-ink">
-                    {step === 'email' ? 'Send code' : 'Continue'}
-                  </Text>
-                  <Text className="text-terracotta text-[20px] ml-3">→</Text>
-                </>
-              )}
-            </Pressable>
-
-            {step === 'code' && (
-              <Pressable
-                onPress={() => {
-                  setStep('email');
-                  setCode('');
+          <View style={{ marginTop: 32, gap: 14 }}>
+            <AuthField
+              label="Email"
+              value={email}
+              onChangeText={(next) => {
+                setEmail(next);
+                setError(null);
+              }}
+              placeholder="you@example.com"
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="email"
+              keyboardType="email-address"
+              textContentType="emailAddress"
+              autoFocus
+            />
+            <AuthField
+              label="Password"
+              value={password}
+              onChangeText={(next) => {
+                setPassword(next);
+                setError(null);
+              }}
+              placeholder="••••••••"
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'}
+              textContentType={mode === 'sign-in' ? 'password' : 'newPassword'}
+              returnKeyType={mode === 'sign-in' ? 'go' : 'next'}
+              onSubmitEditing={mode === 'sign-in' ? submit : undefined}
+              testID="auth-password"
+              reveal={reveal}
+              onToggleReveal={() => setReveal((shown) => !shown)}
+            />
+            {mode === 'sign-up' ? (
+              <AuthField
+                label="Password again"
+                value={confirm}
+                onChangeText={(next) => {
+                  setConfirm(next);
                   setError(null);
                 }}
-                className="mt-8">
-                <Text className="text-[12px] text-graphite">← use a different email</Text>
-              </Pressable>
-            )}
+                placeholder="••••••••"
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="new-password"
+                textContentType="newPassword"
+                returnKeyType="go"
+                onSubmitEditing={submit}
+                testID="auth-confirm"
+                reveal={reveal}
+                onToggleReveal={() => setReveal((shown) => !shown)}
+              />
+            ) : null}
           </View>
+
+          {error ? (
+            <Sub testID="auth-error" style={{ marginTop: 14, color: C.accent }}>
+              {error}
+            </Sub>
+          ) : null}
+
+          <Pressable
+            testID="auth-submit"
+            onPress={submit}
+            disabled={busy}
+            style={({
+              marginTop: 26,
+              borderRadius: RADIUS.pill,
+              backgroundColor: C.ink,
+              paddingVertical: 16,
+              alignItems: 'center',
+              opacity: busy ? 0.6 : 1,
+            })}>
+            {busy ? (
+              <ActivityIndicator size="small" color={C.bg} />
+            ) : (
+              <Body style={{ fontFamily: FONT.semi, color: C.bg }}>
+                {mode === 'sign-in' ? 'Sign in' : 'Create account'}
+              </Body>
+            )}
+          </Pressable>
+
+          <Pressable
+            testID="auth-switch-mode"
+            onPress={() => {
+              setMode(mode === 'sign-in' ? 'sign-up' : 'sign-in');
+              setError(null);
+              // The second field belongs to the mode that asks for it.
+              setConfirm('');
+            }}
+            style={{ marginTop: 20, alignSelf: 'center' }}>
+            <Sub>
+              {mode === 'sign-in' ? 'No account yet? Create one' : 'Already have an account? Sign in'}
+            </Sub>
+          </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
+  );
+}
+
+type AuthFieldProps = React.ComponentProps<typeof TextInput> & {
+  label: string;
+  /** Present on a password field: draws the eye and says which way it is pointing. */
+  reveal?: boolean;
+  onToggleReveal?: () => void;
+};
+
+function AuthField({ label, reveal, onToggleReveal, ...rest }: AuthFieldProps) {
+  const isPassword = onToggleReveal !== undefined;
+  return (
+    <View>
+      <Eyebrow>{label}</Eyebrow>
+      <View style={{ justifyContent: 'center' }}>
+        <TextInput
+          {...rest}
+          // The eye is what decides this, on a password field: one toggle drives both
+          // fields, because a person checking their typing wants to see both halves of it.
+          secureTextEntry={isPassword ? !reveal : rest.secureTextEntry}
+          placeholderTextColor={C.dim}
+          style={{
+            marginTop: 6,
+            fontFamily: FONT.medium,
+            fontSize: 17,
+            color: C.ink,
+            backgroundColor: C.card,
+            borderRadius: RADIUS.tile,
+            paddingHorizontal: 14,
+            paddingVertical: 14,
+            // Room for the eye, so a long password never runs under it.
+            paddingRight: isPassword ? 52 : 14,
+          }}
+        />
+        {isPassword ? (
+          <Pressable
+            testID={`${rest.testID ?? 'auth'}-reveal`}
+            accessibilityRole="button"
+            accessibilityLabel={reveal ? 'Hide password' : 'Show password'}
+            accessibilityState={{ selected: reveal }}
+            onPress={onToggleReveal}
+            hitSlop={10}
+            style={{
+              position: 'absolute',
+              right: 6,
+              top: 6,
+              width: 44,
+              height: 50,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+            {reveal ? <IconEyeOff size={20} color={C.mute} /> : <IconEye size={20} color={C.mute} />}
+          </Pressable>
+        ) : null}
+      </View>
+    </View>
   );
 }

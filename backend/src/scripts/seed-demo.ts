@@ -1,0 +1,429 @@
+import { createLlmCoach } from "../adapters/coach/llm.js";
+import { createAuth } from "../auth.js";
+import { config } from "../config/index.js";
+import { createContainer } from "../container.js";
+import { describeTarget, pool } from "../db/client.js";
+import type { LlmPort } from "../ports/llm.js";
+import { nextBrief } from "../services/coach/coach.js";
+import { COACH_BRIEF_SCHEMA_NAME } from "../services/coach/schema.js";
+import { computeDay } from "../services/day.js";
+import { closeDueDays } from "../services/dayClose.js";
+import { insertEntries, insertWeights } from "../services/entries.js";
+import { addDays, localDay } from "../services/localTime.js";
+import { createGoal } from "../services/goals/store.js";
+import { setUserPassword } from "../services/password.js";
+import { createDayReadings } from "../services/readings/readings.js";
+import { RIGHT_NOW_SCHEMA_NAME } from "../services/readings/schema.js";
+
+// npm run seed-demo -- <email> [--goal fat_loss|muscle|none] [--tz <minutes>] [--password <password>]
+//
+// Four days of realistic history for one account: a weight-loss goal, three closed days and
+// today half-lived. It exists because the app is unreadable empty — Days, Progress and the
+// closed-day reading all need history before they can be looked at, and typing four days of
+// logs by hand before a demo is not a plan.
+//
+// Everything is written through the same services the API uses (insertEntries normalises
+// exercise names against the catalogue, closeDueDays writes the summaries), so what the
+// demo shows is what the app does, not a fixture that resembles it.
+//
+// `--goal` picks the scenario: a weight-loss goal (the default, a body-weight target), a
+// muscle goal (a load target), or `none` — the no-goal state, which is a first-class screen
+// (concept-v2 §Goals: with no goal the app runs on a standing intention and shows no
+// judgement colours) and therefore something the morning demo has to be able to show.
+//
+// Safe to re-run: the user, the profile and the goal converge, and a day that has already
+// closed is left alone. It does add another day's logs each time, which is what you want
+// when re-seeding a demo and not what you want on a real account — so it refuses to touch
+// one that already has a lot of history unless --force is given.
+
+const DEFAULT_PASSWORD = "demo-pass-123";
+/** Above this many logged days, the account looks real and the script stops. */
+const REAL_ACCOUNT_DAYS = 10;
+
+const args = process.argv.slice(2);
+const email = args.find((arg) => !arg.startsWith("--"));
+const flag = (name: string): string | undefined => {
+	const index = args.indexOf(`--${name}`);
+	return index === -1 ? undefined : args[index + 1];
+};
+
+if (!email) {
+	console.error(
+		"Usage: npm run seed-demo -- <email> [--goal fat_loss|muscle|none] [--tz <minutes>] [--password <password>] [--force]"
+	);
+	process.exit(2);
+}
+
+const password = flag("password") ?? DEFAULT_PASSWORD;
+// Minutes to add to UTC for the demo user's local time. Defaults to this machine's, which
+// is what someone running the script before a demo means.
+const tzOffsetMin = Number(flag("tz") ?? -new Date().getTimezoneOffset());
+const force = args.includes("--force");
+
+const GOAL_SCENARIOS = ["fat_loss", "muscle", "none"] as const;
+type GoalScenario = (typeof GOAL_SCENARIOS)[number];
+const goalScenario = (flag("goal") ?? "fat_loss") as GoalScenario;
+
+if (!GOAL_SCENARIOS.includes(goalScenario)) {
+	console.error(`❌ --goal ${flag("goal")} is not one of: ${GOAL_SCENARIOS.join(", ")}.`);
+	process.exit(2);
+}
+
+if (!Number.isInteger(tzOffsetMin) || Math.abs(tzOffsetMin) > 840) {
+	console.error(`❌ --tz ${flag("tz")} is not a timezone offset in minutes (e.g. 120 for Berlin in summer).`);
+	process.exit(2);
+}
+
+const auth = createAuth({
+	pool,
+	secret: config.auth.secret,
+	baseUrl: config.auth.baseUrl,
+	trustedOrigins: config.allowedOrigins,
+});
+
+/**
+ * The readings need a model. With a key, the real one writes the demo's "In short"
+ * paragraphs; without, this stands in — a canned answer in the caller's own schema, so the
+ * seeded day has a reading either way and the demo does not depend on the network.
+ */
+function cannedLlm(): LlmPort {
+	return {
+		model: "seed-demo-canned",
+		async parseStructured({ schema, schemaName }) {
+			const answer =
+				schemaName === COACH_BRIEF_SCHEMA_NAME
+					? {
+							headline: "Pull day: back and shoulders",
+							why: "Chest was trained yesterday and back is five days out. You are two sessions into the week against a plan of four.",
+							workout: {
+								type: "strength",
+								targets: ["back", "shoulders"],
+								exercises: [
+									{ name: "Lat Pulldown", load_lb: 110, sets: 3, reps: 10, minutes: null, note: "Hold the load until ten is clean.", is_new: false },
+									{ name: "Dumbbell Row", load_lb: 50, sets: 3, reps: 12, minutes: null, note: null, is_new: false },
+									{ name: "Overhead Press", load_lb: 65, sets: 4, reps: 8, minutes: null, note: null, is_new: false },
+								],
+								finisher: [
+									{ name: "Lat Stretch", minutes: 2, note: "Both sides, off a rack." },
+									{ name: "Doorway Chest Stretch", minutes: 2, note: null },
+								],
+							},
+							nudge: "Weigh in tomorrow morning — the trend is what the plan is steered by.",
+						}
+					: schemaName === RIGHT_NOW_SCHEMA_NAME
+						? {
+								text: "You are on track for the day with tonight's session still to come.",
+								next_action: { label: "Log a workout", kind: "workout", hint: "Tonight's session is still open" },
+								actions: [{ label: "Ask the coach", kind: "coach" }],
+							}
+						: {
+								text: "You trained today. The bench went up a step and the weigh-in came in lower than last week.",
+							};
+			// Parsed through the caller's own schema, exactly as a real adapter would: a
+			// stand-in that could return a shape the schema rejects is not a stand-in.
+			return schema.parse(answer);
+		},
+	};
+}
+
+function hasCoachKey(): boolean {
+	return config.llm.coachProvider === "anthropic" ? Boolean(config.anthropic.apiKey) : Boolean(config.openai.apiKey);
+}
+
+const today = localDay(new Date(), tzOffsetMin).date;
+const day = (offset: number) => addDays(today, offset);
+
+/** The instant at `clock` local time on a seeded day. */
+function at(date: string, clock: string): string {
+	const [h, m] = clock.split(":").map(Number);
+	return new Date(
+		Date.parse(`${date}T00:00:00Z`) - tzOffsetMin * 60_000 + ((h as number) * 60 + (m as number)) * 60_000
+	).toISOString();
+}
+
+interface LiftSeed {
+	clock: string;
+	exercise: string;
+	sets: number;
+	reps: number;
+	load_lb: number;
+	kcal: number;
+}
+
+/** Four days: three closed, then today, still being lived. */
+const DAYS: {
+	offset: number;
+	weight_lb: number;
+	lifts: LiftSeed[];
+	/** A Health workout: `overlaps` means it covers the gym block rather than standing alone. */
+	health?: { name: string; clock: string; minutes: number; kcal: number; distance_mi?: number; overlaps: boolean };
+}[] = [
+	{
+		offset: -3,
+		weight_lb: 195.4,
+		// The first gym visit: every lift is a "first time", which is what a real first week
+		// looks like and what the deltas on the following days are measured against.
+		lifts: [
+			{ clock: "18:05", exercise: "Bench Press", sets: 3, reps: 8, load_lb: 130, kcal: 110 },
+			{ clock: "18:25", exercise: "Lat Pulldown", sets: 3, reps: 10, load_lb: 110, kcal: 95 },
+			{ clock: "18:45", exercise: "Dumbbell Row", sets: 3, reps: 12, load_lb: 45, kcal: 85 },
+			{ clock: "19:00", exercise: "Overhead Press", sets: 3, reps: 8, load_lb: 65, kcal: 70 },
+		],
+	},
+	{
+		offset: -2,
+		weight_lb: 194.8,
+		// A rest day from the gym — the walk is the only activity, and it comes from Health.
+		lifts: [],
+		health: { name: "Walking", clock: "07:55", minutes: 42, kcal: 190, distance_mi: 2.2, overlaps: false },
+	},
+	{
+		offset: -1,
+		weight_lb: 194.2,
+		// Second visit: the bench and the row go up a step, the pulldown holds, the press
+		// gains a set — one of each delta the Day screen has to render.
+		lifts: [
+			{ clock: "18:10", exercise: "Bench Press", sets: 3, reps: 8, load_lb: 135, kcal: 120 },
+			{ clock: "18:30", exercise: "Lat Pulldown", sets: 3, reps: 10, load_lb: 110, kcal: 95 },
+			{ clock: "18:50", exercise: "Dumbbell Row", sets: 3, reps: 12, load_lb: 50, kcal: 90 },
+			{ clock: "19:05", exercise: "Overhead Press", sets: 4, reps: 8, load_lb: 65, kcal: 80 },
+		],
+		health: { name: "Traditional Strength Training", clock: "18:05", minutes: 65, kcal: 520, overlaps: true },
+	},
+	{
+		offset: 0,
+		weight_lb: 193.6,
+		// Today is deliberately half-lived: a morning walk in, tonight's session still
+		// expected, so the Today screen has something to say and a next action to offer.
+		lifts: [],
+		health: { name: "Walking", clock: "08:20", minutes: 35, kcal: 160, distance_mi: 1.8, overlaps: false },
+	},
+];
+
+async function ensureUser(): Promise<string> {
+	const context = await auth.$context;
+	const existing = await context.internalAdapter.findUserByEmail((email as string).trim().toLowerCase());
+	if (!existing) {
+		await auth.api.signUpEmail({
+			body: { name: (email as string).split("@")[0] ?? "Demo", email: email as string, password },
+		});
+		console.log(`👤 Created ${email}`);
+	}
+	// Either way the password is the documented one, so the demo can always sign in.
+	const { userId, account } = await setUserPassword(auth, email as string, password);
+	console.log(existing ? `👤 ${email} already existed; password ${account}.` : `🔑 Password set.`);
+	return userId;
+}
+
+async function seedProfile(userId: string): Promise<void> {
+	const birthYear = new Date().getUTCFullYear() - 38;
+	await pool.query(
+		`INSERT INTO profiles (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`,
+		[userId]
+	);
+	await pool.query(
+		`UPDATE profiles SET
+			display_name = COALESCE(display_name, 'Demo'),
+			sex = 'male', birth_year = $2, height_cm = 180, activity_level = 'moderate',
+			goal_pace = 'standard', goal_weight_lb = 170, units = 'imperial',
+			training_days = 4, environment = 'gym',
+			stated_at = stated_at || jsonb_build_object('training_days', NOW()::text)
+		 WHERE id = $1`,
+		[userId, birthYear]
+	);
+}
+
+/** The specs behind `--goal`, in the shape POST /api/goals takes. */
+const GOAL_SPECS = {
+	fat_loss: {
+		kind: "custom",
+		title: "Down to 170 lb",
+		metrics: [
+			{
+				measure: "body_weight",
+				scope: null,
+				target: 170,
+				unit: "lb",
+				direction: "decrease" as const,
+				rate: null,
+				by: null,
+			},
+		],
+	},
+	muscle: {
+		kind: "gain_muscle",
+		title: "Bench 185",
+		metrics: [
+			{
+				measure: "exercise_load",
+				scope: "Bench Press",
+				target: 185,
+				unit: "lb",
+				direction: "increase" as const,
+				rate: null,
+				by: null,
+			},
+		],
+	},
+} as const;
+
+/** Titles this script sets, so `--goal none` can clear its own goals and nobody else's. */
+const DEMO_GOAL_TITLES = Object.values(GOAL_SPECS).map((spec) => spec.title);
+
+async function seedGoal(userId: string): Promise<void> {
+	if (goalScenario === "none") {
+		// The no-goal state is the point of this scenario, so the demo's own goals are
+		// ended — dropped, with an active_to, exactly as PATCH /api/goals/:id would do it,
+		// which leaves the closed days they judged still judged. A goal the script did not
+		// write is left alone: it is not ours to end.
+		const { rowCount } = await pool.query(
+			`UPDATE goals SET status = 'dropped', active_to = $3::date
+			  WHERE user_id = $1 AND status = 'active' AND title = ANY($2::text[])`,
+			[userId, DEMO_GOAL_TITLES, today]
+		);
+		const others = await pool.query<{ title: string }>(
+			`SELECT title FROM goals WHERE user_id = $1 AND status = 'active'`,
+			[userId]
+		);
+		console.log(`🎯 No goal: dropped ${rowCount ?? 0} demo goal(s).`);
+		for (const row of others.rows) console.log(`   ⚠️  left "${row.title}" alone — this script did not set it.`);
+		return;
+	}
+
+	const spec = GOAL_SPECS[goalScenario];
+	const { rows } = await pool.query<{ id: string }>(
+		`SELECT id FROM goals WHERE user_id = $1 AND status = 'active' AND title = $2`,
+		[userId, spec.title]
+	);
+	if (rows.length > 0) {
+		console.log(`🎯 "${spec.title}" already active; left as it is.`);
+		return;
+	}
+
+	// Through the same service the API uses, so the demo's goal has the timeline the app
+	// would have proposed — projected from the weigh-ins seeded above.
+	const { goal, proposal } = await createGoal(pool, userId, {
+		spec: { ...spec, metrics: [...spec.metrics], active_from: day(-30) },
+		tzOffsetMin,
+	});
+	console.log(`🎯 Goal: ${goal.title} — ${proposal.note}`);
+}
+
+async function seedDays(userId: string): Promise<void> {
+	for (const seed of DAYS) {
+		const date = day(seed.offset);
+
+		await insertWeights(pool, userId, [{ weight_lb: seed.weight_lb, logged_at: at(date, "07:05") }]);
+		if (seed.lifts.length > 0) {
+			await insertEntries(
+				pool,
+				userId,
+				"movement",
+				seed.lifts.map((lift) => ({
+					// The description is the line the day view shows; the fields are what the
+					// coach reads. Both, because a log is a sentence and a record.
+					description: `${lift.sets} × ${lift.reps} ${lift.exercise.toLowerCase()} at ${lift.load_lb} lb`,
+					kcal: lift.kcal,
+					exercise: lift.exercise,
+					sets: lift.sets,
+					reps: lift.reps,
+					load_lb: lift.load_lb,
+					source: "manual" as const,
+					confidence: "high" as const,
+					logged_at: at(date, lift.clock),
+				}))
+			);
+		}
+
+		if (seed.health) {
+			const start = at(date, seed.health.clock);
+			const end = new Date(Date.parse(start) + seed.health.minutes * 60_000).toISOString();
+			await pool.query(
+				`INSERT INTO health_samples (user_id, kind, external_id, start_at, end_at, value, unit, raw)
+				 VALUES ($1, 'workout', $2, $3, $4, $5, 'kcal', $6::jsonb)
+				 ON CONFLICT (user_id, external_id) DO NOTHING`,
+				[
+					userId,
+					`demo-${date}-workout`,
+					start,
+					end,
+					seed.health.kcal,
+					JSON.stringify({
+						name: seed.health.name,
+						duration_min: seed.health.minutes,
+						...(seed.health.distance_mi ? { distance_mi: seed.health.distance_mi } : {}),
+					}),
+				]
+			);
+			// The day's baseline burn and step count, which the day view shows and never
+			// adds to `earned`.
+			await pool.query(
+				`INSERT INTO health_samples (user_id, kind, external_id, start_at, end_at, value, unit, raw) VALUES
+				   ($1, 'active_energy', $2, $3, $4, $5, 'kcal', '{}'::jsonb),
+				   ($1, 'steps', $6, $3, $4, $7, 'count', '{}'::jsonb)
+				 ON CONFLICT (user_id, external_id) DO NOTHING`,
+				[userId, `demo-${date}-energy`, at(date, "00:05"), at(date, "23:55"), 620 + seed.offset * 10, `demo-${date}-steps`, 8200 + seed.offset * 200]
+			);
+		}
+
+		console.log(
+			`📅 ${date}: ${seed.lifts.length} lifts${seed.health ? `, ${seed.health.name} from Health` : ""}`
+		);
+	}
+}
+
+async function main(): Promise<void> {
+	console.log(`🌱 Seeding the demo account into ${describeTarget(config.databaseUrl)} (tz offset ${tzOffsetMin} min)`);
+	const userId = await ensureUser();
+
+	const { rows } = await pool.query<{ days: string }>(
+		`SELECT COUNT(DISTINCT date)::text AS days FROM daily_summaries WHERE user_id = $1`,
+		[userId]
+	);
+	if (Number(rows[0]?.days ?? 0) > REAL_ACCOUNT_DAYS && !force) {
+		console.error(
+			`❌ ${email} already has ${rows[0]?.days} closed days — this looks like a real account, and seeding would add fake logs to it. Re-run with --force if you meant it.`
+		);
+		process.exitCode = 1;
+		return;
+	}
+
+	await seedProfile(userId);
+	// Days before the goal: the proposed timeline is projected from the weigh-ins, so
+	// there has to be something to project from.
+	await seedDays(userId);
+	await seedGoal(userId);
+
+	const coachLlm = hasCoachKey() ? createContainer(config).coachLlm : cannedLlm();
+	const readings = createDayReadings(coachLlm);
+	if (!hasCoachKey()) console.log("🤖 No coach API key — the readings and the brief use the built-in canned text.");
+
+	const report = await closeDueDays(pool, readings, { userId, tzOffsetMin });
+	console.log(`🔒 Closed ${report.closed.length} day(s): ${report.closed.join(", ") || "none"}`);
+
+	// One brief on yesterday, so the closed Day screen's coach-ask card has something to
+	// render. Nothing generates a brief on its own (concept-v2 §Principles 5) — this is a
+	// demo standing in for the user having tapped "What should I do today?" yesterday.
+	const yesterday = day(-1);
+	try {
+		const { brief } = await nextBrief(pool, createLlmCoach(coachLlm), userId, { date: yesterday, tzOffsetMin });
+		console.log(`🧠 Coach brief for ${yesterday}: ${brief.headline}`);
+	} catch (error) {
+		console.warn(`⚠️  No coach brief for ${yesterday}:`, error instanceof Error ? error.message : error);
+	}
+
+	// And leave today's reading warm, so the demo's first screen is not a spinner.
+	const view = await computeDay(pool, { userId, date: today, tzOffsetMin });
+	await readings.rightNow(pool, userId, view);
+
+	console.log(
+		`\n✅ ${email} is ready. Sign in with the password "${password}".\n   Today: ${view.earned} kcal earned, day ${view.day_number}.`
+	);
+}
+
+main()
+	.catch((error) => {
+		console.error("❌ Seeding the demo failed:", error);
+		process.exitCode = 1;
+	})
+	.finally(() => pool.end());

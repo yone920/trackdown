@@ -1,0 +1,716 @@
+import { daysBefore, withinWindow, type DayFacts, type FactActivity, type IsoDate } from "../goals/measures.js";
+import {
+	alternativesText,
+	classifyCardio,
+	equivalentMinutes,
+	equivalentText,
+	shortLabel,
+	type CardioIntensity,
+} from "./cardioIntensity.js";
+
+// What the coach is told about the user, computed rather than remembered
+// (docs/concept-v2.md §Principles 4: "facts are computed, advice is generated" — the
+// coach's inputs are SQL, not LLM memory).
+//
+// Everything in this file is a pure function of a `DayFacts` window: the same 28 days the
+// measure catalog reads, built once by services/day.ts. No SQL, no clock, no provider. That
+// is what makes "why did it prescribe 140 lb" a question with an answer, and what lets the
+// whole feature set be tested on fixtures.
+//
+// Three conventions carried over from services/goals/measures.ts, because the coach reads
+// the same rows:
+//   * null means "we do not know", never zero. A user who has not weighed themselves has
+//     no trend; a user who has logged nothing has no adherence. Advice built on a zero the
+//     user never reported is worse than advice that says "I cannot see enough yet".
+//   * Dates are the user's local calendar dates. The caller applied the timezone once.
+//   * Rows dated after `facts.date` are ignored, so a caller may hand over a wider slice.
+
+/** The window every coach feature reads. The catalogue's longest measure uses the same. */
+export const COACH_WINDOW_DAYS = 28;
+/** "This week" for cardio, sets and adherence: the trailing seven days, today included. */
+export const WEEK_DAYS = 7;
+/** With no stated cardio target, the WHO's 150 min/week is the standing one (same as the verdict). */
+export const DEFAULT_WEEKLY_CARDIO_MIN = 150;
+/** A weigh-in older than this is one the nudge can ask for. */
+export const WEIGH_IN_DUE_DAYS = 3;
+
+/**
+ * The muscle groups the coach reasons about, in the vocabulary of
+ * `backend/data/exercises.json`. Listed rather than discovered so that a group nobody has
+ * trained in four weeks is *visible* — "no pulling movement since Monday" is a sentence
+ * about an absence, and an absence cannot be derived from the rows that exist.
+ */
+export const TRACKED_MUSCLES = [
+	"chest",
+	"back",
+	"lats",
+	"shoulders",
+	"biceps",
+	"triceps",
+	"quads",
+	"hamstrings",
+	"glutes",
+	"calves",
+	"abs",
+] as const;
+
+/**
+ * The coverage ledger's vocabulary (user decision 2026-08-31: "per specific muscle …
+ * days-since-served and 14/28-day set counts, plus stretching as a tracked category").
+ *
+ * `TRACKED_MUSCLES` above is the *catalogue's* vocabulary and stays exactly as it is — the
+ * recovery rule and the muscle bars are built on it. This is a second, coarser reading of
+ * the same rows, and it exists because the words a lifter uses are not one-to-one with the
+ * catalogue's tags: "core" is abs and obliques, "upper back" is back and traps. Each entry
+ * names the catalogue tokens it counts, so nothing here has to guess.
+ *
+ * Order is the order the ledger is *defined* in, not the order it is read in — the ledger
+ * sorts itself by debt.
+ */
+export const LEDGER_MUSCLES: readonly { key: string; label: string; tokens: readonly string[] }[] = [
+	{ key: "quads", label: "quads", tokens: ["quads"] },
+	{ key: "hamstrings", label: "hamstrings", tokens: ["hamstrings"] },
+	{ key: "glutes", label: "glutes", tokens: ["glutes"] },
+	{ key: "calves", label: "calves", tokens: ["calves"] },
+	{ key: "core", label: "core", tokens: ["abs", "obliques"] },
+	{ key: "chest", label: "chest", tokens: ["chest"] },
+	{ key: "lats", label: "lats", tokens: ["lats"] },
+	{ key: "upper_back", label: "upper back", tokens: ["back", "traps"] },
+	{ key: "shoulders", label: "shoulders", tokens: ["shoulders"] },
+	{ key: "biceps", label: "biceps", tokens: ["biceps"] },
+	{ key: "triceps", label: "triceps", tokens: ["triceps"] },
+	{ key: "forearms", label: "forearms", tokens: ["forearms"] },
+];
+
+/**
+ * Mobility is a *category*, not a muscle, and it is on the ledger for the same reason the
+ * muscles are: something nobody has done for three weeks is invisible unless an absence can
+ * be counted. `sets` for it are sessions — a stretch is not measured in sets — which is why
+ * the entry says so in its own `unit`.
+ */
+export const STRETCHING_KEY = "stretching";
+
+/** The trailing window the ledger reports beside the four-week one. */
+export const LEDGER_SHORT_DAYS = 14;
+
+/**
+ * How long an entry may go unserved before the rotation owes it one. Two weeks: long enough
+ * that a four-day split is never nagged about the muscle it trains on Fridays, short enough
+ * that "core: 21 days unserved" is a debt and not a discovery.
+ */
+export const LEDGER_OVERDUE_DAYS = 14;
+
+export interface CoverageEntry {
+	key: string;
+	/** What to call it in a sentence: "upper back", "core", "stretching". */
+	label: string;
+	/** Days since it was last served; null when nothing in four weeks touched it. */
+	days_since: number | null;
+	last_date: IsoDate | null;
+	/**
+	 * Sets in the trailing 7, 14 and 28 days. Sessions rather than sets for stretching.
+	 *
+	 * The seven-day count is what the body map on Progress colours each region by — weekly
+	 * sets against the 10–20 band — and it is counted here rather than on the phone so that
+	 * `LEDGER_MUSCLES`' token mapping ("core" is abs + obliques) exists in exactly one place.
+	 */
+	sets_7d: number;
+	sets_14d: number;
+	sets_28d: number;
+	/** "sets" for a muscle, "sessions" for stretching — so a sentence can say it right. */
+	unit: "sets" | "sessions";
+	/** True when the rotation owes this one: never served, or unserved past the threshold. */
+	overdue: boolean;
+	/**
+	 * How large the debt is, for sorting and for the prompt's ordering. Days unserved, with
+	 * "never in four weeks" scored one day past the window so it always sorts first.
+	 */
+	debt_days: number;
+}
+
+export interface MuscleFeature {
+	muscle: string;
+	/** Days since this group was last trained; null when it is not in the window at all. */
+	days_since: number | null;
+	last_date: IsoDate | null;
+	sets_7d: number;
+	sets_28d: number;
+	/** Trained inside 48 h, so not today's primary target (concept-v2 §Progression rules). */
+	recent: boolean;
+}
+
+export interface ExerciseSession {
+	date: IsoDate;
+	load_lb: number | null;
+	sets: number | null;
+	reps: number | null;
+	duration_min: number | null;
+	confidence: "low" | "medium" | "high" | null;
+}
+
+export interface ExerciseFeature {
+	/** The catalogue's spelling, as it was logged. */
+	exercise: string;
+	category: "cardio" | "strength" | "mobility" | "other" | null;
+	muscle_groups: string[];
+	/** Sessions in the window, newest first — one entry per day the exercise was logged. */
+	sessions: ExerciseSession[];
+	last: ExerciseSession;
+	days_since: number;
+	/** Heaviest load in four weeks — the same number `exercise_load` reports. */
+	best_load_lb: number | null;
+	/** "up" / "down" / "flat" against the oldest session in the window; "new" when there is one. */
+	trend: "new" | "up" | "flat" | "down";
+	/** Pounds between the oldest and newest session in the window; null with one session. */
+	trend_lb: number | null;
+}
+
+/** One activity's contribution to the week, in both currencies. */
+export interface CardioBreakdownRow {
+	exercise: string;
+	/** The short name the week's arithmetic prints: "brisk", "run". */
+	label: string;
+	intensity: CardioIntensity;
+	multiplier: number;
+	minutes: number;
+	equiv_minutes: number;
+	/** Which rule decided the class — "pace 15 min/mi — moderate". */
+	why: string;
+}
+
+export interface CardioFeature {
+	/** Wall-clock minutes, unweighted. Still here: it is what a stopwatch said. */
+	minutes_this_week: number;
+	minutes_last_week: number;
+	/**
+	 * The week in the currency the target is actually in (services/coach/cardioIntensity.ts):
+	 * light ×0.5, moderate ×1, vigorous ×2. Fifteen minutes of running is thirty of these.
+	 */
+	equiv_minutes_this_week: number;
+	/** The plan's, the goal's or the profile's weekly minutes; the WHO default when nobody said. */
+	weekly_target_min: number;
+	/**
+	 * Which of those three it is. `default` is the guideline standing in for a statement
+	 * nobody made, and the screen says so rather than presenting it as the user's own number
+	 * (migration 0016; the `daily_calorie_target` lesson).
+	 */
+	target_source: "goal" | "stated" | "default";
+	/**
+	 * Target − this week's EQUIVALENT minutes; 0 when the week is already there.
+	 *
+	 * Equivalent, not wall-clock: the target is a moderate-minutes target, so the shortfall
+	 * has to be measured in the same units the prescription is paid in. For a user whose
+	 * cardio is all moderate this is the number it always was.
+	 */
+	short_by_min: number;
+	sessions_this_week: number;
+	last_date: IsoDate | null;
+	days_since: number | null;
+	/** This week's activities, largest first, each with what it was worth. */
+	breakdown: CardioBreakdownRow[];
+	/** The same week folded into the three classes; only the ones with minutes in them. */
+	intensity_mix: { intensity: CardioIntensity; minutes: number; equiv_minutes: number }[];
+	/** The arithmetic, shown: "20 brisk + 15 run×2". Empty string with nothing logged. */
+	equiv_text: string;
+	/** "22 moderate min or 11 hard". Null when the week is already at its target. */
+	alternatives_text: string | null;
+}
+
+export interface AdherenceWindow {
+	days: number;
+	/** Days inside the window with an activity or a weigh-in. */
+	logged_days: number;
+	/** Days with nothing at all — the gap the nudge is allowed to mention. */
+	unlogged_days: IsoDate[];
+	training_days: number;
+}
+
+export interface WeightFeature {
+	latest: number | null;
+	latest_date: IsoDate | null;
+	avg_7d: number | null;
+	avg_7d_prev: number | null;
+	/** Change in the 7-day average over a week, pounds. Negative = losing. */
+	trend_per_week: number | null;
+	days_since_weigh_in: number | null;
+}
+
+export interface DataQuality {
+	/** Activities a model read and nobody has corrected, at low confidence. */
+	low_confidence_items: { date: IsoDate; exercise: string; reason: string }[];
+	/** Days in the last week with nothing logged at all. */
+	unlogged_days: IsoDate[];
+	/** True when the user has not weighed themselves in WEIGH_IN_DUE_DAYS. */
+	weigh_in_due: boolean;
+}
+
+export interface CoachFeatures {
+	date: IsoDate;
+	/** Days since anything was logged as trained; null when nothing is in the window. */
+	days_since_last_workout: number | null;
+	last_workout_date: IsoDate | null;
+	/** Distinct days with an activity, in the trailing week and the whole window. */
+	sessions_this_week: number;
+	sessions_last_week: number;
+	sessions_in_window: number;
+	/** Days per week the plan says, when the user has said. */
+	training_days_target: number | null;
+	muscles: MuscleFeature[];
+	/** Groups with no entry in the window at all — trained never, as far as we can see. */
+	untrained_muscles: string[];
+	/**
+	 * The fine-grained coverage ledger, largest debt first. This is what the rotation is
+	 * held to: over two to four weeks every entry on it gets served, and the prompt is given
+	 * the debts in as many words ("core: 21 days unserved").
+	 */
+	coverage: CoverageEntry[];
+	exercises: ExerciseFeature[];
+	cardio: CardioFeature;
+	adherence: { day1: AdherenceWindow; day3: AdherenceWindow; day7: AdherenceWindow };
+	weight: WeightFeature;
+	data_quality: DataQuality;
+}
+
+export interface CoachFeaturesInput {
+	/** 28 days ending on the day being advised (services/day.ts builds it). */
+	facts: DayFacts;
+	/** Days per week the plan says. */
+	trainingDaysTarget?: number | null;
+	/** Weekly cardio minutes named by a GOAL. The most specific statement there is. */
+	cardioTargetMin?: number | null;
+	/**
+	 * Weekly cardio minutes on the profile (`cardio_minutes_target`, migration 0016) — the
+	 * standing aim, said out loud once. Used when no goal names one; the WHO's 150 stands in
+	 * when neither does, and `target_source` says which of the three happened.
+	 */
+	cardioTargetStatedMin?: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function round(value: number, digits = 1): number {
+	const factor = 10 ** digits;
+	return Math.round(value * factor) / factor;
+}
+
+function mean(values: readonly number[]): number | null {
+	return values.length === 0 ? null : values.reduce((a, b) => a + b, 0) / values.length;
+}
+
+function normalise(name: string | null): string | null {
+	const trimmed = name?.trim();
+	return trimmed ? trimmed.toLowerCase() : null;
+}
+
+/** Everything in the window, oldest last — the coach never reads the future. */
+function inWindow(facts: DayFacts, days = COACH_WINDOW_DAYS): FactActivity[] {
+	return facts.activities.filter((activity) => withinWindow(activity.date, facts.date, days));
+}
+
+/**
+ * A day the user trained. Any activity counts: a walk imported from Health is movement,
+ * and the coach's gap rule is about the body, not about which button logged it.
+ */
+function trainingDates(activities: FactActivity[]): IsoDate[] {
+	return [...new Set(activities.map((activity) => activity.date))].sort();
+}
+
+/** The days a window covers, oldest first, ending on `end`. */
+function windowDates(end: IsoDate, days: number): IsoDate[] {
+	const dates: IsoDate[] = [];
+	for (let back = days - 1; back >= 0; back -= 1) {
+		dates.push(new Date(Date.parse(`${end}T00:00:00Z`) - back * 86_400_000).toISOString().slice(0, 10));
+	}
+	return dates;
+}
+
+function hasMuscle(activity: FactActivity, muscle: string): boolean {
+	return activity.muscle_groups.some((group) => group.trim().toLowerCase() === muscle);
+}
+
+/** Cardio, for every reader of this window — the coach's features and the training board. */
+export function isCardio(activity: FactActivity): boolean {
+	if (activity.category) return activity.category === "cardio";
+	// Nothing said: minutes with no sets is cardio-shaped, which is the only honest guess.
+	return activity.sets == null && (activity.duration_min ?? 0) > 0;
+}
+
+// ---------------------------------------------------------------------------
+// The features
+// ---------------------------------------------------------------------------
+
+export function muscleFeatures(facts: DayFacts): MuscleFeature[] {
+	const window = inWindow(facts);
+	const seen = new Set<string>();
+	for (const activity of window) {
+		for (const group of activity.muscle_groups) {
+			const muscle = normalise(group);
+			if (muscle) seen.add(muscle);
+		}
+	}
+	const muscles = [...new Set<string>([...TRACKED_MUSCLES, ...seen])];
+
+	return muscles
+		.map((muscle) => {
+			const trained = window.filter((activity) => hasMuscle(activity, muscle));
+			const lastDate = trained.map((activity) => activity.date).sort().at(-1) ?? null;
+			const sets = (days: number): number =>
+				trained
+					.filter((activity) => withinWindow(activity.date, facts.date, days))
+					.reduce((total, activity) => total + (activity.sets ?? 0), 0);
+			const daysSince = lastDate == null ? null : daysBefore(lastDate, facts.date);
+			return {
+				muscle,
+				days_since: daysSince,
+				last_date: lastDate,
+				sets_7d: sets(WEEK_DAYS),
+				sets_28d: sets(COACH_WINDOW_DAYS),
+				// 48 h means yesterday and today — a group trained yesterday is still recovering.
+				recent: daysSince != null && daysSince <= 1,
+			};
+		})
+		.sort((a, b) => {
+			// Longest untrained first: that is the order the coach reads them in.
+			if (a.days_since == null && b.days_since == null) return a.muscle.localeCompare(b.muscle);
+			if (a.days_since == null) return -1;
+			if (b.days_since == null) return 1;
+			return b.days_since - a.days_since || a.muscle.localeCompare(b.muscle);
+		});
+}
+
+/** True when this row is stretching / mobility work rather than a lift or a run. */
+export function isMobility(activity: FactActivity): boolean {
+	return activity.category === "mobility";
+}
+
+/**
+ * The coverage ledger (user decision 2026-08-31). One row per specific muscle plus
+ * stretching, each with days-since-served and the 14- and 28-day counts, sorted by debt.
+ *
+ * Two things it is deliberately NOT:
+ *
+ *   * It is not a second recovery rule. `recoveryRule` says what today may not be built
+ *     around; this says what has been *neglected*, which is the opposite question and a
+ *     much longer horizon. The rotation has to retire the biggest debts within the recovery
+ *     constraints, and the two disagreeing on a given day is normal.
+ *   * It is not derived from the exercises the user happened to log under a name we know.
+ *     It counts `muscle_groups`, which the confirm fills in from the catalogue, so a
+ *     paraphrased machine still pays into the muscles it worked.
+ *
+ * A muscle nothing in four weeks has touched scores one day past the window, so "never" is
+ * always the largest debt there can be and always sorts first.
+ */
+export function coverageLedger(facts: DayFacts): CoverageEntry[] {
+	const window = inWindow(facts);
+
+	const entryFor = (
+		key: string,
+		label: string,
+		rows: FactActivity[],
+		unit: "sets" | "sessions"
+	): CoverageEntry => {
+		const lastDate = rows.map((row) => row.date).sort().at(-1) ?? null;
+		const count = (days: number): number => {
+			const inside = rows.filter((row) => withinWindow(row.date, facts.date, days));
+			// A stretch has no sets to count, so its volume is how many days it happened on.
+			return unit === "sessions"
+				? new Set(inside.map((row) => row.date)).size
+				: inside.reduce((total, row) => total + (row.sets ?? 0), 0);
+		};
+		const daysSince = lastDate == null ? null : daysBefore(lastDate, facts.date);
+		return {
+			key,
+			label,
+			days_since: daysSince,
+			last_date: lastDate,
+			sets_7d: count(WEEK_DAYS),
+			sets_14d: count(LEDGER_SHORT_DAYS),
+			sets_28d: count(COACH_WINDOW_DAYS),
+			unit,
+			overdue: daysSince == null || daysSince >= LEDGER_OVERDUE_DAYS,
+			debt_days: daysSince == null ? COACH_WINDOW_DAYS + 1 : daysSince,
+		};
+	};
+
+	const entries = LEDGER_MUSCLES.map((muscle) =>
+		entryFor(
+			muscle.key,
+			muscle.label,
+			window.filter((activity) => muscle.tokens.some((token) => hasMuscle(activity, token))),
+			"sets"
+		)
+	);
+	entries.push(entryFor(STRETCHING_KEY, "stretching", window.filter(isMobility), "sessions"));
+
+	// Largest debt first, then alphabetically, so the same facts always read in the same
+	// order — the prompt is hashed and a wobbling order would be a new brief every ask.
+	return entries.sort((a, b) => b.debt_days - a.debt_days || a.label.localeCompare(b.label));
+}
+
+/**
+ * One entry per exercise the user has actually done in four weeks, each with the history
+ * the progression rules step from. Sessions are per *day*: three logged sets of bench in
+ * one visit are one session at the heaviest load, because that is what "same load in two
+ * consecutive workouts" counts.
+ */
+export function exerciseFeatures(facts: DayFacts): ExerciseFeature[] {
+	const window = inWindow(facts).filter((activity) => normalise(activity.exercise) != null);
+	const byExercise = new Map<string, FactActivity[]>();
+	for (const activity of window) {
+		const key = normalise(activity.exercise) as string;
+		byExercise.set(key, [...(byExercise.get(key) ?? []), activity]);
+	}
+
+	const features: ExerciseFeature[] = [];
+	for (const rows of byExercise.values()) {
+		const dates = [...new Set(rows.map((row) => row.date))].sort().reverse();
+		const sessions: ExerciseSession[] = dates.map((date) => {
+			const onDay = rows.filter((row) => row.date === date);
+			const loads = onDay.map((row) => row.load_lb).filter((load): load is number => load != null);
+			// The day's top set is what a load progression is about; sets and reps come from
+			// the row that carried it, so "3 × 8 at 135" stays one prescription.
+			const top =
+				loads.length === 0
+					? onDay[0]
+					: onDay.find((row) => row.load_lb === Math.max(...loads));
+			return {
+				date,
+				load_lb: loads.length === 0 ? null : Math.max(...loads),
+				sets: onDay.reduce<number | null>(
+					(total, row) => (row.sets == null ? total : (total ?? 0) + row.sets),
+					null
+				),
+				reps: top?.reps ?? null,
+				duration_min: onDay.reduce<number | null>(
+					(total, row) => (row.duration_min == null ? total : (total ?? 0) + row.duration_min),
+					null
+				),
+				confidence: top?.confidence ?? null,
+			};
+		});
+
+		const last = sessions[0] as ExerciseSession;
+		const oldest = sessions.at(-1) as ExerciseSession;
+		const loads = sessions.map((session) => session.load_lb).filter((load): load is number => load != null);
+		const trendLb =
+			sessions.length < 2 || last.load_lb == null || oldest.load_lb == null
+				? null
+				: round(last.load_lb - oldest.load_lb);
+		const sample = rows.at(-1) as FactActivity;
+
+		features.push({
+			exercise: sample.exercise as string,
+			category: sample.category,
+			muscle_groups: [...new Set(rows.flatMap((row) => row.muscle_groups))],
+			sessions,
+			last,
+			days_since: daysBefore(last.date, facts.date),
+			best_load_lb: loads.length === 0 ? null : round(Math.max(...loads)),
+			trend: sessions.length < 2 ? "new" : trendLb == null ? "flat" : trendLb > 0 ? "up" : trendLb < 0 ? "down" : "flat",
+			trend_lb: trendLb,
+		});
+	}
+
+	// Most recent first, so a prompt truncated for length keeps what matters.
+	return features.sort((a, b) => a.days_since - b.days_since || a.exercise.localeCompare(b.exercise));
+}
+
+/** Minutes per mile for one row, when it measured both halves of the fraction. */
+function paceOf(activity: FactActivity): number | null {
+	const minutes = activity.duration_min;
+	const miles = activity.distance_mi;
+	if (minutes == null || minutes <= 0 || miles == null || miles <= 0) return null;
+	return minutes / miles;
+}
+
+export function cardioFeature(
+	facts: DayFacts,
+	weeklyTargetMin: number | null | undefined,
+	statedTargetMin?: number | null | undefined
+): CardioFeature {
+	const window = inWindow(facts).filter(isCardio);
+	const minutes = (from: number, days: number): number =>
+		window
+			.filter((activity) => {
+				const back = daysBefore(activity.date, facts.date);
+				return back >= from && back < from + days;
+			})
+			.reduce((total, activity) => total + (activity.duration_min ?? 0), 0);
+
+	const thisWeek = Math.round(minutes(0, WEEK_DAYS));
+	// A goal that names the minutes is the most specific statement there is; the profile
+	// column is the standing one; the guideline is what is left (migration 0016).
+	const target = weeklyTargetMin ?? statedTargetMin ?? DEFAULT_WEEKLY_CARDIO_MIN;
+	const targetSource: CardioFeature["target_source"] =
+		weeklyTargetMin != null ? "goal" : statedTargetMin != null ? "stated" : "default";
+	const lastDate = window.map((activity) => activity.date).sort().at(-1) ?? null;
+
+	// One classification per row of this week, so the same activity logged twice at two
+	// paces is counted as the two things it was.
+	const week = window.filter((activity) => withinWindow(activity.date, facts.date, WEEK_DAYS));
+	const byExercise = new Map<string, CardioBreakdownRow>();
+	for (const activity of week) {
+		const duration = activity.duration_min ?? 0;
+		if (duration <= 0) continue;
+		const name = activity.exercise?.trim() || "cardio";
+		const klass = classifyCardio({ exercise: name, category: activity.category, paceMinMi: paceOf(activity) });
+		const key = `${name.toLowerCase()}|${klass.intensity}`;
+		const existing = byExercise.get(key);
+		if (existing) {
+			existing.minutes = Math.round(existing.minutes + duration);
+			existing.equiv_minutes = equivalentMinutes(existing.minutes, existing.multiplier);
+			continue;
+		}
+		byExercise.set(key, {
+			exercise: name,
+			label: shortLabel(name),
+			intensity: klass.intensity,
+			multiplier: klass.multiplier,
+			minutes: Math.round(duration),
+			equiv_minutes: equivalentMinutes(duration, klass.multiplier),
+			why: klass.why,
+		});
+	}
+	const breakdown = [...byExercise.values()].sort(
+		(a, b) => b.minutes - a.minutes || a.exercise.localeCompare(b.exercise)
+	);
+	const equivThisWeek = breakdown.reduce((total, row) => total + row.equiv_minutes, 0);
+
+	const mix = (["light", "moderate", "vigorous"] as const)
+		.map((intensity) => {
+			const rows = breakdown.filter((row) => row.intensity === intensity);
+			return {
+				intensity,
+				minutes: rows.reduce((total, row) => total + row.minutes, 0),
+				equiv_minutes: rows.reduce((total, row) => total + row.equiv_minutes, 0),
+			};
+		})
+		.filter((entry) => entry.minutes > 0);
+
+	const shortBy = Math.max(0, target - equivThisWeek);
+
+	return {
+		minutes_this_week: thisWeek,
+		minutes_last_week: Math.round(minutes(WEEK_DAYS, WEEK_DAYS)),
+		equiv_minutes_this_week: equivThisWeek,
+		weekly_target_min: target,
+		target_source: targetSource,
+		short_by_min: shortBy,
+		sessions_this_week: new Set(week.map((a) => a.date)).size,
+		last_date: lastDate,
+		days_since: lastDate == null ? null : daysBefore(lastDate, facts.date),
+		breakdown,
+		intensity_mix: mix,
+		equiv_text: equivalentText(breakdown),
+		alternatives_text: alternativesText(shortBy),
+	};
+}
+
+export function adherenceWindow(input: CoachFeaturesInput, days: number): AdherenceWindow {
+	const { facts } = input;
+	const dates = windowDates(facts.date, days);
+	const activities = facts.activities.filter((activity) => dates.includes(activity.date));
+	const weights = facts.weights.filter((weight) => dates.includes(weight.date));
+
+	const loggedDates = new Set<IsoDate>([
+		...activities.map((activity) => activity.date),
+		...weights.map((weight) => weight.date),
+	]);
+
+	return {
+		days,
+		logged_days: loggedDates.size,
+		unlogged_days: dates.filter((date) => !loggedDates.has(date)),
+		training_days: new Set(activities.map((activity) => activity.date)).size,
+	};
+}
+
+export function weightFeature(facts: DayFacts): WeightFeature {
+	const window = facts.weights.filter((weight) => withinWindow(weight.date, facts.date, COACH_WINDOW_DAYS));
+	const sorted = [...window].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+	const latest = sorted.at(-1) ?? null;
+
+	// One weigh-in a day, so a chatty morning cannot outvote the rest of the week — the
+	// same smoothing services/goals/measures.ts applies to `body_weight`.
+	const averageEndingOn = (end: IsoDate): number | null => {
+		const byDay = new Map<IsoDate, number[]>();
+		for (const weight of sorted) {
+			if (!withinWindow(weight.date, end, WEEK_DAYS)) continue;
+			byDay.set(weight.date, [...(byDay.get(weight.date) ?? []), weight.weight_lb]);
+		}
+		const dailyMeans = [...byDay.values()].map((values) => mean(values) as number);
+		const average = mean(dailyMeans);
+		return average == null ? null : round(average);
+	};
+
+	const avg = averageEndingOn(facts.date);
+	const previous = averageEndingOn(windowDates(facts.date, 8)[0] as IsoDate);
+
+	return {
+		latest: latest?.weight_lb ?? null,
+		latest_date: latest?.date ?? null,
+		avg_7d: avg,
+		avg_7d_prev: previous,
+		trend_per_week: avg == null || previous == null ? null : round(avg - previous),
+		days_since_weigh_in: latest == null ? null : daysBefore(latest.date, facts.date),
+	};
+}
+
+export function dataQuality(input: CoachFeaturesInput, week: AdherenceWindow, weight: WeightFeature): DataQuality {
+	const { facts } = input;
+	const lowConfidence = inWindow(facts, WEEK_DAYS)
+		.filter((activity) => activity.confidence === "low")
+		.map((activity) => ({
+			date: activity.date,
+			exercise: activity.exercise ?? "an activity",
+			reason: activity.source === "fused" ? "read from a photo, never confirmed" : "logged at low confidence",
+		}));
+
+	return {
+		low_confidence_items: lowConfidence,
+		unlogged_days: week.unlogged_days,
+		weigh_in_due: weight.days_since_weigh_in == null || weight.days_since_weigh_in >= WEIGH_IN_DUE_DAYS,
+	};
+}
+
+/** Everything above, in one pass. This is what the prompt and the rules both read. */
+export function computeFeatures(input: CoachFeaturesInput): CoachFeatures {
+	const { facts } = input;
+	const window = inWindow(facts);
+	const dates = trainingDates(window);
+	const lastWorkout = dates.at(-1) ?? null;
+
+	const sessionsIn = (from: number, days: number): number =>
+		dates.filter((date) => {
+			const back = daysBefore(date, facts.date);
+			return back >= from && back < from + days;
+		}).length;
+
+	const muscles = muscleFeatures(facts);
+	const day7 = adherenceWindow(input, WEEK_DAYS);
+	const weight = weightFeature(facts);
+
+	return {
+		date: facts.date,
+		days_since_last_workout: lastWorkout == null ? null : daysBefore(lastWorkout, facts.date),
+		last_workout_date: lastWorkout,
+		sessions_this_week: sessionsIn(0, WEEK_DAYS),
+		sessions_last_week: sessionsIn(WEEK_DAYS, WEEK_DAYS),
+		sessions_in_window: dates.length,
+		training_days_target: input.trainingDaysTarget ?? null,
+		muscles,
+		untrained_muscles: muscles.filter((muscle) => muscle.days_since == null).map((muscle) => muscle.muscle),
+		coverage: coverageLedger(facts),
+		exercises: exerciseFeatures(facts),
+		cardio: cardioFeature(facts, input.cardioTargetMin, input.cardioTargetStatedMin),
+		adherence: {
+			day1: adherenceWindow(input, 1),
+			day3: adherenceWindow(input, 3),
+			day7,
+		},
+		weight,
+		data_quality: dataQuality(input, day7, weight),
+	};
+}

@@ -1,0 +1,256 @@
+import { z } from "zod";
+import { describe, expect, it } from "vitest";
+import {
+	PROMPT_FINGERPRINT,
+	buildDaySheet,
+	buildDossierPrompt,
+	buildDossierSheet,
+	buildInShortPrompt,
+	buildRightNowPrompt,
+} from "./prompt.js";
+import { dossierInputsHash } from "./dossier.js";
+import { dayInputsHash } from "./readings.js";
+import { DossierSchema, InShortSchema, RightNowSchema } from "./schema.js";
+import { dayViewFixture as view } from "../../test/fixtures/dayView.js";
+import { dossierInputsFixture } from "../../test/fixtures/dossier.js";
+
+// The readings, without a provider and without a database: the two schemas, the sheet the
+// model is given, and the cache key. The generation itself is covered end to end in
+// app.test.ts over the fake LlmPort.
+
+/**
+ * The ceiling WP2 measured the hard way: Anthropic compiles a structured-output schema into
+ * a decoding grammar and refuses one much past this, on Haiku and Sonnet alike (see the
+ * note at the top of services/fusion/schema.ts). A reading is two sentences and a button —
+ * it has no business anywhere near the limit, and this test is what keeps a future field
+ * from finding out in production.
+ */
+const GRAMMAR_CEILING_BYTES = 4500;
+const READING_BUDGET_BYTES = 1500;
+
+function schemaBytes(schema: z.ZodType): number {
+	return Buffer.byteLength(JSON.stringify(z.toJSONSchema(schema)), "utf8");
+}
+
+describe("the reading schemas", () => {
+	it("stay far under the provider's grammar limit", () => {
+		for (const [name, schema] of [
+			["right_now", RightNowSchema],
+			["in_short", InShortSchema],
+			["dossier", DossierSchema],
+		] as const) {
+			const bytes = schemaBytes(schema);
+			expect({ name, overBudget: bytes > READING_BUDGET_BYTES }).toEqual({ name, overBudget: false });
+			expect(bytes).toBeLessThan(GRAMMAR_CEILING_BYTES);
+		}
+	});
+
+	it("accepts a well-formed reading and refuses an unknown action kind", () => {
+		const good = {
+			text: "You are two sessions into the week against a plan of four.",
+			next_action: { label: "Log a workout", kind: "workout", hint: "Nothing logged yet today" },
+			actions: [{ label: "Ask the coach", kind: "coach" }],
+		};
+		expect(RightNowSchema.parse(good).next_action.kind).toBe("workout");
+		expect(RightNowSchema.safeParse({ ...good, next_action: { label: "Sleep", kind: "nap", hint: null } }).success).toBe(
+			false
+		);
+		// Every optional fact is nullable, never absent — both providers want the key there.
+		expect(RightNowSchema.safeParse({ ...good, next_action: { label: "Log a workout", kind: "workout" } }).success).toBe(
+			false
+		);
+		expect(InShortSchema.safeParse({ text: "" }).success).toBe(false);
+	});
+});
+
+describe("the day sheet the model is given", () => {
+	it("carries the computed day and nothing raw", () => {
+		const sheet = buildDaySheet(view());
+		expect(sheet).toContain("DAY 12 — 2026-08-29 (today, still running)");
+		expect(sheet).toContain("Goal: Down to 170 lb (custom)");
+		expect(sheet).toContain("Earned from activity: 120 kcal");
+		expect(sheet).toContain("Chest — 5:10 pm to 5:55 pm, 1 exercise, 120 kcal");
+		expect(sheet).toContain("vs last time: +5 lb");
+		expect(sheet).toContain("7-day average: 183.1 lb");
+		// No database ids anywhere: the model is given facts, not rows.
+		expect(sheet).not.toContain("block-a1");
+	});
+
+	it("says a Health workout measured the same minutes rather than adding one", () => {
+		const withHealth = view();
+		const block = withHealth.blocks[0]!;
+		const sheet = buildDaySheet({
+			...withHealth,
+			blocks: [
+				{
+					...block,
+					health: {
+						external_id: "hk-1",
+						name: "Traditional Strength Training",
+						start_at: block.start,
+						end_at: block.end,
+						kcal: 430,
+						duration_min: 45,
+						distance_mi: null,
+					},
+				},
+			],
+		});
+		expect(sheet).toContain("(Health measured the same minutes)");
+	});
+
+	it("describes a closed day in the past and asks for no next action", () => {
+		const closed = buildInShortPrompt(view({ is_today: false, closed_at: "2026-08-30T07:00:00.000Z" }));
+		expect(closed).toContain("(closed)");
+		expect(closed).toContain("past tense");
+		expect(closed).toContain("This is a record, not a nudge.");
+		expect(closed).not.toContain("OPEN SLOTS");
+	});
+
+	it("forbids obligation phrasing in both prompts and still allows the arithmetic", () => {
+		for (const prompt of [buildRightNowPrompt(view(), "6:40 pm"), buildInShortPrompt(view())]) {
+			expect(prompt).toContain("NOTHING IS OWED");
+			// The three phrasings the field report named, quoted as things not to write.
+			expect(prompt).toContain('Never write that a workout or a weigh-in is "due" or "expected"');
+			expect(prompt).toContain('"still needs to"');
+			expect(prompt).toContain('"missing"');
+			// And the closer that is still welcome, because it is arithmetic.
+			expect(prompt).toContain("would close this week's coverage");
+		}
+	});
+
+	it("makes the next-action chip a shortcut rather than a reminder", () => {
+		const prompt = buildRightNowPrompt(view(), "6:40 pm");
+		expect(prompt).toContain("a shortcut to a screen, not a reminder");
+		expect(prompt).toContain("The chip's label is a place, not an order");
+		// The instruction that used to point the model at "what the day is waiting for".
+		expect(prompt).not.toContain("what the day is actually waiting for");
+	});
+
+	it("tells the live prompt what time it is for the user", () => {
+		expect(buildRightNowPrompt(view(), "6:40 pm")).toContain("It is 6:40 pm on 2026-08-29 in the user's timezone.");
+	});
+
+	it("says there is no judgement when there is no goal", () => {
+		expect(buildDaySheet(view({ goal: null }))).toContain("none set — no judgement, just the facts");
+	});
+});
+
+describe("the inputs hash", () => {
+	it("does not change because time passed", () => {
+		expect(dayInputsHash(view())).toBe(dayInputsHash(view({ arc: [{ kind: "now", label: "Now", at: 900, instant: "x" }] })));
+	});
+
+	it("changes when something was logged", () => {
+		const before = dayInputsHash(view());
+		const after = dayInputsHash(view({ earned: 240 }));
+		expect(after).not.toBe(before);
+	});
+
+	/**
+	 * The field case this exists for: the prompt was told never to say "left to log" and the
+	 * reading already in the table went on saying it, because the *day* had not changed.
+	 *
+	 * The pin is deliberate. Editing either prompt changes this value and fails this test,
+	 * which is the moment to notice that the edit rewrites every cached reading once —
+	 * one model call per active day, and worth it, but not a thing to do by accident.
+	 */
+	it("is bound to what the prompt currently says", () => {
+		// Bumped 2026-09-08 when the meal-tracking removal rewrote the prompts to drop every
+		// eating/calorie reference, then again the same day to replace the stale "Log a meal"
+		// example with a workout one — every cached reading is invalidated once, on purpose.
+		expect(PROMPT_FINGERPRINT).toBe("0834ebd6");
+		expect(dayInputsHash(view())).toMatch(/^[0-9a-f]{32}$/);
+	});
+});
+
+describe("the dossier prompt", () => {
+	it("asks for two paragraphs of prose and forbids every shape of list", () => {
+		const prompt = buildDossierPrompt(dossierInputsFixture());
+		expect(prompt).toContain("EXACTLY TWO PARAGRAPHS");
+		expect(prompt).toContain("No headings, no bullet points");
+		expect(prompt).toContain("no lists of any kind");
+	});
+
+	it("makes the second paragraph an invitation with the benefit attached", () => {
+		const prompt = buildDossierPrompt(dossierInputsFixture());
+		expect(prompt).toContain("INVITATION WITH");
+		expect(prompt).toContain("THE BENEFIT ATTACHED");
+		// The three phrasings that read as a reprimand, quoted as things not to write.
+		expect(prompt).toContain(`"You haven't told me how long your sessions are."`);
+		expect(prompt).toContain(`"Your profile is missing a`);
+		// And the shape that is wanted, beside them.
+		expect(prompt).toContain("I can size each plan to fit it");
+		expect(prompt).toContain("never an apology");
+	});
+
+	it("carries the VOICE rules the other two readings are held to", () => {
+		const prompt = buildDossierPrompt(dossierInputsFixture());
+		expect(prompt).toContain("Never scold.");
+		expect(prompt).toContain("NOTHING IS OWED");
+		expect(prompt).toContain("INVENT NOTHING");
+	});
+});
+
+describe("the dossier sheet the model is given", () => {
+	it("separates what the user said from what the log measured", () => {
+		const sheet = buildDossierSheet(dossierInputsFixture());
+		// Stated, with the date a human said it.
+		expect(sheet).toContain("Days a week [stated 2026-08-14]: 4");
+		expect(sheet).toContain("Their gym: New Millennium (gym), 14 machines seen there");
+		expect(sheet).toContain("Constraints: bad left knee — no deep lunges");
+		// Measured, under its own heading.
+		expect(sheet).toContain("WHAT THE LOG SHOWS — the last 28 days, measured, not stated");
+		expect(sheet).toContain("Bench Press — 4 sessions, last at 145 lb, +10 lb over the window");
+		expect(sheet).toContain("Sessions this week: 3");
+		expect(sheet).toContain("7-day average: 210.4 lb");
+	});
+
+	it("says which numbers were chosen by the user and which are standing in", () => {
+		const sheet = buildDossierSheet(dossierInputsFixture());
+		// The cardio guideline is named as a guideline — the `daily_calorie_target` lesson.
+		expect(sheet).toContain("the standard guideline, NOT something they said");
+	});
+
+	it("names what nobody has said by leaving it off, rather than printing a blank", () => {
+		const sheet = buildDossierSheet(dossierInputsFixture());
+		// Session length was never stated: no row, no "null", nothing to mistake for a fact.
+		expect(sheet).not.toContain("Session length");
+		expect(sheet).not.toContain("null");
+		expect(sheet).not.toContain("undefined");
+	});
+
+	it("carries the goal in the user's own words and counts what came before it", () => {
+		const sheet = buildDossierSheet(dossierInputsFixture());
+		expect(sheet).toContain("Down to 195 lb (custom) — since 2026-08-14, by 2026-12-01, 11% of the way");
+		expect(sheet).toContain("1 finished before these.");
+	});
+
+	it("says so plainly when there is no goal at all", () => {
+		const sheet = buildDossierSheet(dossierInputsFixture({ goals: [], goal_history: 0 }));
+		expect(sheet).toContain("GOALS\nNone active.");
+	});
+
+	it("carries no database ids — facts, not rows", () => {
+		const sheet = buildDossierSheet(dossierInputsFixture());
+		expect(sheet).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+	});
+});
+
+describe("the dossier's cache key", () => {
+	it("is stable for the same person read twice", () => {
+		expect(dossierInputsHash(dossierInputsFixture())).toBe(dossierInputsHash(dossierInputsFixture()));
+		expect(dossierInputsHash(dossierInputsFixture())).toMatch(/^[0-9a-f]{32}$/);
+	});
+
+	it("moves when a plan field, a goal or the training does", () => {
+		const base = dossierInputsHash(dossierInputsFixture());
+		const stated = dossierInputsFixture();
+		expect(
+			dossierInputsHash({ ...stated, plan: { ...stated.plan, session_minutes: 45 } })
+		).not.toBe(base);
+		expect(dossierInputsHash(dossierInputsFixture({ goals: [] }))).not.toBe(base);
+		expect(dossierInputsHash(dossierInputsFixture({ goal_history: 4 }))).not.toBe(base);
+	});
+});
+

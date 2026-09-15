@@ -1,0 +1,161 @@
+import type { CoachFeatures } from "../services/coach/features.js";
+import type { CoachGoal, CoachRules } from "../services/coach/rules.js";
+import type { CoachBriefOutput, CoachRevisionOutput, RevisionMode } from "../services/coach/schema.js";
+
+// The coach (docs/build-plan.md §Architecture: "CoachPort: brief(inputs) → Brief (default
+// impl composes LlmPort)").
+//
+// It is its own port rather than a call site of LlmPort because the brief is a *decision*
+// the app makes, not a model call it happens to run: a rules-only coach, a cheaper model
+// for the free tier, or a hosted service later are all swaps behind this interface, and
+// none of them should touch a route. The default implementation is
+// adapters/coach/llm.ts, which composes LlmPort with the prompt and schema from
+// services/coach/.
+//
+// The types below are the domain's, defined in services/coach/ where the pure code lives,
+// and imported here as types only — the same way ports/llm.ts imports zod. A port may name
+// the shapes it carries; what it may not do is import an SDK.
+
+/** The plan the user has stated, as the coach reads it (docs/concept-v2.md §Coach — Inputs). */
+/** The gym (or spare room) the user trains in, and the kit seen there so far. */
+export interface CoachPlace {
+	name: string;
+	kind: string;
+	/** Machines and movements observed there, most used first. */
+	equipment: string[];
+}
+
+export interface CoachPlan {
+	goal_pace: string | null;
+	/** Days per week the user says they train. */
+	training_days: number | null;
+	environment: string | null;
+	equipment: string[];
+	/** Injuries and exercises to avoid. Never overridden by anything computed. */
+	constraints: string[];
+	preferences: string[];
+	/**
+	 * The training background the user stated (migration 0011). Without it a cold start
+	 * has no way to tell a first-timer from a three-year lifter, and used to assume the
+	 * first. `reference_loads` reach the prompt as prescriptions, not as prose.
+	 */
+	experience: string | null;
+	background: string | null;
+	/**
+	 * How long a normal session is for this user, in minutes (migration 0014). Never null:
+	 * `DEFAULT_SESSION_MINUTES` stands in when nobody has said, and `session_minutes_stated`
+	 * says which of the two this is — so the prompt can size the session without ever
+	 * claiming the user asked for sixty.
+	 */
+	session_minutes: number;
+	session_minutes_stated: boolean;
+	/**
+	 * Where they train and what has actually been seen there (migration 0012). Not a claim
+	 * about what the room contains — it is what this user has used, accrued one workout at a
+	 * time — which is why the prompt says "prefer these", never "only these". Null until
+	 * they name a place, which is most accounts.
+	 */
+	place: CoachPlace | null;
+	units: "lb";
+}
+
+/** What has happened on the day the user is asking about, so far. */
+export interface CoachToday {
+	earned: number;
+	/** Block titles logged today — "already trained" is the first thing the answer turns on. */
+	trained: string[];
+	/**
+	 * Every movement logged today, as the completion match reads it (user decision
+	 * 2026-08-31: the brief is a plan with a tick beside each line, and a brief first asked
+	 * for *after* the session must acknowledge the session rather than call the day rest).
+	 */
+	logged: {
+		exercise: string | null;
+		exercise_id: string | null;
+		sets: number | null;
+		category: string | null;
+		/** The row itself, so the completion can name which records ticked a line off. */
+		id?: string | null;
+		logged_at?: string | null;
+		reps?: number | null;
+		load_lb?: number | null;
+		duration_min?: number | null;
+		kcal?: number | null;
+	}[];
+}
+
+export interface CoachBriefInputs {
+	/** The user's local calendar date the brief is for. */
+	date: string;
+	/** Their local clock when they asked ("6:40 pm") — a brief at 6 am is not one at 9 pm. */
+	local_time: string;
+	/** Active goals in priority order; the first one is the brief's main focus. */
+	goals: CoachGoal[];
+	plan: CoachPlan;
+	features: CoachFeatures;
+	rules: CoachRules;
+	today: CoachToday;
+	/**
+	 * What the user said when they asked, plus anything the fusion pipeline classified as
+	 * `coach_context` today ("only 30 minutes", "knee hurts"). It shapes the answer; it
+	 * never overrides the history (concept-v2 §Output).
+	 */
+	context: string | null;
+}
+
+/** What the model produced, with the deterministic parts already merged in. */
+export type Brief = CoachBriefOutput;
+
+/**
+ * A revision's answer: a brief plus the model's own reading of what kind of change it was
+ * (services/coach/schema.ts §CoachRevisionSchema). On `append` the exercises are only the
+ * new ones; the merge is the service's job, not the port's.
+ */
+export type RevisedBrief = CoachRevisionOutput;
+
+/**
+ * "Make it 8 exercises", "switch to legs", "I feel like chest". A revision is not a new
+ * question with extra context: the user is looking at an answer and wants *that answer*
+ * changed, so the model is handed today's brief and told what to do to it, and returns the
+ * whole revised brief rather than a patch. Everything the instruction does not touch is
+ * expected back unchanged.
+ */
+export interface BriefRevision {
+	/** What the user asked for, in their own words. */
+	instruction: string;
+	/** The brief they are looking at — today's current answer. */
+	current: Brief;
+	/**
+	 * Which kind of change this is, when the UI has already said (user decision 2026-08-31
+	 * §3 — the two buttons under the plan).
+	 *
+	 *   * `"append"` — *Add to today's plan*. Not the model's to overrule: the user pressed
+	 *     a button whose whole promise is that the plan above it stays.
+	 *   * `"rewrite"` — *Replace today's plan*, behind its own confirmation tap.
+	 *   * `null` — the free-text box, where only the model has read the sentence. It decides,
+	 *     and an instruction it cannot call either way is an append: replacing a plan
+	 *     somebody is halfway through is the expensive way to be wrong.
+	 *
+	 * Enforced in `services/coach/coach.ts` as well as said in the prompt — a mode the user
+	 * chose with a tap is not a suggestion.
+	 */
+	mode: RevisionMode | null;
+}
+
+export interface CoachPort {
+	/** Which model this instance calls — stored on the brief and shown in the app. */
+	readonly model: string;
+	/**
+	 * One brief. Throws if the provider returned nothing usable, so a caller never has to
+	 * render half an answer — including a training day with an empty Do list, which parses
+	 * but is not an answer (services/coach/schema.ts §assertUsableBrief).
+	 */
+	brief(inputs: CoachBriefInputs): Promise<Brief>;
+	/**
+	 * A revision of the brief the user is looking at. Its own method rather than an optional
+	 * second argument because it answers a different schema — the model says whether it is
+	 * adding to the plan or replacing it, and the caller has to know which before it can
+	 * merge (schema.ts §CoachRevisionSchema).
+	 */
+	revise(inputs: CoachBriefInputs, revision: BriefRevision): Promise<RevisedBrief>;
+}

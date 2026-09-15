@@ -1,0 +1,26 @@
+# Local Postgres only (the backend runs on the host with `npm run dev` for hot reload).
+# Port 5433 so it never collides with another project's Postgres on 5432.
+
+name: trackdown-dev
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: trackdown-postgres-dev
+    environment:
+      - POSTGRES_USER=trackdown
+      - POSTGRES_PASSWORD=trackdown
+      - POSTGRES_DB=trackdown
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trackdown -d trackdown"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_dev_data:
+    name: trackdown_postgres_dev_data

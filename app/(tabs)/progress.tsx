@@ -1,225 +1,202 @@
-import { Feather } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import { Pressable, ScrollView, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
+import { useCallback, useMemo } from 'react';
+import { Pressable, RefreshControl, ScrollView, View } from 'react-native';
 
-import { Bars } from '@/components/bars';
-import { Sparkline, buildSparkPoints } from '@/components/weight-sparkline';
+import { IconAvatar } from '@/components/icons';
+import { dismissDeletes } from '@/components/kit';
+import { BodyTile } from '@/components/progress/body-tile';
+import { CardioTile } from '@/components/progress/cardio-tile';
+import { CoverageTile } from '@/components/progress/coverage-tile';
+import { DaysTile } from '@/components/progress/days-tile';
+import { GoalTile } from '@/components/progress/goal-tile';
+import { StrengthTile } from '@/components/progress/strength-tile';
+import { TILE_GAP } from '@/components/progress/tile';
+import { Disp, Eyebrow } from '@/components/type';
+import { dateEyebrow } from '@/lib/format';
+import {
+  bodyRow,
+  cardioRow,
+  DAYS_ON_ROW,
+  daysHeadline,
+  daysRow,
+  goalRow,
+  strengthRow,
+} from '@/lib/scoreboard';
 import {
   localDateKey,
-  useAllWeightLogs,
-  useDaysSummary,
-  type DaySummary,
-  type WeightLog,
+  useDays,
+  useGoalProgress,
+  useGoals,
+  usePrefetchExercises,
+  useTrainingBoard,
+  useWeek,
 } from '@/lib/queries';
+import { useScreenInsets } from '@/lib/screen';
+import { C, SPACE } from '@/lib/theme';
+import type { GoalWithProgress } from '@/lib/types';
 
-const RANGE = 30;
+// Progress — the scoreboard (user decision 2026-09-02, from a reviewed mockup).
+//
+// **One screenful of live facts, and no required scrolling.** Seven rows, top to bottom:
+// the goal, the body, the strength board, coverage, cardio, and the last three days. Each
+// row is a compact tile carrying the most important computed thing about its section, and
+// each is a DOOR to the screen that holds the rest of it. If the user never taps anything,
+// the page alone has said how they are doing.
+//
+// What this replaces: the same page with everything open on it — the whole goal card, the
+// six lift cards with their sparklines, the weigh-in rows, two full-width body figures, the
+// cardio breakdown, the sessions-a-week bars and the entire days archive, in that order,
+// several screens deep. Every one of those still exists; none of it is on the page.
+//
+//   · the goal card, its admin and the history   → app/progress/goal.tsx
+//   · the weigh-ins and the full weight line     → app/progress/body.tsx
+//   · the six live lifts and "All lifts"         → app/progress/strength.tsx
+//   · the figures, the legend, sessions a week   → app/progress/coverage.tsx
+//   · equivalent minutes, breakdown, pace, rows  → app/progress/cardio.tsx
+//   · every day ever logged                      → app/days.tsx
+//
+// The body figure has one more home: tapping a muscle chip on the coverage row opens it
+// zoomed over the page, with the ledger's facts about that muscle beside it
+// (components/progress/muscle-sheet.tsx).
+//
+// Nothing on this page decides what a number means — every fact on every row comes out of
+// lib/scoreboard.ts, which is arithmetic and tested without a renderer.
 
 export default function Progress() {
-  const { data: days = [], isLoading } = useDaysSummary(RANGE);
-  const { data: weightLogs = [] } = useAllWeightLogs();
+  const router = useRouter();
+  const insets = useScreenInsets();
+  const today = localDateKey();
 
-  return (
-    <SafeAreaView className="flex-1 bg-cream" edges={['top']}>
-      <ScrollView
-        className="flex-1"
-        contentContainerStyle={{ paddingBottom: 48 }}
-        showsVerticalScrollIndicator={false}>
-        <View className="px-8 pt-10">
-          <Text
-            className="text-[11px] text-ash"
-            style={{ letterSpacing: 3, textTransform: 'uppercase' }}>
-            Progress
-          </Text>
-        </View>
+  const goals = useGoals();
+  const week = useWeek();
+  const board = useTrainingBoard();
+  // The strip draws a fortnight (lib/scoreboard.ts §DAYS_ON_ROW).
+  const days = useDays(undefined, DAYS_ON_ROW);
 
-        <EatingCard days={days} />
-        <MovementCard days={days} />
-        <WeightCard logs={weightLogs} />
-
-        <View className="px-8 pt-14">
-          <Text
-            className="text-[10px] text-ash pb-4"
-            style={{ letterSpacing: 3, textTransform: 'uppercase' }}>
-            Recent days
-          </Text>
-          {isLoading ? (
-            <Text className="text-[13px] text-ash italic py-2">Loading…</Text>
-          ) : (
-            [...days]
-              .reverse()
-              .slice(0, 14)
-              .map((d, i, arr) => (
-                <DayRow
-                  key={d.date}
-                  day={d}
-                  isLast={i === arr.length - 1}
-                  onPress={() => router.push({ pathname: '/day', params: { date: d.date } })}
-                />
-              ))
-          )}
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+  const active = goals.data?.active ?? [];
+  const primary = active[0] ?? null;
+  // The goals list carries the percentages but not the points, and the delta on the row is
+  // a claim about two dated readings — so the primary goal's own progress is read here, the
+  // same query the goal screen behind this row uses (react-query hands them one result).
+  const progress = useGoalProgress(primary?.id ?? null);
+  const withSeries: GoalWithProgress | null = useMemo(
+    () =>
+      primary && progress.data?.metrics
+        ? { ...primary, progress: { ...primary.progress, metrics: progress.data.metrics } }
+        : primary,
+    [primary, progress.data],
   );
-}
 
-function EatingCard({ days }: { days: DaySummary[] }) {
-  const todayKey = localDateKey(new Date());
-  const today = days.find((d) => d.date === todayKey)?.consumed ?? 0;
-  const values = days.map((d) => d.consumed);
-  const max = Math.max(1, ...values);
-
-  return (
-    <MetricCard
-      label="Eating"
-      onPress={() => router.push('/eating')}
-      value={today.toLocaleString()}
-      unit="kcal today"
-      chart={<Bars values={values} max={max} tint="terracotta" height={40} />}
-    />
+  const goal = useMemo(
+    // The weigh-ins are the evidence behind a smoothed measure: the goal's own series is a
+    // 7-day average, and "−2.0 lb since Aug 31" is a claim about what the scale read.
+    () => (withSeries ? goalRow(withSeries, { today, weighIns: board.data?.body.series ?? [] }) : null),
+    [withSeries, today, board.data],
   );
-}
+  const body = useMemo(() => bodyRow(board.data?.body ?? null, today), [board.data, today]);
+  const strength = useMemo(() => strengthRow(board.data?.lifts ?? []), [board.data]);
+  const cardio = useMemo(() => cardioRow(board.data?.cardio ?? null), [board.data]);
+  const dayRows = useMemo(() => daysRow(days.data?.days ?? []), [days.data]);
 
-function MovementCard({ days }: { days: DaySummary[] }) {
-  const todayKey = localDateKey(new Date());
-  const today = days.find((d) => d.date === todayKey)?.burned ?? 0;
-  const values = days.map((d) => d.burned);
-  const max = Math.max(1, ...values);
+  const refreshing = goals.isRefetching || board.isRefetching || week.isRefetching || days.isRefetching;
+  const onRefresh = useCallback(() => {
+    goals.refetch();
+    board.refetch();
+    week.refetch();
+    days.refetch();
+  }, [goals, board, week, days]);
 
-  return (
-    <MetricCard
-      label="Movement"
-      onPress={() => router.push('/movement')}
-      value={today.toLocaleString()}
-      unit="kcal today"
-      valueTint="text-sage"
-      chart={<Bars values={values} max={max} tint="sage" height={40} />}
-    />
+  // The sheets behind the two mover names, warmed while the page is being read.
+  usePrefetchExercises(
+    strength.movers.map((mover) => ({ id: mover.exercise_id, mediaCount: mover.media_count })),
   );
-}
 
-function WeightCard({ logs }: { logs: WeightLog[] }) {
-  const current = logs.length > 0 ? logs[logs.length - 1].weight_lb : null;
-  const startDelta =
-    logs.length > 1 && current !== null ? current - logs[0].weight_lb : null;
-  const points = buildSparkPoints(logs, 30);
-
-  const deltaText =
-    startDelta === null
-      ? null
-      : Math.abs(startDelta) < 0.05
-        ? null
-        : `${startDelta < 0 ? '−' : '+'}${Math.abs(startDelta).toFixed(1)} lb total`;
+  /**
+   * Today's row goes to the Train TAB, not to `/day/<today>` (user decision 2026-09-01).
+   * The open day has one page and it is the tab; the day page is the archival reading of a
+   * day that has closed.
+   */
+  const openDay = (date: string) => (date === today ? router.push('/train') : router.push(`/day/${date}`));
 
   return (
-    <MetricCard
-      label="Weight"
-      onPress={() => router.push('/weight')}
-      value={current === null ? '—' : current.toFixed(1)}
-      unit={current === null ? 'no entries' : deltaText ?? 'lb'}
-      chart={
-        current === null ? (
-          <View className="h-[40px] justify-center">
-            <View className="h-[1px] bg-hairline" />
-          </View>
-        ) : (
-          <Sparkline points={points} height={40} />
-        )
-      }
-    />
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-  unit,
-  chart,
-  onPress,
-  valueTint = 'text-ink',
-}: {
-  label: string;
-  value: string;
-  unit: string;
-  chart: React.ReactNode;
-  onPress: () => void;
-  valueTint?: string;
-}) {
-  return (
-    <Pressable onPress={onPress} className="px-8 pt-12 active:opacity-70">
-      <View className="flex-row items-baseline justify-between pb-4">
-        <Text
-          className="text-[10px] text-ash"
-          style={{ letterSpacing: 3, textTransform: 'uppercase' }}>
-          {label}
-        </Text>
-        <View className="flex-row items-center">
-          <Text className="text-[11px] text-terracotta mr-1">View</Text>
-          <Feather name="chevron-right" size={14} color="#B8623E" />
-        </View>
+    <ScrollView
+      testID="progress-scroll"
+      style={{ flex: 1, backgroundColor: C.bg }}
+      // A scroll is an answer of "no" to an armed Delete? (components/kit.tsx).
+      onScrollBeginDrag={dismissDeletes}
+      contentContainerStyle={{
+        paddingHorizontal: SPACE.screen,
+        paddingTop: insets.top + 12,
+        // Clear of the floating + (components/tab-bar.tsx), which hangs 64 + 18 above the
+        // bar: at 24 it sat on the last tile's right-hand column (field report 2026-09-03).
+        paddingBottom: SPACE.tabBar + 88,
+        gap: TILE_GAP,
+      }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.mute} />}>
+      {/* 1 · The title, the day, and the way to the plan and the account. */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
+        <Disp size={30} style={{ flex: 1 }}>
+          Progress
+        </Disp>
+        <Eyebrow testID="progress-date" style={{ marginRight: 12 }}>
+          {dateEyebrow()}
+        </Eyebrow>
+        <Pressable
+          testID="progress-you"
+          accessibilityRole="button"
+          accessibilityLabel="You"
+          onPress={() => router.push('/you')}
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 18,
+            borderWidth: 1,
+            borderColor: C.track,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
+          <IconAvatar size={18} color={C.mute} />
+        </Pressable>
       </View>
-      <View className="flex-row items-baseline">
-        <Text
-          className={`font-serif-light ${valueTint}`}
-          style={{ fontSize: 48, lineHeight: 52, letterSpacing: -1 }}>
-          {value}
-        </Text>
-        <Text className="text-[13px] text-ash ml-2">{unit}</Text>
-      </View>
-      <View className="mt-4">{chart}</View>
-    </Pressable>
-  );
-}
 
-function DayRow({
-  day,
-  isLast,
-  onPress,
-}: {
-  day: DaySummary;
-  isLast: boolean;
-  onPress: () => void;
-}) {
-  const net = day.consumed - day.burned;
-  const hasData = day.mealCount > 0 || day.movementCount > 0;
-  return (
-    <Pressable
-      onPress={onPress}
-      disabled={!hasData}
-      className={`flex-row items-center py-4 ${isLast ? '' : 'border-b border-hairline'}`}>
-      <View className="w-24">
-        <Text className="text-[13px] text-ink">{formatDayLabel(day.date)}</Text>
-      </View>
-      <View className="flex-1">
-        {hasData ? (
-          <Text className="text-[12px] text-ash">
-            {day.consumed.toLocaleString()} in
-            {day.burned > 0 && (
-              <Text className="text-sage"> · {day.burned.toLocaleString()} out</Text>
-            )}
-          </Text>
-        ) : (
-          <Text className="text-[12px] text-mist italic">nothing logged</Text>
-        )}
-      </View>
-      {hasData && (
-        <Text className="font-serif text-[15px] text-ink mr-2">{net.toLocaleString()}</Text>
-      )}
-      {hasData && <Feather name="chevron-right" size={16} color="#C9C2B8" />}
-    </Pressable>
-  );
-}
+      {/* 2 · GOAL */}
+      <GoalTile
+        goal={goal}
+        loading={goals.isLoading}
+        onOpen={() => router.push('/progress/goal')}
+        onTell={() => router.push({ pathname: '/log', params: { hint: 'goal' } })}
+      />
 
-function formatDayLabel(dateKey: string): string {
-  const [y, m, d] = dateKey.split('-').map(Number);
-  const date = new Date(y, m - 1, d);
-  const today = new Date();
-  const todayKey = localDateKey(today);
-  const yesterdayKey = localDateKey(
-    new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1),
+      {/* 3 · BODY */}
+      <BodyTile body={body} loading={board.isLoading} onOpen={() => router.push('/progress/body')} />
+
+      {/* 4 · STRENGTH */}
+      <StrengthTile
+        strength={strength}
+        loading={board.isLoading}
+        onOpen={() => router.push('/progress/strength')}
+      />
+
+      {/* 5 · COVERAGE */}
+      <CoverageTile
+        coverage={board.data?.frequency.coverage}
+        lifts={board.data?.lifts ?? []}
+        onOpen={() => router.push('/progress/coverage')}
+      />
+
+      {/* 6 · CARDIO — hidden entirely when there is none and nobody asked for any: a section
+          of zeroes on the screen of somebody who lifts and does not run is the app inventing
+          a shortfall (lib/scoreboard.ts §cardioRow). */}
+      {cardio ? <CardioTile cardio={cardio} onOpen={() => router.push('/progress/cardio')} /> : null}
+
+      {/* 7 · DAYS */}
+      <DaysTile
+        days={dayRows}
+        headline={daysHeadline(week.data ?? null)}
+        loading={days.isLoading}
+        onOpenDay={openDay}
+        onAll={() => router.push('/days')}
+      />
+    </ScrollView>
   );
-  if (dateKey === todayKey) return 'Today';
-  if (dateKey === yesterdayKey) return 'Yesterday';
-  return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
