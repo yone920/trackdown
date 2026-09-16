@@ -98,6 +98,22 @@ describe('the copy each door opens with', () => {
     expect(copy.title).not.toBe(copyFor('plan').title);
   });
 
+  // User field report 2026-09-16: "Replace today's plan" fired with no words, and the box
+  // that took words could only add — "chest day" had nowhere to go.
+  it('opens the replace door on what it costs, and on an offer to say what instead', () => {
+    const copy = copyFor('plan-replace');
+    expect(copy.title).toBe('Start today over');
+    expect(copy.submit).toBe('Replace the plan');
+    // Both halves: the plan goes, and saying nothing is still a complete answer.
+    expect(copy.note).toMatch(/everything on it goes/i);
+    expect(copy.note).toMatch(/say nothing/i);
+    expect(copy.hint).toMatch(/say nothing/i);
+    // The placeholder offers what today should BE, not what to add.
+    expect(copy.placeholder).toMatch(/chest day|legs/i);
+    expect(copy.title).not.toBe(copyFor('plan').title);
+    expect(copy.title).not.toBe(copyFor('plan-new').title);
+  });
+
   it('gives every framing a title, a placeholder and a hint', () => {
     for (const framing of FRAMINGS) {
       const copy = copyFor(framing);
@@ -112,6 +128,7 @@ describe('the copy each door opens with', () => {
     // borrowing a different verb for the same act would be the words drifting from the deed.
     expect(copyFor('plan').submit).toBeTruthy();
     expect(copyFor('plan-new').submit).toBe('Generate');
+    expect(copyFor('plan-replace').submit).toBe('Replace the plan');
     expect(copyFor('default').submit).toBeNull();
     expect(copyFor('about-you').submit).toBeNull();
     expect(copyFor('food').submit).toBeNull();

@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 
 import { ActivityRow } from '@/components/activity-row';
 import { BigButton, Card, Chip, Chips, GroupHeading, Row, Section, SkeletonLines } from '@/components/kit';
@@ -11,9 +11,7 @@ import { clock, kcal } from '@/lib/format';
 import { matchedRecordIds } from '@/lib/plan-truth';
 import {
   localDateKey,
-  useAskCoach,
   useCoachNext,
-  useStartWorkout,
   useDay,
   useDeleteRecord,
   usePrefetchExercises,
@@ -41,8 +39,9 @@ import { readerLine } from '@/lib/errors';
 //     Named for what it does: somebody who has already logged their own session has very
 //     much started, and telling them to start is the app not reading its own screen (user
 //     decision 2026-09-03).
-//   * Adding keeps everything above it; replacing costs a second tap and says what it will
-//     do. Adjusting is told in words, like every other change (concept-v2 §Principles 7).
+//   * Adding keeps everything above it; replacing opens a sheet that says what it will
+//     cost and takes what today should be instead. Both are told in words, like every
+//     other change (concept-v2 §Principles 7).
 //
 // On a rest day nobody presses the button, and this section stays one quiet card while the
 // rest of Today goes on recording meals, weight and anything else that happened.
@@ -63,13 +62,6 @@ export function PlanSection() {
   const router = useRouter();
 
   /**
-   * *Replace today's plan* is the one control on this screen that can take work away, so it
-   * asks first: the first tap arms it and says what it will do, the second does it. Armed
-   * state is dropped whenever anything else happens, so it can never be pressed by accident
-   * two screens later.
-   */
-  const [replaceArmed, setReplaceArmed] = useState(false);
-  /**
    * The Why card, expanded again by hand after it folded. Off by default and never
    * remembered: it folds because the session started, and it should fold again tomorrow.
    */
@@ -86,18 +78,14 @@ export function PlanSection() {
   const date = localDateKey();
   const day = useDay(date);
   const remove = useDeleteRecord();
-  const askCoach = useAskCoach();
-  // The first ask of the day goes through here rather than through `askCoach` directly: a
-  // generation is the one call that routinely outlives a phone's patience, and a dropped
-  // answer is recovered rather than reported (lib/queries.ts §useStartWorkout).
-  const startWorkout = useStartWorkout();
   const updateGoal = useUpdateGoal();
 
   const brief: CoachBrief | null = coach.data?.brief ?? null;
-  const asking = askCoach.isPending || startWorkout.asking;
-  // ONE spinner and one disabled button, whichever of the two paths is in flight — and the
-  // recovery poll counts as busy, because from the user's side it is still the same wait.
-  const busy = coach.isLoading || coach.isFetching || asking || startWorkout.recovering;
+  // Nothing on this section asks the coach itself any more: every ask — the first of the
+  // day, an adjustment, a replacement — is made from the logger sheet, which stays open
+  // and says "Thinking…" until the answer lands (app/log.tsx). So busy here is only the
+  // read.
+  const busy = coach.isLoading || coach.isFetching;
   const action = brief?.nudge_action ?? coach.data?.nudge_action ?? null;
   /**
    * The server answered, and the answer was that there is no plan for today. Distinct from
@@ -153,18 +141,10 @@ export function PlanSection() {
     })),
   ]);
 
-  // Three ways this screen can have something to say above the brief, in the order they
-  // matter: the server kept the old answer and said why; the request never landed; the
-  // brief is simply older than the log. None of them replaces the brief.
-  const note =
-    (busy ? null : (coach.data?.note ?? null)) ??
-    // By code, never by the throw's own message: an ask that failed on the provider used to
-    // print whatever the SDK said into the note card (lib/errors.ts).
-    (askCoach.isError && !asking ? readerLine(askCoach.error, 'The coach could not answer just now.') : null) ??
-    // The one the old flow never had: the generate call that came back as nothing. It used
-    // to leave the page on "Nothing planned yet" with no word of what happened, while the
-    // plan sat finished on the server (field report 2026-09-02).
-    (busy ? null : startWorkout.note);
+  // What the server had to say above the brief: it kept the old answer and said why. An
+  // ask that FAILED is reported on the sheet that made it (app/log.tsx), which is still
+  // open when it fails; this card is for the answer the sheet brought back.
+  const note = busy ? null : (coach.data?.note ?? null);
 
   /**
    * The first ask of the day. It is the only thing in the app that writes a plan, and it
@@ -178,7 +158,6 @@ export function PlanSection() {
    * with an empty box is exactly the call this used to make (app/log.tsx §runGeneratePlan).
    */
   const askForPlan = () => {
-    setReplaceArmed(false);
     router.push({ pathname: '/log', params: { framing: 'plan-new' } });
   };
 
@@ -189,18 +168,19 @@ export function PlanSection() {
    * and the words go to the coach's adjust endpoint with append semantics.
    */
   const adjustPlan = () => {
-    setReplaceArmed(false);
     router.push({ pathname: '/log', params: { framing: 'plan' } });
   };
 
-  /** "Replace today's plan": arm, say what it does, and only act on the second tap. */
+  /**
+   * "Replace today's plan" — the same sheet in plan-replace framing (app/log.tsx
+   * §runReplacePlan). It used to arm on one tap and fire on the second with no words at
+   * all, which left the one thing people most want to say about a rebuild — "chest
+   * today" — with nowhere to go but the Adjust box, where it could only be appended
+   * (user field report 2026-09-16). The sheet is the confirmation now: its note says the
+   * plan goes, its own Replace is the second tap, and an empty box is the plain rebuild.
+   */
   const replacePlan = () => {
-    if (!replaceArmed) {
-      setReplaceArmed(true);
-      return;
-    }
-    setReplaceArmed(false);
-    askCoach.mutate({ mode: 'rewrite' });
+    router.push({ pathname: '/log', params: { framing: 'plan-replace' } });
   };
 
   const act = () => {
@@ -372,8 +352,8 @@ export function PlanSection() {
             surface and the one thing concept-v2 §Principles 7 forbids.
 
             Adding is what a told adjustment does, and it keeps everything above it.
-            Replacing does not, so it stays here as its own deliberate act: two taps, no
-            words needed, and it says what it is about to do. */}
+            Replacing does not, so it opens its own door: a sheet that says the plan goes,
+            takes what today should be instead, and only replaces on its own button. */}
         <View style={{ marginTop: 14 }}>
           <Chips>
             <Chip
@@ -385,16 +365,15 @@ export function PlanSection() {
             />
             <Chip
               testID="coach-replace"
-              label={replaceArmed ? "Replace? This clears today's plan" : "Replace today's plan"}
+              label="Replace today's plan"
               variant="danger"
               disabled={busy}
               onPress={replacePlan}
             />
           </Chips>
           <Sub testID="coach-plan-actions-hint" style={{ marginTop: 10, lineHeight: 18 }}>
-            {replaceArmed
-              ? 'Tap Replace again to rebuild the session. Everything above goes, ticks included.'
-              : 'Adjusting opens the logger — say what to add and it is added to the plan. Replacing starts the session over.'}
+            Adjusting opens the logger — say what to add and it is added to the plan. Replacing
+            starts the session over — say what today should be, or nothing.
           </Sub>
         </View>
       </Section>
@@ -428,18 +407,6 @@ export function PlanSection() {
         </Card>
       ) : null}
 
-      {/* A brief IS on screen and a new one is being written: the old one stays exactly
-          where it is and the work says so on one line. Losing the answer you are reading
-          in order to ask for a better one is the thing this screen must never do. */}
-      {(asking || startWorkout.recovering) && brief ? (
-        <View
-          testID="coach-working"
-          style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 }}>
-          <ActivityIndicator color={C.mute} size="small" />
-          <Sub>{startWorkout.recovering ? 'Still writing it…' : 'Rewriting your brief…'}</Sub>
-        </View>
-      ) : null}
-
       {/* What went wrong. It is drawn WITH OR WITHOUT a brief: conditioning it on there
           being one is exactly how a failed first generation ended in silence — the note
           existed and had nowhere to go (field report 2026-09-02). */}
@@ -459,17 +426,6 @@ export function PlanSection() {
             where you are in the week, and write one.
           </Body>
         </Card>
-      ) : null}
-
-      {/* The answer is late and the app has gone looking for it. Said out loud, because a
-          spinner that has been going for a minute reads as a hang. */}
-      {startWorkout.recovering && !brief ? (
-        <View
-          testID="coach-recovering"
-          style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 }}>
-          <ActivityIndicator color={C.mute} size="small" />
-          <Sub>Still writing it — this can take a minute on a phone connection.</Sub>
-        </View>
       ) : null}
 
       {coach.error && !brief ? (

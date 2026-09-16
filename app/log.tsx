@@ -111,6 +111,13 @@ export default function LogSheet() {
    * the generation the button always ran.
    */
   const generatingPlan = framing === 'plan-new';
+  /**
+   * The plan that starts over (user field report 2026-09-16). "Replace today's plan" opens
+   * this sheet instead of firing on a second tap, so what today should BE can be said
+   * first — and, like generating, an empty box is allowed through: it is the plain
+   * rebuild the second tap used to run.
+   */
+  const replacingPlan = framing === 'plan-replace';
   const editId = typeof params.editId === 'string' ? params.editId : null;
   const editKind = (typeof params.editKind === 'string' ? params.editKind : null) as EditKind | null;
   const editDate = typeof params.editDate === 'string' ? params.editDate : '';
@@ -217,7 +224,7 @@ export default function LogSheet() {
       const response = await analyze.mutateAsync({
         text: withText.trim() || null,
         photos: withPhotos,
-        kindHint: adjustingPlan ? 'coach_context' : typeof params.hint === 'string' ? params.hint : null,
+        kindHint: adjustingPlan || replacingPlan ? 'coach_context' : typeof params.hint === 'string' ? params.hint : null,
         clarify,
       });
       // `results` since the mixed-input fix; `result` is the old single-part shape, kept
@@ -410,6 +417,30 @@ export default function LogSheet() {
     }
   };
 
+  /**
+   * Replacing today's plan. A rewrite, said so to the server (`mode: 'rewrite'` — the
+   * button's decision, which the model is not allowed to overrule), with whatever was said
+   * as the instruction. The words are read by the engine as well as the model: a muscle
+   * or a family named here is what today's target and menu are computed for (backend
+   * services/recommendation ENGINE.md §The override), which is the whole reason this sheet
+   * exists — "chest day" typed into Adjust could only ever be appended.
+   *
+   * Empty is fine: it is the plain rebuild the second tap used to run. A preference said
+   * on the way past is kept standing, the same as the generate door does.
+   */
+  const runReplacePlan = async (said: string) => {
+    const words = said.trim();
+    setError(null);
+    setNotice(null);
+    try {
+      if (words) await saveStandingPreferences(words);
+      await askCoach.mutateAsync({ revision: words || null, mode: 'rewrite' });
+      router.back();
+    } catch (caught) {
+      setError(readerLine(caught, 'Could not replace the plan.'));
+    }
+  };
+
   /** Log, or Change it: the same button, doing the thing the step is for. */
   const submit = () => {
     if (revising) void runRevise(text);
@@ -417,6 +448,8 @@ export default function LogSheet() {
     else if (adjustingPlan && photos.length === 0) void runAdjustPlan(text);
     // Same rule for a plan that does not exist yet, and the empty box is allowed through.
     else if (generatingPlan && photos.length === 0) void runGeneratePlan(text);
+    // And for one that starts over.
+    else if (replacingPlan && photos.length === 0) void runReplacePlan(text);
     else void runAnalyze(text, photos);
   };
 
@@ -561,7 +594,7 @@ export default function LogSheet() {
   // Generating a plan is the one submission that needs nothing in the box: saying nothing
   // is how most people will use it (lib/log-framing.ts §plan-new).
   const canSubmit =
-    (generatingPlan || text.trim().length > 0 || (!revising && photos.length > 0)) &&
+    (generatingPlan || replacingPlan || text.trim().length > 0 || (!revising && photos.length > 0)) &&
     !analyze.isPending &&
     // `busy`, not `asking`: the poll that recovers a lost answer is still the same
     // generation, and a second tap during it would start a second one (lib/queries.ts).
@@ -605,7 +638,9 @@ export default function LogSheet() {
               ? 'Adjusting…'
               : generatingPlan
                 ? 'Thinking…'
-                : 'Reading…',
+                : replacingPlan
+                  ? 'Rewriting…'
+                  : 'Reading…',
           pending: analyze.isPending || askCoach.isPending || startWorkout.busy,
           disabled: !canSubmit,
           onPress: submit,

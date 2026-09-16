@@ -212,64 +212,20 @@ it("opens the sheet to ask for a session, and generates nothing by itself", asyn
   expect(asks()).toEqual([]);
 });
 
-it('keeps the brief on screen while a revision is running, and says it is working', async () => {
-  mockApi.mockResolvedValue(next());
-  renderCoach();
-  await screen.findByText('Pull day: back and shoulders');
-
-  let settle: (value: CoachNext) => void = () => {};
-  mockApi.mockReturnValueOnce(new Promise<CoachNext>((resolve) => (settle = resolve)));
-  fireEvent.press(screen.getByTestId('coach-replace'));
-  fireEvent.press(screen.getByTestId('coach-replace'));
-
-  // Mid-flight: the answer the user is reading is still there.
-  expect(await screen.findByTestId('coach-working')).toBeTruthy();
-  expect(screen.getByText('Pull day: back and shoulders')).toBeTruthy();
-  expect(screen.getByText('Lat Pulldown')).toBeTruthy();
-
-  await act(async () => {
-    settle(next({ brief: { ...next().brief, id: 'brief-3', headline: 'Leg day: quads and hamstrings' } }));
-  });
-  await screen.findByText('Leg day: quads and hamstrings');
-  expect(screen.queryByTestId('coach-working')).toBeNull();
-});
-
-it('keeps the brief and prints the note when the revision could not be made', async () => {
-  mockApi.mockResolvedValueOnce(next());
-  renderCoach();
-  await screen.findByText('Pull day: back and shoulders');
-
-  mockApi.mockResolvedValueOnce(
+it('keeps the brief and prints the note when a revision could not be made', async () => {
+  // The sheet makes the ask and writes the answer into this section's query (lib/queries.ts
+  // §useAskCoach); what this section owes is to print the server's line above the brief it
+  // kept, rather than replace or hide it.
+  mockApi.mockResolvedValue(
     next({ stale: true, note: 'That change came back with nothing to do, twice — this is still your last brief.' }),
   );
-  fireEvent.press(screen.getByTestId('coach-replace'));
-  await act(async () => {
-    fireEvent.press(screen.getByTestId('coach-replace'));
-  });
+  renderCoach();
 
   expect(await screen.findByTestId('coach-note')).toBeTruthy();
   expect(screen.getByText(/still your last brief/)).toBeTruthy();
   // The brief is exactly where it was.
   expect(screen.getByText('Pull day: back and shoulders')).toBeTruthy();
   expect(screen.getByText('Lat Pulldown')).toBeTruthy();
-});
-
-it('keeps the brief and says so when the ask itself fails', async () => {
-  mockApi.mockResolvedValueOnce(next());
-  renderCoach();
-  await screen.findByText('Pull day: back and shoulders');
-
-  mockApi.mockRejectedValueOnce(new Error('Request failed (503).'));
-  fireEvent.press(screen.getByTestId('coach-replace'));
-  await act(async () => {
-    fireEvent.press(screen.getByTestId('coach-replace'));
-  });
-
-  // The brief the user already has is kept, and the note is a sentence — never the
-  // templated status the fetch wrapper made up.
-  expect(await screen.findByText('The coach could not answer just now.')).toBeTruthy();
-  expect(screen.queryByText(/503|Request failed/)).toBeNull();
-  expect(screen.getByText('Pull day: back and shoulders')).toBeTruthy();
 });
 
 it('never draws an empty Do list without saying why', async () => {
@@ -506,49 +462,23 @@ it('the adjust door adds; it never replaces', async () => {
   expect(screen.getByText('Lat Pulldown')).toBeTruthy();
 });
 
-it('will not replace the plan on one tap', async () => {
+it('the replace door opens the sheet, and replaces nothing by itself', async () => {
+  // User field report 2026-09-16: Replace fired on a second tap with no words, and the
+  // one box that took words could only ADD — so "chest day" had nowhere to go. Replacing
+  // is a door now, into the same sheet in plan-replace framing (app/log.tsx
+  // §runReplacePlan): the sheet says the plan goes, takes what today should be, and its
+  // own button is the second tap.
   mockApi.mockResolvedValue(next());
   renderCoach();
   await screen.findByText('Pull day: back and shoulders');
 
   fireEvent.press(screen.getByTestId('coach-replace'));
 
-  // Armed, said out loud, and nothing sent.
-  expect(screen.getByText("Replace? This clears today's plan")).toBeTruthy();
-  expect(screen.getByTestId('coach-plan-actions-hint')).toHaveTextContent(/Everything above goes/);
+  expect(mockPush).toHaveBeenCalledWith({ pathname: '/log', params: { framing: 'plan-replace' } });
+  // Nothing sent, and the plan is still exactly where it was.
   expect(asks()).toEqual([]);
-  // The plan is still exactly where it was while the question is being asked.
   expect(screen.getByText('Lat Pulldown')).toBeTruthy();
-});
-
-it('replaces the plan on the second tap, and says it is a rewrite', async () => {
-  mockApi.mockResolvedValue(next());
-  renderCoach();
-  await screen.findByText('Pull day: back and shoulders');
-
-  fireEvent.press(screen.getByTestId('coach-replace'));
-  await act(async () => {
-    fireEvent.press(screen.getByTestId('coach-replace'));
-  });
-
-  // No words needed: rebuilding the session is itself the instruction.
-  expect(asks()).toEqual([{ tz_offset_min: 0, context: null, revision: null, mode: 'rewrite' }]);
-  // Disarmed again: the next tap is a first tap.
-  await waitFor(() => expect(screen.getByText("Replace today's plan")).toBeTruthy());
-});
-
-it('disarms Replace when the adjust door is opened instead', async () => {
-  mockApi.mockResolvedValue(next());
-  renderCoach();
-  await screen.findByText('Pull day: back and shoulders');
-
-  fireEvent.press(screen.getByTestId('coach-replace'));
-  expect(screen.getByText("Replace? This clears today's plan")).toBeTruthy();
-
-  fireEvent.press(screen.getByTestId('coach-adjust'));
-
-  expect(screen.getByText("Replace today's plan")).toBeTruthy();
-  expect(asks()).toEqual([]);
+  expect(screen.getByTestId('coach-plan-actions-hint')).toHaveTextContent(/starts the session over/);
 });
 
 it('says what each control does without pointing at a box that is not there', async () => {

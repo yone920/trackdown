@@ -879,6 +879,88 @@ describe('the plan-new door', () => {
   });
 });
 
+// ── the plan-replace door ────────────────────────────────────────────────────────────
+// User field report 2026-09-16, with a screenshot: "generate chest workout" typed into
+// Adjust came back as three exercises ADDED under the back day it was meant to replace —
+// the adjust box is hard-wired to append, and Replace fired with no words at all. This
+// door is where what today should be gets said.
+
+describe('the plan-replace door', () => {
+  function serveReplace(read: FusionResult[] = []): { path: string; body?: Record<string, unknown> }[] {
+    const calls: { path: string; body?: Record<string, unknown> }[] = [];
+    mockApi.mockImplementation((path: string, options?: { body?: Record<string, unknown> }) => {
+      calls.push({ path, ...(options ?? {}) });
+      if (path === '/api/coach/next/regenerate') return Promise.resolve({ brief: { headline: 'Chest day' } });
+      if (path === '/api/log/confirm') return Promise.resolve({ ok: true });
+      return Promise.resolve(null);
+    });
+    mockUpload.mockResolvedValue(analyzed(read));
+    return calls;
+  }
+
+  it('says what it costs, and offers Replace on an empty box', () => {
+    mockParams = { framing: 'plan-replace' };
+    serveReplace();
+    renderSheet();
+
+    expect(screen.getByText('Start today over')).toBeTruthy();
+    expect(screen.getByTestId('log-framing-note').props.children).toMatch(/everything on it goes/i);
+    expect(screen.getByTestId('log-submit').props.accessibilityState?.disabled).toBeFalsy();
+  });
+
+  it('replaces with the plain rebuild when nothing is said', async () => {
+    mockParams = { framing: 'plan-replace' };
+    const calls = serveReplace();
+    renderSheet();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+
+    const ask = calls.find((call) => call.path === '/api/coach/next/regenerate');
+    // A rewrite, said so — the button's decision, not the model's — with no instruction.
+    expect(ask!.body).toMatchObject({ revision: null, mode: 'rewrite' });
+    expect(calls.some((call) => call.path === '/api/log/confirm')).toBe(false);
+    expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('sends what today should be as the rewrite’s own instruction', async () => {
+    mockParams = { framing: 'plan-replace' };
+    const calls = serveReplace([{ kind: 'coach_context', text: 'chest day' } as unknown as FusionResult]);
+    renderSheet();
+
+    fireEvent.changeText(screen.getByTestId('log-text'), 'chest day');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+
+    const ask = calls.find((call) => call.path === '/api/coach/next/regenerate');
+    // `revision`, never `context`: it is an instruction about the plan, and the server
+    // reads it for the muscle it names as well as handing it to the model.
+    expect(ask!.body).toMatchObject({ revision: 'chest day', mode: 'rewrite' });
+    // About today, so nothing was saved standing.
+    expect(calls.some((call) => call.path === '/api/log/confirm')).toBe(false);
+    expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('keeps the sheet open and says so when the rewrite fails', async () => {
+    mockParams = { framing: 'plan-replace' };
+    mockApi.mockImplementation((path: string) =>
+      path === '/api/coach/next/regenerate' ? Promise.reject(new ApiError(503, 'down')) : Promise.resolve(null),
+    );
+    mockUpload.mockResolvedValue(analyzed([]));
+    renderSheet();
+
+    fireEvent.changeText(screen.getByTestId('log-text'), 'legs');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('log-submit'));
+    });
+
+    expect(screen.getByTestId('log-error')).toBeTruthy();
+    expect(mockBack).not.toHaveBeenCalled();
+  });
+});
+
 // ── the answer that never came back ──────────────────────────────────────────────────
 // Field report 2026-09-02: the user asked for a session, watched "Thinking…", and watched
 // the page revert to "Nothing planned yet" — while a five-item brief sat finished on the

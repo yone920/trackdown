@@ -21,7 +21,7 @@
 // passes the framing of the tab the + was pressed on, and the You page — a stack screen with
 // no tab bar, and so until now no + at all — carries one of its own.
 
-export const FRAMINGS = ['default', 'workout', 'food', 'plan', 'plan-new', 'about-you'] as const;
+export const FRAMINGS = ['default', 'workout', 'food', 'plan', 'plan-new', 'plan-replace', 'about-you'] as const;
 export type Framing = (typeof FRAMINGS)[number];
 
 export interface FramingCopy {
@@ -102,6 +102,24 @@ const COPY: Record<Framing, FramingCopy> = {
     note: 'I read your log, your goals and the week and write the session. Anything you say here shapes it — how long you have, how you feel, something you fancy working. Say nothing and I will just write it.',
     hint: 'Say it, snap it, type it — or say nothing and press Generate. A photo is kept as context for today.',
     submit: 'Generate',
+  },
+  /**
+   * The door to a plan that starts over (user field report 2026-09-16).
+   *
+   * "Replace today's plan" used to fire on its second tap with no words at all, and the
+   * only box that took words — Adjust — is hard-wired to ADD. So the one thing a person
+   * most often wants to say about a rebuild — *"chest today"*, *"legs"*, *"something
+   * different"* — had nowhere to go: typed into Adjust it was appended under the plan it
+   * was meant to replace. This sheet is that somewhere. Opening it is the first tap; its
+   * own Replace is the second, and the note says what it costs. Saying nothing still
+   * replaces, exactly as the second tap used to.
+   */
+  'plan-replace': {
+    title: 'Start today over',
+    placeholder: 'Chest day · legs · something different…',
+    note: 'This replaces today’s plan — everything on it goes, ticks included. Say what today should be instead, or say nothing and I will write it fresh.',
+    hint: 'Say it, snap it, type it — or say nothing and press Replace. A photo is kept as context for today.',
+    submit: 'Replace the plan',
   },
   'about-you': {
     title: 'Tell me about you',
