@@ -23,15 +23,23 @@ back.** Every failure above happened because that line was blurry.
 | Phase | What | Status |
 |---|---|---|
 | 1 | The muscle registry (`registry.ts`) | **Done** |
-| 2 | The scheduler: family + volume selection (`scheduler.ts`) | **Done** |
-| 3 | Exercise pool: rotation, images, equipment, the anchor lift (`exercisePool.ts`) | **Done** |
-| 4a | Per-muscle coverage-level arithmetic (`coverage.ts`) | **Done** — this commit |
+| 2 | The scheduler: family + volume selection (`scheduler.ts`) | **Done, and wired in** |
+| 3 | Exercise pool: rotation, images, equipment, the anchor lift (`exercisePool.ts`) | **Done, not wired in** |
+| 4a | Per-muscle coverage-level arithmetic (`coverage.ts`) | **Done, not wired in** |
 | 4b | `coverageLedger()` and `lib/body-map.ts` actually migrated onto it | **Not done — deliberately** |
 
-`coach/rules.ts` is still the live system end to end, and so is `coach/features.ts`'s
-`coverageLedger()`. Nothing in this module is wired into either yet — Phases 1 through 4a
-are additive, fully tested, and produce zero behavior change on their own, by design, so
-each could be reviewed without touching anything a real user's brief or map depends on.
+**Phase 2 is live.** `coach/features.ts`'s `recommendationMuscleStats()` computes real
+`MuscleStat[]` for this registry's fourteen muscles straight from the activity window
+(its own pass, not a reshaping of `muscleFeatures()` — see that function's own doc), and
+`coach/rules.ts`'s `targetPriorityStatement()` now calls `chooseFamily` +
+`allocateVolume` on those stats instead of a single lookup. A real brief's TODAY'S TARGET
+line is computed by this module now, not guessed by a model reading a list.
+
+Phase 3 (`exercisePool.ts`) and 4a (`coverage.ts`) are built and tested but NOT called
+from anywhere live yet — exercise selection is still the model choosing from the full
+catalogue, and the coverage map still reads the old flat band. Wiring each in is its own
+next step, same discipline as Phase 2's wiring: real data adapter, full test coverage,
+reviewed before it touches a live brief.
 
 **4b is called out separately because it is not additive.** `coverageLedger()` feeds
 BOTH the live coach prompt's COVERAGE DEBTS text and the Progress tab's map, and it still
@@ -69,10 +77,20 @@ every number in `registry.ts` as a tuned default worth arguing with, not a const
 because "more sets" is not simply better for it the way it is for a quad — it's
 injury-sensitive, and the registry says so in the numbers, not just a comment.
 
-## The scheduler (`scheduler.ts`)
+## The scheduler (`scheduler.ts`) — live
 
 Takes a `MuscleStat[]` — `{key, daysSince, sets7d}`, from wherever the caller computed it
 — and answers two questions, each a pure function with no knowledge of the other:
+
+**The real adapter, live in `coach/features.ts`:** `recommendationMuscleStats(facts)`
+computes exactly that `MuscleStat[]`, one entry per registry muscle, straight from the
+same 28-day activity window every other coach feature reads — matching each muscle's
+`tokens` (its own catalogue-vocabulary aliases, e.g. `upper_back` is `back` + `traps`)
+against `activity.muscle_groups`. `CoachFeatures.recommendation_stats` carries the
+result, and `coach/rules.ts`'s `targetPriorityStatement(stats, totalSlots)` is what
+turns `chooseFamily` + `allocateVolume`'s answer into the brief's TODAY'S TARGET line —
+naming the family, every muscle in it getting a slot, and how many exercises each one
+gets, computed rather than guessed.
 
 **`chooseFamily(stats, avoidMuscles?)`** — which of push/pull/legs is today's theme. A
 family's debt is the WORST excess-idle-days among its own members that have cleared

@@ -1,5 +1,6 @@
 import { DEFAULT_LOAD_DIRECTION, type LoadDirection } from "../../db/exercises.js";
 import type { ReferenceLoad } from "../fusion/schema.js";
+import { allocateVolume, chooseFamily, muscleByKey, type MuscleStat } from "../recommendation/index.js";
 import { sameMovement } from "./completion.js";
 import type { CoachFeatures, CoverageEntry, ExerciseFeature, ExerciseSession, MuscleFeature } from "./features.js";
 
@@ -540,21 +541,35 @@ export function recoveryRule(muscles: readonly MuscleFeature[]): RecoveryRule {
 }
 
 /**
- * "Chest, seven days unserved, is the longest-waiting muscle that isn't still recovering —
- * build today around it." `recoveryRule`'s own text already lists the longest-since-trained
- * muscles, but as information ("Longest since trained: chest (7 days), quads (4 days)."),
- * and information is what a muscle that keeps losing to the day's theme looks like from the
- * model's side (user field report 2026-09-16: chest sat at seven days unserved while back,
- * two days clear of its own recovery window, got targeted again — the list was right there
- * and nothing in it said which entry mattered most). Named as an instruction instead of a
- * list, the same fix that made OFF THE MENU and STRENGTH ROTATION land.
+ * "Push: chest — 3 exercises (7 days unserved), shoulders — 2 (4 days), triceps — 1 (2
+ * days)." Computed, not guessed: `services/recommendation`'s `chooseFamily` picks today's
+ * family by real debt against each muscle's own recovery window, and `allocateVolume`
+ * splits the session's exercise slots across that family's muscles by real shortfall
+ * against each one's own MAV floor — replacing a version of this statement (2026-09-16)
+ * that could only ever name ONE muscle and left "how many exercises for it" to the model's
+ * own guess. Named as an instruction instead of a list, the same fix that made OFF THE
+ * MENU and STRENGTH ROTATION land — now backed by arithmetic instead of a single lookup.
+ *
+ * Null when nothing is available at all (every muscle in every family still inside its own
+ * recovery window) or the session has no room for a single exercise — both real, quiet
+ * states, not errors.
  */
-export function targetPriorityStatement(features: CoachFeatures, recovery: RecoveryRule): string | null {
-	const avoid = new Set(recovery.avoid_primary);
-	const first = features.muscles.find((muscle) => !avoid.has(muscle.muscle));
-	if (!first) return null;
-	const since = first.days_since == null ? "not served in four weeks" : `${first.days_since} day${first.days_since === 1 ? "" : "s"} unserved`;
-	return `TODAY'S TARGET — ${first.muscle} (${since}) has gone the longest of any muscle that is not still recovering. Build today's plan around it unless a stated goal, missing equipment, or something the user said today points elsewhere — and if you target something else instead, say why in the rationale.`;
+export function targetPriorityStatement(stats: readonly MuscleStat[], totalSlots: number): string | null {
+	const family = chooseFamily(stats);
+	if (family == null) return null;
+	const byKey = new Map(stats.map((stat) => [stat.key, stat]));
+	const allocation = allocateVolume(family, stats, totalSlots).filter((item) => item.slots > 0);
+	if (allocation.length === 0) return null;
+
+	const parts = allocation.map((item) => {
+		const muscle = muscleByKey(item.key);
+		const stat = byKey.get(item.key);
+		const since =
+			stat?.daysSince == null ? "not served in four weeks" : `${stat.daysSince} day${stat.daysSince === 1 ? "" : "s"} unserved`;
+		return `${muscle?.label ?? item.key} — ${item.slots} exercise${item.slots === 1 ? "" : "s"} (${since})`;
+	});
+
+	return `TODAY'S TARGET — ${family}: ${parts.join(", ")}. This split is computed from the actual rotation debt, not a guess — build today's plan with roughly this many exercises per muscle, heaviest debt first. A stated goal, missing equipment, or something the user said today may point elsewhere — if you target something else instead, say why in the rationale.`;
 }
 
 /**
@@ -1149,7 +1164,7 @@ export function buildRules({
 	const statements = [
 		gap.text,
 		recovery.text,
-		targetPriorityStatement(features, recovery),
+		targetPriorityStatement(features.recommendation_stats, sizing.target_exercises),
 		recoveringExercisesStatement(blocked),
 		cardio.text,
 		sizing.text,

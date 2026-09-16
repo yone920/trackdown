@@ -9,8 +9,10 @@ import {
 	LEDGER_MUSCLES,
 	STRETCHING_KEY,
 	muscleFeatures,
+	recommendationMuscleStats,
 	weightFeature,
 } from "./features.js";
+import { chooseFamily } from "../recommendation/index.js";
 
 // The coach's inputs, without a database and without a provider. Everything the brief is
 // built on is a pure function of a 28-day DayFacts window, which is what makes "why did it
@@ -418,5 +420,62 @@ describe("the coverage ledger", () => {
 	it("rides on computeFeatures, so the prompt and the board read one ledger", () => {
 		const features = computeFeatures({ facts: facts({ activities: [squat(daysAgo(2))] }) });
 		expect(features.coverage).toEqual(coverageLedger(facts({ activities: [squat(daysAgo(2))] })));
+	});
+});
+
+// recommendationMuscleStats — the adapter feeding the new engine's registry, deliberately
+// its own pass rather than a re-shaping of muscleFeatures() above: that function's
+// TRACKED_MUSCLES vocabulary has no forearms, no lower_back, no neck, and folds upper_back
+// into a plain "back" — exactly the disagreement the registry exists to retire.
+describe("recommendationMuscleStats", () => {
+	it("reproduces the real 2026-09-16 scenario end to end: chest's family wins over back's", () => {
+		const benchPress = activity(daysAgo(7), {
+			exercise: "Bench Press",
+			category: "strength",
+			muscle_groups: ["chest"],
+			sets: 3,
+			reps: 8,
+			load_lb: 135,
+			confidence: "high",
+		});
+		const seatedCableRow = activity(daysAgo(2), {
+			exercise: "Seated Cable Row",
+			category: "strength",
+			muscle_groups: ["back"],
+			sets: 3,
+			reps: 12,
+			load_lb: 115,
+			confidence: "high",
+		});
+		const stats = recommendationMuscleStats(facts({ activities: [benchPress, seatedCableRow] }));
+		const chest = stats.find((stat) => stat.key === "chest");
+		const upperBack = stats.find((stat) => stat.key === "upper_back");
+		expect(chest).toMatchObject({ daysSince: 7, sets7d: 0 });
+		expect(upperBack).toMatchObject({ daysSince: 2, sets7d: 3 });
+		// Fed straight into the scheduler, chest's family (push) should win outright — the
+		// bug that started this whole project, closed end to end.
+		expect(chooseFamily(stats)).toBe("push");
+	});
+
+	it("counts upper_back from EITHER of its two catalogue tokens — back or traps", () => {
+		const facePull = activity(daysAgo(1), {
+			exercise: "Face Pull",
+			category: "strength",
+			muscle_groups: ["shoulders", "traps"],
+			sets: 3,
+			reps: 15,
+			load_lb: 40,
+			confidence: "high",
+		});
+		const stats = recommendationMuscleStats(facts({ activities: [facePull] }));
+		expect(stats.find((stat) => stat.key === "upper_back")).toMatchObject({ daysSince: 1, sets7d: 3 });
+	});
+
+	it("carries forearms, lower_back and neck — the three gaps the old vocabulary had", () => {
+		const stats = recommendationMuscleStats(facts({ activities: [] }));
+		expect(stats.map((stat) => stat.key)).toEqual(expect.arrayContaining(["forearms", "lower_back", "neck"]));
+		for (const key of ["forearms", "lower_back", "neck"]) {
+			expect(stats.find((stat) => stat.key === key)).toMatchObject({ daysSince: null, sets7d: 0 });
+		}
 	});
 });

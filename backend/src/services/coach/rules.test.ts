@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
 import { activity, daysAgo, facts, TODAY, weight } from "../../test/fixtures/facts.js";
-import { computeFeatures, TRACKED_MUSCLES, type CoachFeatures } from "./features.js";
+import { computeFeatures, type CoachFeatures } from "./features.js";
+import { musclesInFamily, type MuscleStat } from "../recommendation/index.js";
 import {
 	buildRules,
 	cardioNextMinutes,
@@ -938,61 +939,78 @@ describe("what is off today's menu", () => {
 
 // User field report 2026-09-16: chest sat seven days unserved while back — two days clear
 // of its own 48-hour window — got targeted again. The debt was in the prompt as a list
-// ("Longest since trained: chest (7 days)..."); nothing said which entry to act on.
+// ("Longest since trained: chest (7 days)..."); nothing said which entry to act on. Fixed
+// properly on 2026-09-17 by computing the target from services/recommendation instead of
+// a single lookup — these test the statement directly against hand-built MuscleStat[],
+// the same way scheduler.test.ts tests chooseFamily/allocateVolume themselves.
 describe("today's target, named instead of listed", () => {
-	const move = (date: string, muscle: string, exercise = `${muscle} move`) =>
-		activity(date, { exercise, category: "strength", muscle_groups: [muscle], sets: 3, reps: 10, load_lb: 50 });
-	// Everything trained recently EXCEPT chest and back, so the ledger's own "never in four
-	// weeks beats merely old" rule (features.ts §muscleFeatures) doesn't preempt the two
-	// muscles this test is actually about — an account with real history reads this way,
-	// not the "nine muscles nobody has ever logged" shape a sparser fixture would produce.
-	const baseline = (except: string[]) =>
-		TRACKED_MUSCLES.filter((muscle) => !except.includes(muscle)).map((muscle) => move(daysAgo(3), muscle));
+	// Every rotation-family muscle (push/pull/legs — accessories don't compete for the
+	// day's theme) at a neutral 3-days-unserved, so a test only has to say what's actually
+	// different about the one or two muscles it's about.
+	const neutralStats = (): MuscleStat[] =>
+		[...musclesInFamily("push"), ...musclesInFamily("pull"), ...musclesInFamily("legs")].map((muscle) => ({
+			key: muscle.key,
+			daysSince: 3,
+			sets7d: 0,
+		}));
+	const withStat = (stats: MuscleStat[], key: string, patch: Partial<MuscleStat>) =>
+		stats.map((stat) => (stat.key === key ? { ...stat, ...patch } : stat));
 
-	it("names the longest-unserved muscle that is not still recovering", () => {
-		// Back two days ago clears the 48-hour window; chest is a week overdue.
-		const features = computeFeatures({
-			facts: facts({ activities: [...baseline(["chest", "back"]), move(daysAgo(2), "back"), move(daysAgo(7), "chest")] }),
-		});
-		const line = targetPriorityStatement(features, recoveryRule(features.muscles));
-		expect(line).toContain("TODAY'S TARGET — chest (7 days unserved)");
+	it("names the longest-unserved muscle that is not still recovering, with its own slot count", () => {
+		// Back (upper_back) two days ago clears its 48-hour gate; chest is a week overdue.
+		let stats = neutralStats();
+		stats = withStat(stats, "upper_back", { daysSince: 2 });
+		stats = withStat(stats, "chest", { daysSince: 7 });
+		const line = targetPriorityStatement(stats, 6);
+		expect(line).toContain("TODAY'S TARGET — push:");
+		expect(line).toContain("Chest — ");
+		expect(line).toContain("(7 days unserved)");
 	});
 
-	it("skips a muscle still inside its 48-hour window even if it is otherwise first in line", () => {
-		// Back trained yesterday (still recovering); chest is the next longest-unserved.
-		const features = computeFeatures({
-			facts: facts({ activities: [...baseline(["chest", "back"]), move(daysAgo(1), "back"), move(daysAgo(4), "chest")] }),
-		});
-		const line = targetPriorityStatement(features, recoveryRule(features.muscles));
-		expect(line).toContain("TODAY'S TARGET — chest");
+	it("skips a muscle still inside its own recovery window even if it is otherwise first in line", () => {
+		// Chest trained yesterday (inside its 48h gate) even though it would otherwise be
+		// the biggest number here; legs' quads is the only real debt left standing.
+		let stats = neutralStats();
+		stats = withStat(stats, "chest", { daysSince: 1 });
+		stats = withStat(stats, "quads", { daysSince: 10 });
+		const line = targetPriorityStatement(stats, 6);
+		expect(line).toContain("TODAY'S TARGET — legs:");
+		expect(line).not.toContain("Chest");
 	});
 
-	it("names whichever tracked muscle has never been logged, when nothing has", () => {
-		// Every tracked muscle is null (never in four weeks) with no history at all; the
-		// ledger's own tie-break for that case is alphabetical, so "abs" sorts first.
-		const features = computeFeatures({ facts: facts({ activities: [] }) });
-		const line = targetPriorityStatement(features, recoveryRule(features.muscles));
-		expect(line).toContain("TODAY'S TARGET — abs (not served in four weeks)");
+	it("treats never-trained as the longest wait there is", () => {
+		const stats = musclesInFamily("push")
+			.concat(musclesInFamily("pull"), musclesInFamily("legs"))
+			.map((muscle) => ({ key: muscle.key, daysSince: muscle.key === "shoulders" ? null : 3, sets7d: 0 }));
+		const line = targetPriorityStatement(stats, 6);
+		expect(line).toContain("TODAY'S TARGET — push:");
+		expect(line).toContain("Shoulders — ");
+		expect(line).toContain("(not served in four weeks)");
 	});
 
-	it("says nothing when every tracked muscle is still inside its own 48-hour window", () => {
-		const yesterday = daysAgo(1);
-		const features = computeFeatures({
-			facts: facts({
-				activities: TRACKED_MUSCLES.map((muscle) =>
-					activity(yesterday, { exercise: `${muscle} move`, category: "strength", muscle_groups: [muscle], sets: 3, reps: 10 })
-				),
-			}),
-		});
-		expect(targetPriorityStatement(features, recoveryRule(features.muscles))).toBeNull();
+	it("says nothing when every muscle in every family is still inside its own recovery window", () => {
+		const allRecovering = musclesInFamily("push")
+			.concat(musclesInFamily("pull"), musclesInFamily("legs"))
+			.map((muscle) => ({ key: muscle.key, daysSince: 0, sets7d: 0 }));
+		expect(targetPriorityStatement(allRecovering, 6)).toBeNull();
 	});
 
-	it("puts the line in the rules the prompt is handed", () => {
-		const features = computeFeatures({
-			facts: facts({ activities: [...baseline(["chest", "back"]), move(daysAgo(2), "back"), move(daysAgo(7), "chest")] }),
-		});
+	it("says nothing when the session has no room for a single exercise", () => {
+		expect(targetPriorityStatement(neutralStats(), 0)).toBeNull();
+	});
+
+	it("puts the line in the rules the prompt is handed, reading straight off computeFeatures", () => {
+		const move = (date: string, muscle: string) =>
+			activity(date, { exercise: `${muscle} move`, category: "strength", muscle_groups: [muscle], sets: 3, reps: 10, load_lb: 50 });
+		// Every push/pull/legs catalogue token trained recently except chest, so chest's
+		// debt is unambiguous end to end, straight through computeFeatures.
+		const tokens = ["chest", "shoulders", "triceps", "lats", "back", "biceps", "forearms", "quads", "hamstrings", "glutes", "calves"];
+		const baseline = tokens.filter((token) => token !== "chest").map((token) => move(daysAgo(3), token));
+		const features = computeFeatures({ facts: facts({ activities: [...baseline, move(daysAgo(7), "chest")] }) });
 		const rules = buildRules({ features, goals: [] });
-		expect(rules.statements.some((statement) => statement.startsWith("TODAY'S TARGET"))).toBe(true);
+		const line = rules.statements.find((statement) => statement.startsWith("TODAY'S TARGET"));
+		expect(line).toContain("push:");
+		expect(line).toContain("Chest");
 	});
 });
 

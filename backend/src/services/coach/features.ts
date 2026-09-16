@@ -1,4 +1,5 @@
 import { daysBefore, withinWindow, type DayFacts, type FactActivity, type IsoDate } from "../goals/measures.js";
+import { MUSCLES, type MuscleStat } from "../recommendation/index.js";
 import {
 	alternativesText,
 	classifyCardio,
@@ -264,6 +265,13 @@ export interface CoachFeatures {
 	 * the debts in as many words ("core: 21 days unserved").
 	 */
 	coverage: CoverageEntry[];
+	/**
+	 * The same window, read for the recommendation engine's own fourteen-muscle registry
+	 * (services/recommendation) rather than `muscles`' eleven — see
+	 * `recommendationMuscleStats`'s own doc for why that's a second pass and not a reshaping
+	 * of the first.
+	 */
+	recommendation_stats: MuscleStat[];
 	exercises: ExerciseFeature[];
 	cardio: CardioFeature;
 	adherence: { day1: AdherenceWindow; day3: AdherenceWindow; day7: AdherenceWindow };
@@ -378,6 +386,32 @@ export function muscleFeatures(facts: DayFacts): MuscleFeature[] {
 			if (b.days_since == null) return 1;
 			return b.days_since - a.days_since || a.muscle.localeCompare(b.muscle);
 		});
+}
+
+/**
+ * `MuscleStat[]` for the recommendation engine's own fourteen-muscle registry
+ * (services/recommendation) — the adapter `scheduler.ts` documents itself as needing:
+ * "this module does not know where a MuscleStat comes from." Deliberately its own pass
+ * over the window rather than a re-shaping of `muscleFeatures()` above: that function's
+ * vocabulary (`TRACKED_MUSCLES`) is missing forearms, lower_back and neck, and folds
+ * `upper_back` into a plain "back" — exactly the disagreement the registry exists to
+ * retire. A muscle can list more than one catalogue token (`upper_back` is `back` +
+ * `traps`); an activity counts if it carries ANY of them.
+ */
+export function recommendationMuscleStats(facts: DayFacts): MuscleStat[] {
+	const window = inWindow(facts);
+	return MUSCLES.map((muscle) => {
+		const trained = window.filter((activity) => muscle.tokens.some((token) => hasMuscle(activity, token)));
+		const lastDate = trained.map((activity) => activity.date).sort().at(-1) ?? null;
+		const sets7d = trained
+			.filter((activity) => withinWindow(activity.date, facts.date, WEEK_DAYS))
+			.reduce((total, activity) => total + (activity.sets ?? 0), 0);
+		return {
+			key: muscle.key,
+			daysSince: lastDate == null ? null : daysBefore(lastDate, facts.date),
+			sets7d,
+		};
+	});
 }
 
 /** True when this row is stretching / mobility work rather than a lift or a run. */
@@ -703,6 +737,7 @@ export function computeFeatures(input: CoachFeaturesInput): CoachFeatures {
 		muscles,
 		untrained_muscles: muscles.filter((muscle) => muscle.days_since == null).map((muscle) => muscle.muscle),
 		coverage: coverageLedger(facts),
+		recommendation_stats: recommendationMuscleStats(facts),
 		exercises: exerciseFeatures(facts),
 		cardio: cardioFeature(facts, input.cardioTargetMin, input.cardioTargetStatedMin),
 		adherence: {

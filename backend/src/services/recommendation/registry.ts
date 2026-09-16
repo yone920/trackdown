@@ -33,6 +33,16 @@ export interface MuscleDefinition {
 	mavHigh: number;
 	/** Maximum recoverable volume — sets/week beyond which more stops helping. */
 	mrv: number;
+	/**
+	 * The catalogue's own muscle tags that count toward this key — `backend/data/
+	 * exercises.json`'s `primary_muscles` vocabulary, which is what an activity's
+	 * `muscle_groups` column actually holds. Most muscles are a 1:1 rename; `upper_back`
+	 * folds in `traps` and `abs` folds in `obliques`, the same two mergers
+	 * `coach/features.ts`'s older `LEDGER_MUSCLES` already made for the same reason.
+	 * `adductors`, `abductors`, `hip_flexors` and `full_body` are real catalogue tags with
+	 * no honest 1:1 home here and are deliberately left unmapped rather than guessed at.
+	 */
+	tokens: readonly string[];
 }
 
 /**
@@ -44,11 +54,31 @@ export interface MuscleDefinition {
  * as a tuned default, not a physical constant.
  */
 export const MUSCLES: readonly MuscleDefinition[] = [
-	{ key: "chest", label: "Chest", family: "push", recoveryHours: 48, mev: 8, mavLow: 12, mavHigh: 20, mrv: 22 },
-	{ key: "shoulders", label: "Shoulders", family: "push", recoveryHours: 48, mev: 6, mavLow: 8, mavHigh: 16, mrv: 20 },
-	{ key: "triceps", label: "Triceps", family: "push", recoveryHours: 24, mev: 4, mavLow: 6, mavHigh: 12, mrv: 18 },
+	{ key: "chest", label: "Chest", family: "push", recoveryHours: 48, mev: 8, mavLow: 12, mavHigh: 20, mrv: 22, tokens: ["chest"] },
+	{
+		key: "shoulders",
+		label: "Shoulders",
+		family: "push",
+		recoveryHours: 48,
+		mev: 6,
+		mavLow: 8,
+		mavHigh: 16,
+		mrv: 20,
+		tokens: ["shoulders"],
+	},
+	{
+		key: "triceps",
+		label: "Triceps",
+		family: "push",
+		recoveryHours: 24,
+		mev: 4,
+		mavLow: 6,
+		mavHigh: 12,
+		mrv: 18,
+		tokens: ["triceps"],
+	},
 
-	{ key: "lats", label: "Lats", family: "pull", recoveryHours: 48, mev: 8, mavLow: 14, mavHigh: 22, mrv: 25 },
+	{ key: "lats", label: "Lats", family: "pull", recoveryHours: 48, mev: 8, mavLow: 14, mavHigh: 22, mrv: 25, tokens: ["lats"] },
 	{
 		key: "upper_back",
 		label: "Upper back",
@@ -58,11 +88,32 @@ export const MUSCLES: readonly MuscleDefinition[] = [
 		mavLow: 12,
 		mavHigh: 20,
 		mrv: 24,
+		tokens: ["back", "traps"],
 	},
-	{ key: "biceps", label: "Biceps", family: "pull", recoveryHours: 24, mev: 5, mavLow: 8, mavHigh: 14, mrv: 20 },
-	{ key: "forearms", label: "Forearms", family: "pull", recoveryHours: 24, mev: 2, mavLow: 6, mavHigh: 10, mrv: 24 },
+	{
+		key: "biceps",
+		label: "Biceps",
+		family: "pull",
+		recoveryHours: 24,
+		mev: 5,
+		mavLow: 8,
+		mavHigh: 14,
+		mrv: 20,
+		tokens: ["biceps"],
+	},
+	{
+		key: "forearms",
+		label: "Forearms",
+		family: "pull",
+		recoveryHours: 24,
+		mev: 2,
+		mavLow: 6,
+		mavHigh: 10,
+		mrv: 24,
+		tokens: ["forearms"],
+	},
 
-	{ key: "quads", label: "Quads", family: "legs", recoveryHours: 48, mev: 8, mavLow: 12, mavHigh: 18, mrv: 20 },
+	{ key: "quads", label: "Quads", family: "legs", recoveryHours: 48, mev: 8, mavLow: 12, mavHigh: 18, mrv: 20, tokens: ["quads"] },
 	{
 		key: "hamstrings",
 		label: "Hamstrings",
@@ -72,14 +123,45 @@ export const MUSCLES: readonly MuscleDefinition[] = [
 		mavLow: 10,
 		mavHigh: 16,
 		mrv: 20,
+		tokens: ["hamstrings"],
 	},
-	{ key: "glutes", label: "Glutes", family: "legs", recoveryHours: 48, mev: 4, mavLow: 8, mavHigh: 16, mrv: 20 },
-	{ key: "calves", label: "Calves", family: "legs", recoveryHours: 24, mev: 8, mavLow: 12, mavHigh: 16, mrv: 20 },
+	{
+		key: "glutes",
+		label: "Glutes",
+		family: "legs",
+		recoveryHours: 48,
+		mev: 4,
+		mavLow: 8,
+		mavHigh: 16,
+		mrv: 20,
+		tokens: ["glutes"],
+	},
+	{
+		key: "calves",
+		label: "Calves",
+		family: "legs",
+		recoveryHours: 24,
+		mev: 8,
+		mavLow: 12,
+		mavHigh: 16,
+		mrv: 20,
+		tokens: ["calves"],
+	},
 
 	// Accessories never get a rotation turn of their own — see accessories.ts. lower_back
 	// is deliberately the odd one out: injury-sensitive, so its band is capped low rather
 	// than chased upward the way a limb's is.
-	{ key: "abs", label: "Abs", family: "accessory", recoveryHours: 24, mev: 0, mavLow: 16, mavHigh: 20, mrv: 25 },
+	{
+		key: "abs",
+		label: "Abs",
+		family: "accessory",
+		recoveryHours: 24,
+		mev: 0,
+		mavLow: 16,
+		mavHigh: 20,
+		mrv: 25,
+		tokens: ["abs", "obliques"],
+	},
 	{
 		key: "lower_back",
 		label: "Lower back",
@@ -89,8 +171,19 @@ export const MUSCLES: readonly MuscleDefinition[] = [
 		mavLow: 4,
 		mavHigh: 6,
 		mrv: 8,
+		tokens: ["lower_back"],
 	},
-	{ key: "neck", label: "Neck", family: "accessory", recoveryHours: 48, mev: 0, mavLow: 4, mavHigh: 6, mrv: 8 },
+	{
+		key: "neck",
+		label: "Neck",
+		family: "accessory",
+		recoveryHours: 48,
+		mev: 0,
+		mavLow: 4,
+		mavHigh: 6,
+		mrv: 8,
+		tokens: ["neck"],
+	},
 ] as const;
 
 /** The three families a day's theme rotates through. Accessories ride along; they never win the rotation. */
