@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
 import { activity, daysAgo, facts, TODAY, weight } from "../../test/fixtures/facts.js";
-import { computeFeatures, type CoachFeatures } from "./features.js";
+import { computeFeatures, TRACKED_MUSCLES, type CoachFeatures } from "./features.js";
 import {
 	buildRules,
 	cardioNextMinutes,
@@ -15,6 +15,7 @@ import {
 	cardioRotationRule,
 	strengthRotationRule,
 	stuckRosters,
+	targetPriorityStatement,
 	varietyAppetite,
 	MAX_NEW_PER_PLAN,
 	selectNudge,
@@ -718,8 +719,14 @@ describe("the coverage rule", () => {
 });
 
 describe("variety and the one introduction", () => {
-	it("offers the candidates it was given, and only those", () => {
+	it("defaults to the wants-variety phrasing when no appetite is given", () => {
 		const text = varietyRule(["Hanging Leg Raise", "Face Pull"]);
+		expect(text).toContain("UP TO 3");
+		expect(text).toContain("Hanging Leg Raise, Face Pull");
+	});
+
+	it("offers the candidates it was given, and only those, once the user asked to be left alone", () => {
+		const text = varietyRule(["Hanging Leg Raise", "Face Pull"], "steady");
 		expect(text).toContain("AT MOST ONE");
 		expect(text).toContain("Hanging Leg Raise, Face Pull");
 		expect(text).toContain("and from nowhere else");
@@ -929,6 +936,66 @@ describe("what is off today's menu", () => {
 	});
 });
 
+// User field report 2026-09-16: chest sat seven days unserved while back — two days clear
+// of its own 48-hour window — got targeted again. The debt was in the prompt as a list
+// ("Longest since trained: chest (7 days)..."); nothing said which entry to act on.
+describe("today's target, named instead of listed", () => {
+	const move = (date: string, muscle: string, exercise = `${muscle} move`) =>
+		activity(date, { exercise, category: "strength", muscle_groups: [muscle], sets: 3, reps: 10, load_lb: 50 });
+	// Everything trained recently EXCEPT chest and back, so the ledger's own "never in four
+	// weeks beats merely old" rule (features.ts §muscleFeatures) doesn't preempt the two
+	// muscles this test is actually about — an account with real history reads this way,
+	// not the "nine muscles nobody has ever logged" shape a sparser fixture would produce.
+	const baseline = (except: string[]) =>
+		TRACKED_MUSCLES.filter((muscle) => !except.includes(muscle)).map((muscle) => move(daysAgo(3), muscle));
+
+	it("names the longest-unserved muscle that is not still recovering", () => {
+		// Back two days ago clears the 48-hour window; chest is a week overdue.
+		const features = computeFeatures({
+			facts: facts({ activities: [...baseline(["chest", "back"]), move(daysAgo(2), "back"), move(daysAgo(7), "chest")] }),
+		});
+		const line = targetPriorityStatement(features, recoveryRule(features.muscles));
+		expect(line).toContain("TODAY'S TARGET — chest (7 days unserved)");
+	});
+
+	it("skips a muscle still inside its 48-hour window even if it is otherwise first in line", () => {
+		// Back trained yesterday (still recovering); chest is the next longest-unserved.
+		const features = computeFeatures({
+			facts: facts({ activities: [...baseline(["chest", "back"]), move(daysAgo(1), "back"), move(daysAgo(4), "chest")] }),
+		});
+		const line = targetPriorityStatement(features, recoveryRule(features.muscles));
+		expect(line).toContain("TODAY'S TARGET — chest");
+	});
+
+	it("names whichever tracked muscle has never been logged, when nothing has", () => {
+		// Every tracked muscle is null (never in four weeks) with no history at all; the
+		// ledger's own tie-break for that case is alphabetical, so "abs" sorts first.
+		const features = computeFeatures({ facts: facts({ activities: [] }) });
+		const line = targetPriorityStatement(features, recoveryRule(features.muscles));
+		expect(line).toContain("TODAY'S TARGET — abs (not served in four weeks)");
+	});
+
+	it("says nothing when every tracked muscle is still inside its own 48-hour window", () => {
+		const yesterday = daysAgo(1);
+		const features = computeFeatures({
+			facts: facts({
+				activities: TRACKED_MUSCLES.map((muscle) =>
+					activity(yesterday, { exercise: `${muscle} move`, category: "strength", muscle_groups: [muscle], sets: 3, reps: 10 })
+				),
+			}),
+		});
+		expect(targetPriorityStatement(features, recoveryRule(features.muscles))).toBeNull();
+	});
+
+	it("puts the line in the rules the prompt is handed", () => {
+		const features = computeFeatures({
+			facts: facts({ activities: [...baseline(["chest", "back"]), move(daysAgo(2), "back"), move(daysAgo(7), "chest")] }),
+		});
+		const rules = buildRules({ features, goals: [] });
+		expect(rules.statements.some((statement) => statement.startsWith("TODAY'S TARGET"))).toBe(true);
+	});
+});
+
 // ── variety, when the user has asked for it ──────────────────────────────────────────
 // User report 2026-09-03: "cardio is stuck on incline treadmill", "I was hoping to start
 // working out new stuff; feels the same as working out on my own" — alongside a preference
@@ -949,13 +1016,12 @@ describe("how much new work the user has asked for", () => {
 		expect(varietyAppetite(said("I like variety but keep it simple"))).toBe("steady");
 	});
 
-	it("assumes nothing when nothing was said", () => {
-		expect(varietyAppetite(said(""))).toBe("default");
-		expect(varietyAppetite(said("bad left knee, 45 minutes at lunch"))).toBe("default");
+	it("defaults to wanting variety when nothing was said (user decision 2026-09-16)", () => {
+		expect(varietyAppetite(said(""))).toBe("wants");
+		expect(varietyAppetite(said("bad left knee, 45 minutes at lunch"))).toBe("wants");
 	});
 
-	it("raises the newcomer allowance only for an appetite that was stated", () => {
-		expect(MAX_NEW_PER_PLAN.default).toBe(1);
+	it("raises the newcomer allowance for everybody except a stated preference for routine", () => {
 		expect(MAX_NEW_PER_PLAN.steady).toBe(1);
 		expect(MAX_NEW_PER_PLAN.wants).toBeGreaterThan(1);
 		expect(MAX_NEW_PER_PLAN.wants).toBeLessThanOrEqual(3);
@@ -966,7 +1032,7 @@ describe("how much new work the user has asked for", () => {
 		expect(wants).toContain("UP TO 3");
 		expect(wants).toContain("Never introduce more than 3");
 
-		const plain = varietyRule(["Kettlebell Swing"], "default");
+		const plain = varietyRule(["Kettlebell Swing"], "steady");
 		expect(plain).toContain("AT MOST ONE");
 	});
 
@@ -997,12 +1063,11 @@ describe("cardio that has stopped rotating", () => {
 		expect(line).toContain("Equivalent minutes already price the modalities");
 	});
 
-  // Following the history is right for everybody who has not asked otherwise.
-	it("says nothing at all when no variety was asked for", () => {
+  // Variety is the default now (user decision 2026-09-16); "steady" is the opt-out.
+	it("says nothing at all once the user has asked to be left alone", () => {
 		const features = computeFeatures({
 			facts: facts({ activities: [walk(daysAgo(1)), walk(daysAgo(3)), walk(daysAgo(5))] }),
 		});
-		expect(cardioRotationRule(features, "default", ["Rowing Machine"])).toBeNull();
 		expect(cardioRotationRule(features, "steady", ["Rowing Machine"])).toBeNull();
 	});
 
@@ -1082,12 +1147,11 @@ describe("strength that has stopped rotating", () => {
 		expect(stuckRosters(features, CHEST_PRIMARIES)).toEqual([]);
 	});
 
-	it("names the rut and asks for a swap only once the user has asked for variety", () => {
+	it("names the rut and asks for a swap, unless the user asked to be left alone", () => {
 		const features = computeFeatures({
 			facts: facts({ activities: [...chestDay(daysAgo(1)), ...chestDay(daysAgo(3))] }),
 		});
 		const stuck = stuckRosters(features, CHEST_PRIMARIES);
-		expect(strengthRotationRule(stuck, "default")).toBeNull();
 		expect(strengthRotationRule(stuck, "steady")).toBeNull();
 		const line = strengthRotationRule(stuck, "wants");
 		expect(line).toContain("chest (Bench Press, Cable Crossover)");

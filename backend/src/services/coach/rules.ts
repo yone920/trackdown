@@ -207,50 +207,41 @@ export function coverageRule(coverage: readonly CoverageEntry[], avoidPrimary: r
 }
 
 /**
- * Variety, and the one introduction a plan is allowed (user decision 2026-08-31). Written
- * as a rule rather than left to the model's taste, because "include some bodyweight work"
- * and "at most one new thing" are both constraints the user stated.
+ * Variety, and how many introductions a plan is allowed. Written as a rule rather than
+ * left to the model's taste, because "include some bodyweight work" and "at most N new
+ * things" are both constraints the user stated.
  */
 /**
- * How much appetite the user has stated for new work — read from their OWN words.
+ * How much appetite the user has stated for new work — read from their OWN words, with
+ * variety as the standing default (user decision 2026-09-16, reversing 2026-08-31 §B8).
  *
- * User report 2026-09-03: "I was hoping to start working out new stuff; feels the same as
- * working out on my own", alongside a preference typed into the app asking for variety and
- * for new exercises. One introduction per plan is the right default for somebody who has
- * said nothing; it is the wrong answer for somebody who has just asked, in writing, to be
- * shown new movements.
- *
- * Deterministic and conservative: it reads the stated background, which is the field their
- * sentence lands in, and it only moves off the default when the words are unambiguous. A
- * stated preference for routine lowers nothing below the default — one introduction is
- * already the floor — but it is recognised so the prompt can stop offering.
+ * The original default was "one introduction per plan" for anybody who had said nothing,
+ * on the theory that a cautious default protects someone who hasn't told the coach what
+ * they want. In practice, for the one account this app has, it produced the opposite of a
+ * programme: chest and back both ran the identical roster session after session (user
+ * field report 2026-09-16 — the coach kept re-targeting a muscle that had merely cleared
+ * its 48-hour window, over one that had gone six days unserved, and re-served the same
+ * exercises when it did). "Say nothing and get variety" is now the floor; "steady" is an
+ * opt-OUT for somebody who has said, in as many words, that they want to be left alone.
  */
-export type VarietyAppetite = "wants" | "steady" | "default";
+export type VarietyAppetite = "wants" | "steady";
 
-const WANTS_VARIETY =
-	/\bvariety\b|\brotate\b|\brotation\b|mix (it |things )?up|new (exercises|movements|stuff|things)|different (exercises|movements)|something new|keep me interested|\bbored\b/i;
 const WANTS_ROUTINE =
 	/keep it simple|same routine|stick to (the|my)|no surprises|don'?t change|nothing new/i;
 
 export function varietyAppetite(background: TrainingBackground = NO_BACKGROUND): VarietyAppetite {
 	const said = [background.background, background.experience].filter(Boolean).join(" ");
-	if (!said.trim()) return "default";
-	// Routine wins a tie: a user who says both is asking for care, not for novelty.
-	if (WANTS_ROUTINE.test(said)) return "steady";
-	if (WANTS_VARIETY.test(said)) return "wants";
-	return "default";
+	return WANTS_ROUTINE.test(said) ? "steady" : "wants";
 }
 
 /**
- * How many never-logged movements one plan may introduce.
- *
- * One is the standing rule (user decision 2026-08-31 §B8) and stays the default. A stated
- * appetite for new work raises it — still capped, because a session that is mostly movements
- * the user has never done is a session they cannot load with any confidence.
+ * How many never-logged movements one plan may introduce — three unless the user has
+ * asked to be left alone (§varietyAppetite), in which case a session that is mostly
+ * movements they have never done is one they cannot load with any confidence.
  */
-export const MAX_NEW_PER_PLAN = { default: 1, steady: 1, wants: 3 } as const;
+export const MAX_NEW_PER_PLAN = { steady: 1, wants: 3 } as const;
 
-export function varietyRule(candidates: readonly string[], appetite: VarietyAppetite = "default"): string {
+export function varietyRule(candidates: readonly string[], appetite: VarietyAppetite = "wants"): string {
 	const allowance = MAX_NEW_PER_PLAN[appetite];
 	const introduction =
 		candidates.length === 0
@@ -549,6 +540,24 @@ export function recoveryRule(muscles: readonly MuscleFeature[]): RecoveryRule {
 }
 
 /**
+ * "Chest, seven days unserved, is the longest-waiting muscle that isn't still recovering —
+ * build today around it." `recoveryRule`'s own text already lists the longest-since-trained
+ * muscles, but as information ("Longest since trained: chest (7 days), quads (4 days)."),
+ * and information is what a muscle that keeps losing to the day's theme looks like from the
+ * model's side (user field report 2026-09-16: chest sat at seven days unserved while back,
+ * two days clear of its own recovery window, got targeted again — the list was right there
+ * and nothing in it said which entry mattered most). Named as an instruction instead of a
+ * list, the same fix that made OFF THE MENU and STRENGTH ROTATION land.
+ */
+export function targetPriorityStatement(features: CoachFeatures, recovery: RecoveryRule): string | null {
+	const avoid = new Set(recovery.avoid_primary);
+	const first = features.muscles.find((muscle) => !avoid.has(muscle.muscle));
+	if (!first) return null;
+	const since = first.days_since == null ? "not served in four weeks" : `${first.days_since} day${first.days_since === 1 ? "" : "s"} unserved`;
+	return `TODAY'S TARGET — ${first.muscle} (${since}) has gone the longest of any muscle that is not still recovering. Build today's plan around it unless a stated goal, missing equipment, or something the user said today points elsewhere — and if you target something else instead, say why in the rationale.`;
+}
+
+/**
  * The next cardio session's minutes: the week's shortfall, capped at one safe step on the
  * last session (+10 %), floored so that nothing shorter than a walk is ever "prescribed".
  * Null when the week is already at its target — there is nothing to step toward.
@@ -582,8 +591,8 @@ export function cardioNextMinutes(shortByMin: number, lastMinutes: number | null
  * How many cardio sessions running on one modality is a rut rather than a routine.
  *
  * Two is a preference; three in a row is the treadmill (user report 2026-09-03: "cardio is
- * stuck on incline treadmill"). Only consulted when the user has ASKED for variety —
- * following the history is the right default for everybody else, and always was.
+ * stuck on incline treadmill"). Only consulted when appetite is "wants" — the default
+ * unless the user has asked to be left alone (§varietyAppetite).
  */
 export const CARDIO_RUT_SESSIONS = 3;
 
@@ -636,8 +645,8 @@ export function cardioRotationRule(
  * roster, is a rut rather than a programme. Two is the cardio rut's own threshold's near
  * neighbour (CARDIO_RUT_SESSIONS is three, but a strength roster is a set of several
  * exercises repeating together, not one modality, so it names the rut sooner). Only
- * consulted when the user has asked for variety — same reasoning as cardio's rut rule:
- * following the history is the right default for everybody else.
+ * consulted when appetite is "wants" — same gate as cardio's rut rule, and the default
+ * unless the user has asked to be left alone (§varietyAppetite).
  */
 export const STRENGTH_RUT_SESSIONS = 2;
 
@@ -1140,6 +1149,7 @@ export function buildRules({
 	const statements = [
 		gap.text,
 		recovery.text,
+		targetPriorityStatement(features, recovery),
 		recoveringExercisesStatement(blocked),
 		cardio.text,
 		sizing.text,

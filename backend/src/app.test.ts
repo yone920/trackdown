@@ -3083,7 +3083,7 @@ describe("the living plan — completion and add-ons", () => {
 		expect(await countBriefs(today, "plan@example.com")).toBe(briefsBefore);
 	});
 
-	it("keeps at most one 'new to you' movement, whatever the model marked", async () => {
+	it("keeps at most the allowed number of 'new to you' movements, whatever the model marked", async () => {
 		coach.nextBrief = {
 			...SAMPLE_BRIEF,
 			workout: {
@@ -3093,10 +3093,13 @@ describe("the living plan — completion and add-ons", () => {
 				// movement whose primary muscle was trained inside 48 hours is off today's
 				// menu now (services/coach/rules.ts §recoveringExercises). This test is about
 				// the is_new cap, so it uses movements the recovery rule has no opinion on.
+				// Four, one over the default cap of three (variety is the default appetite as
+				// of user decision 2026-09-16 — §MAX_NEW_PER_PLAN), so the cap has something to do.
 				exercises: [
 					{ name: "Leg Press", load_lb: 200, sets: 3, reps: 10, minutes: null, note: null, is_new: true },
 					{ name: "Leg Curl", load_lb: 60, sets: 3, reps: 12, minutes: null, note: null, is_new: true },
 					{ name: "Standing Calf Raise", load_lb: 90, sets: 3, reps: 15, minutes: null, note: null, is_new: true },
+					{ name: "Hip Thrust", load_lb: 135, sets: 3, reps: 10, minutes: null, note: null, is_new: true },
 				],
 				finisher: [],
 			},
@@ -3107,9 +3110,9 @@ describe("the living plan — completion and add-ons", () => {
 			.send({ tz_offset_min: tz });
 
 		const flags = res.body.brief.workout.exercises.map((e: { is_new: boolean }) => e.is_new);
-		expect(flags).toEqual([true, false, false]);
-		// The over-marked movements stay in the plan: the chip was wrong, not the exercise.
-		expect(res.body.brief.workout.exercises).toHaveLength(3);
+		expect(flags).toEqual([true, true, true, false]);
+		// The over-marked movement stays in the plan: the chip was wrong, not the exercise.
+		expect(res.body.brief.workout.exercises).toHaveLength(4);
 	});
 });
 
@@ -3528,10 +3531,12 @@ describe("asking after the session has already happened", () => {
 		expect(inputs.plan.session_minutes).toBe(60);
 		expect(inputs.plan.session_minutes_stated).toBe(false);
 		expect(prompt).toContain("SESSION LENGTH: 60 minutes");
-		expect(prompt).toContain("AT MOST ONE exercise the user has never logged");
+		// Variety is the default appetite (user decision 2026-09-16), so the prompt asks for
+		// up to three introductions rather than at most one.
+		expect(prompt).toContain("UP TO 3 exercises they have never logged");
 		// The candidates are real catalogue names, and never one already logged.
 		// The candidate list itself, not the paragraph it sits in.
-		const offered = inputs.rules.statements.join("\n").match(/nowhere else — (.+?) — set is_new true/)?.[1] ?? "";
+		const offered = inputs.rules.statements.join("\n").match(/nowhere else: (.+?)\. Set is_new true on each one/)?.[1] ?? "";
 		expect(offered.length).toBeGreaterThan(40);
 		expect(offered).not.toContain("Lat Pulldown");
 		expect(offered).not.toContain("Seated Cable Row");
