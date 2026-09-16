@@ -4,6 +4,9 @@
 -- longer belongs in the app at all.
 
 -- --- fusion evidence: meal_id was one of three possible owners ---------------------------
+-- A row owned only by a meal documents something that no longer exists once meals are
+-- gone — same reasoning as the day_readings delete below, just one table earlier.
+DELETE FROM evidence WHERE meal_id IS NOT NULL;
 ALTER TABLE evidence DROP CONSTRAINT evidence_one_owner;
 DROP INDEX evidence_meal_idx;
 ALTER TABLE evidence DROP COLUMN meal_id;
@@ -13,6 +16,10 @@ ALTER TABLE evidence
 	);
 
 -- --- corrections: meal_id was one of three possible owners ------------------------------
+-- record_corrections_one_owner requires EXACTLY one owner, so a meal-owned row must go
+-- before the column does, or re-adding the constraint fails on the first account that
+-- ever corrected a meal log.
+DELETE FROM record_corrections WHERE meal_id IS NOT NULL;
 ALTER TABLE record_corrections DROP CONSTRAINT record_corrections_one_owner;
 DROP INDEX record_corrections_meal_idx;
 ALTER TABLE record_corrections DROP COLUMN meal_id;
