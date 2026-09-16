@@ -66,7 +66,7 @@ needed; `SMTP_HOST` is unused for now and a forgotten password is fixed with
 `ANTHROPIC_API_KEY` everything works except free-text logging (`/api/log`).
 
 Point the app at your backend with `EXPO_PUBLIC_API_URL` in a repo-root `.env`, e.g.
-`EXPO_PUBLIC_API_URL=http://100.126.117.105:8000` when the phone reaches the dev VM over
+`EXPO_PUBLIC_API_URL=http://100.64.198.50:8000` when the phone reaches the dev VM over
 Tailscale. It is inlined at bundle time, so restart Expo after changing it.
 
 ### Production
@@ -86,16 +86,16 @@ Backups: `scripts/backup-postgres.sh` (daily cron, `BACKUP_DIR` on the TrueNAS m
 
 The Fedora VM hosting this project sits behind Proxmox NAT — its `192.168.1.200`
 LAN address is **not reachable** from phones on the home WiFi. The dev iPhone
-must reach Expo over Tailscale (`100.126.117.105`).
+must reach Expo over Tailscale (`100.64.198.50`).
 
 ### Start
 
 ```bash
-export REACT_NATIVE_PACKAGER_HOSTNAME=100.126.117.105
+export REACT_NATIVE_PACKAGER_HOSTNAME=100.64.198.50
 npx expo start --offline
 ```
 
-- `REACT_NATIVE_PACKAGER_HOSTNAME` makes the QR encode `exp://100.126.117.105:8081`
+- `REACT_NATIVE_PACKAGER_HOSTNAME` makes the QR encode `exp://100.64.198.50:8081`
   instead of the unreachable LAN IP.
 - `--offline` skips Expo's `api.expo.dev` doctor check (it sometimes fails from
   this VM and kills the start).
@@ -108,7 +108,7 @@ If a code change isn't reflecting in the app (stuck on stale bundle, weird
 import errors after renaming files), restart Metro with the cache cleared:
 
 ```bash
-REACT_NATIVE_PACKAGER_HOSTNAME=100.126.117.105 npx expo start --clear
+REACT_NATIVE_PACKAGER_HOSTNAME=100.64.198.50 npx expo start --clear
 ```
 
 `--clear` wipes the Metro bundler cache. Use this when hot reload misses;
@@ -138,7 +138,7 @@ otherwise saving the file is enough.
   Use `--offline`.
 - `ExpoSecureStore.default.getValueWithKeyAsync is not a function` → web bundle
   trying to use a native-only module. Don't press `w`; only scan the iOS QR.
-- QR shows `192.168.1.200` instead of `100.126.117.105` → env var didn't take.
+- QR shows `192.168.1.200` instead of `100.64.198.50` → env var didn't take.
   Re-`export` it and restart.
 
 ### Sanity check

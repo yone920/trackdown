@@ -77,14 +77,14 @@ npx tsc --noEmit
 
 The Fedora VM hosting this project sits behind Proxmox NAT — its `192.168.1.200`
 LAN address is **not reachable** from phones on the home WiFi. The dev iPhone
-must reach Expo over Tailscale (`100.126.117.105`).
+must reach Expo over Tailscale (`100.64.198.50`).
 
 **Always start Expo with the Tailscale hostname:**
 ```bash
-export REACT_NATIVE_PACKAGER_HOSTNAME=100.126.117.105
+export REACT_NATIVE_PACKAGER_HOSTNAME=100.64.198.50
 npx expo start --offline
 ```
-- `REACT_NATIVE_PACKAGER_HOSTNAME` makes the QR encode `exp://100.126.117.105:8081`
+- `REACT_NATIVE_PACKAGER_HOSTNAME` makes the QR encode `exp://100.64.198.50:8081`
   instead of the unreachable LAN IP.
 - `--offline` skips Expo's `api.expo.dev` doctor check (it sometimes fails from
   this VM and kills the start).
@@ -105,7 +105,7 @@ The phone must have **Tailscale on and connected** to scan this QR.
   Use `--offline`.
 - `ExpoSecureStore.default.getValueWithKeyAsync is not a function` → web bundle
   trying to use a native-only module. Don't press `w`; only scan the iOS QR.
-- QR shows `192.168.1.200` instead of `100.126.117.105` → env var didn't take.
+- QR shows `192.168.1.200` instead of `100.64.198.50` → env var didn't take.
   Re-`export` it and restart.
 
 **Sanity check from the VM that Metro is alive:**
