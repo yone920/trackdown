@@ -1,6 +1,14 @@
 import { DEFAULT_LOAD_DIRECTION, type LoadDirection } from "../../db/exercises.js";
 import type { ReferenceLoad } from "../fusion/schema.js";
-import { allocateVolume, chooseFamily, muscleByKey, type MuscleStat } from "../recommendation/index.js";
+import {
+	allocateVolume,
+	chooseAnchor,
+	chooseFamily,
+	muscleByKey,
+	type LoadHistory,
+	type MuscleStat,
+	type RecentUsage,
+} from "../recommendation/index.js";
 import { sameMovement } from "./completion.js";
 import type { CoachFeatures, CoverageEntry, ExerciseFeature, ExerciseSession, MuscleFeature } from "./features.js";
 
@@ -343,6 +351,13 @@ export interface BuildRulesInput {
 	sessionMinutes?: number | null;
 	/** Catalogue names this user has never logged — the pool an introduction is drawn from. */
 	introductionCandidates?: readonly string[];
+	/**
+	 * Today's target muscles' eligible exercises, keyed by registry muscle — `coach.ts`'s
+	 * `eligiblePool()` answer for each one, computed from rotation history, equipment and
+	 * media (ENGINE.md §The exercise pool). Empty by default: nothing constrains the menu
+	 * until a caller supplies it.
+	 */
+	eligibleExercises?: Readonly<Record<string, readonly string[]>>;
 }
 
 const NO_BACKGROUND: TrainingBackground = { experience: null, background: null, reference_loads: [] };
@@ -573,6 +588,43 @@ export function targetPriorityStatement(stats: readonly MuscleStat[], totalSlots
 }
 
 /**
+ * The exact menu each targeted muscle may choose from today — `services/recommendation`'s
+ * `eligiblePool()`, computed by the caller from real rotation history, the stated place's
+ * equipment, and which catalogue entries carry a photo (ENGINE.md §The exercise pool).
+ * Recomputes the same family and allocation `targetPriorityStatement` already names, from
+ * the same stats and slot count, so the two statements can never disagree about which
+ * muscles are today's target — only `eligiblePool`'s answer for each one is new here.
+ *
+ * Null whenever `targetPriorityStatement` would also be null (no family, no allocation),
+ * and null when the caller has not supplied a pool for anything in the allocation — the
+ * live default before this was wired in, and the same default a muscle with an empty
+ * catalogue would fall back to today.
+ */
+export function eligibleExercisesStatement(
+	stats: readonly MuscleStat[],
+	totalSlots: number,
+	eligibleExercises: Readonly<Record<string, readonly string[]>>
+): string | null {
+	const family = chooseFamily(stats);
+	if (family == null) return null;
+	const allocation = allocateVolume(family, stats, totalSlots).filter((item) => item.slots > 0);
+
+	const lines = allocation
+		.map((item) => {
+			const names = eligibleExercises[item.key];
+			if (!names || names.length === 0) return null;
+			const muscle = muscleByKey(item.key);
+			return `${muscle?.label ?? item.key}: ${names.join(", ")}`;
+		})
+		.filter((line): line is string => line != null);
+	if (lines.length === 0) return null;
+
+	return `TODAY'S MENU — for the muscles above, choose ONLY from the exercises listed for them; anything else is off the menu today. Computed from real rotation history, the equipment at hand, and which entries have a photo — not a suggestion to weigh against others.\n${lines
+		.map((line) => `- ${line}`)
+		.join("\n")}`;
+}
+
+/**
  * The next cardio session's minutes: the week's shortfall, capped at one safe step on the
  * last session (+10 %), floored so that nothing shorter than a walk is ever "prescribed".
  * Null when the week is already at its target — there is nothing to step toward.
@@ -674,7 +726,7 @@ export const STRENGTH_RUT_SESSIONS = 2;
  * exercise-for-exercise, two rest days after the same four; back did the same with Lat
  * Pulldown/Seated Cable Row/Barbell Curl/Face Pull).
  */
-function recentRostersByMuscle(
+export function recentRostersByMuscle(
 	features: CoachFeatures,
 	primaryMuscle: Record<string, string>
 ): Map<string, { date: string; roster: Set<string> }[]> {
@@ -699,6 +751,59 @@ function recentRostersByMuscle(
 			muscle,
 			[...byDate.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([date, roster]) => ({ date, roster }))
 		);
+	}
+	return result;
+}
+
+export interface MuscleExercisePoolInputs {
+	recentUsage: RecentUsage[];
+	loadHistory: LoadHistory[];
+	/** `chooseAnchor` run on `loadHistory` — carried here so a caller never has to run it twice. */
+	anchor: string | null;
+}
+
+/**
+ * `recentRostersByMuscle`'s rosters, and `features.exercises`' own load history, both
+ * re-keyed onto the registry's muscles instead of raw catalogue tokens — the input
+ * `services/recommendation`'s `eligiblePool()` and `chooseAnchor()` are built to take.
+ * `upper_back` merges two raw tokens ("back" and "traps") into one muscle's rosters,
+ * newest date first across BOTH, the same way a single-token muscle's would be.
+ */
+export function exercisePoolInputsByMuscle(
+	features: CoachFeatures,
+	primaryMuscle: Record<string, string>,
+	muscleKeys: readonly string[]
+): Map<string, MuscleExercisePoolInputs> {
+	const rostersByToken = recentRostersByMuscle(features, primaryMuscle);
+	const primaryFor = (exercise: ExerciseFeature): string =>
+		(primaryMuscle[exercise.exercise.trim().toLowerCase()] ?? exercise.muscle_groups[0] ?? "").trim().toLowerCase();
+
+	const result = new Map<string, MuscleExercisePoolInputs>();
+	for (const key of muscleKeys) {
+		const definition = muscleByKey(key);
+		if (!definition) continue;
+
+		const mergedByDate = new Map<string, Set<string>>();
+		for (const token of definition.tokens) {
+			for (const { date, roster } of rostersByToken.get(token) ?? []) {
+				const existing = mergedByDate.get(date) ?? new Set<string>();
+				for (const name of roster) existing.add(name);
+				mergedByDate.set(date, existing);
+			}
+		}
+		const orderedDates = [...mergedByDate.keys()].sort((a, b) => b.localeCompare(a));
+		const recentUsage: RecentUsage[] = orderedDates.flatMap((date, sessionsAgo) =>
+			[...(mergedByDate.get(date) ?? [])].map((exercise) => ({ exercise, sessionsAgo }))
+		);
+
+		const loadHistory: LoadHistory[] = features.exercises
+			.filter((exercise) => definition.tokens.includes(primaryFor(exercise)))
+			.map((exercise) => ({
+				exercise: exercise.exercise,
+				sessions: exercise.sessions.map((session) => ({ date: session.date, loadLb: session.load_lb })),
+			}));
+
+		result.set(key, { recentUsage, loadHistory, anchor: chooseAnchor(loadHistory) });
 	}
 	return result;
 }
@@ -1141,6 +1246,7 @@ export function buildRules({
 	background = NO_BACKGROUND,
 	sessionMinutes = null,
 	introductionCandidates = [],
+	eligibleExercises = {},
 }: BuildRulesInput): CoachRules {
 	const gap = gapRule(features.days_since_last_workout);
 	const recovery = recoveryRule(features.muscles);
@@ -1165,6 +1271,7 @@ export function buildRules({
 		gap.text,
 		recovery.text,
 		targetPriorityStatement(features.recommendation_stats, sizing.target_exercises),
+		eligibleExercisesStatement(features.recommendation_stats, sizing.target_exercises, eligibleExercises),
 		recoveringExercisesStatement(blocked),
 		cardio.text,
 		sizing.text,

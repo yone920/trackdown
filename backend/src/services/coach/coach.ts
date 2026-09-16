@@ -15,7 +15,8 @@ import type { ReferenceLoad } from "../fusion/schema.js";
 import { listGoals } from "../goals/store.js";
 import { formatClock, localDay, localMinutesOf, type IsoDate } from "../localTime.js";
 import { currentPlace, placeEquipment } from "../places.js";
-import { catalogFactsFor, introductionCandidates } from "./catalog.js";
+import { allocateVolume, chooseFamily, eligiblePool, muscleByKey } from "../recommendation/index.js";
+import { catalogCandidatesFor, catalogFactsFor, introductionCandidates } from "./catalog.js";
 import { completionOf, planIsComplete, sameMovement, type ExerciseCompletion } from "./completion.js";
 import { computeFeatures } from "./features.js";
 import {
@@ -25,7 +26,16 @@ import {
 	UnusableBriefError,
 	type RevisionMode,
 } from "./schema.js";
-import { buildRules, type CoachGoal, type NudgeAction, type Prescription, type PrescriptionRule, type TrainingBackground } from "./rules.js";
+import {
+	buildRules,
+	exercisePoolInputsByMuscle,
+	sessionSizing,
+	type CoachGoal,
+	type NudgeAction,
+	type Prescription,
+	type PrescriptionRule,
+	type TrainingBackground,
+} from "./rules.js";
 import { classifyProviderError, type LlmErrorCode } from "../llmErrors.js";
 
 // The brief: gathering its inputs, caching it for the day, and storing it
@@ -417,6 +427,49 @@ export async function loadCoachInputs(
 		muscles: features.coverage.filter((entry) => entry.overdue).map((entry) => entry.key),
 	});
 
+	// Where they train, and what has been seen there (migration 0012). Two small reads and
+	// both skipped entirely when no place has ever been named, which is most accounts. Read
+	// here, ahead of the rules, so today's exercise pool can be filtered by it below.
+	const place = await currentPlace(db, userId);
+	const observed = place ? await placeEquipment(db, place.id, MAX_OBSERVED_EQUIPMENT) : [];
+	const availableEquipment = place && observed.length > 0 ? observed.map((row) => row.label.trim().toLowerCase()) : null;
+
+	// Today's target, ahead of the model: the same family + allocation
+	// `targetPriorityStatement` names, so the menu built below can only ever agree with it.
+	// `sessionSizing` is a pure function of the stated session length, cheap enough to run
+	// twice rather than thread its result through `buildRules`'s own call to it.
+	const sizing = sessionSizing(plan?.session_minutes ?? null, plan?.session_minutes != null);
+	const family = chooseFamily(features.recommendation_stats);
+	const allocation = family
+		? allocateVolume(family, features.recommendation_stats, sizing.target_exercises).filter((item) => item.slots > 0)
+		: [];
+
+	// The menu each targeted muscle may choose from — services/recommendation's
+	// eligiblePool(), fed real rotation history (re-keyed onto the registry by
+	// exercisePoolInputsByMuscle), the stated place's equipment, and the catalogue's own
+	// media flag. A muscle the registry doesn't recognise or with an empty catalogue simply
+	// contributes nothing, and `eligibleExercisesStatement` reads that as "no constraint".
+	const poolInputs = exercisePoolInputsByMuscle(
+		features,
+		catalogFacts.primaryMuscle,
+		allocation.map((item) => item.key)
+	);
+	const eligibleExercises: Record<string, string[]> = {};
+	await Promise.all(
+		allocation.map(async (item) => {
+			const definition = muscleByKey(item.key);
+			if (!definition) return;
+			const candidatesForMuscle = await catalogCandidatesFor(db, definition.tokens);
+			const inputs = poolInputs.get(item.key);
+			const pool = eligiblePool(candidatesForMuscle, {
+				recentUsage: inputs?.recentUsage ?? [],
+				anchor: inputs?.anchor ?? null,
+				availableEquipment,
+			});
+			if (pool.length > 0) eligibleExercises[item.key] = pool.map((candidate) => candidate.name);
+		})
+	);
+
 	const rules = buildRules({
 		features,
 		goals,
@@ -426,12 +479,8 @@ export async function loadCoachInputs(
 		background,
 		sessionMinutes: plan?.session_minutes ?? null,
 		introductionCandidates: candidates,
+		eligibleExercises,
 	});
-
-	// Where they train, and what has been seen there (migration 0012). Two small reads and
-	// both skipped entirely when no place has ever been named, which is most accounts.
-	const place = await currentPlace(db, userId);
-	const observed = place ? await placeEquipment(db, place.id, MAX_OBSERVED_EQUIPMENT) : [];
 
 	const statements = await dayContexts(db, userId, date);
 	const said = [...statements, ...(context?.trim() ? [context.trim()] : [])];

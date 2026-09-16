@@ -14,6 +14,7 @@ import {
 	recoveringExercises,
 	recoveryRule,
 	cardioRotationRule,
+	exercisePoolInputsByMuscle,
 	strengthRotationRule,
 	stuckRosters,
 	targetPriorityStatement,
@@ -684,6 +685,9 @@ describe("the coverage rule", () => {
 			unit: entry.unit ?? ("sets" as const),
 			overdue: entry.overdue ?? true,
 			debt_days: entry.debt_days ?? 29,
+			level: entry.level ?? 0,
+			band_low: entry.band_low ?? null,
+			band_high: entry.band_high ?? null,
 		}));
 
 	it("names each debt with its number and demands the largest be retired", () => {
@@ -1188,5 +1192,58 @@ describe("strength that has stopped rotating", () => {
 		});
 		expect(rules.stuck_rosters).toEqual([{ muscle: "chest", exercises: ["Bench Press", "Cable Crossover"], sessions: 2 }]);
 		expect(rules.statements.some((statement) => statement.startsWith("STRENGTH ROTATION"))).toBe(true);
+	});
+});
+
+describe("exercisePoolInputsByMuscle — re-keying rosters onto the registry", () => {
+	const PRIMARIES = {
+		"bench press": "chest",
+		"seated cable row": "back",
+		"face pull": "traps",
+	};
+
+	it("merges upper_back's two raw tokens (back, traps) into one muscle's rosters", () => {
+		const features = featuresFor([
+			activity(daysAgo(2), { exercise: "Seated Cable Row", category: "strength", muscle_groups: ["back"], sets: 3, reps: 12, load_lb: 100 }),
+			activity(daysAgo(4), { exercise: "Face Pull", category: "strength", muscle_groups: ["traps"], sets: 3, reps: 15, load_lb: 40 }),
+		]);
+		const result = exercisePoolInputsByMuscle(features, PRIMARIES, ["upper_back"]);
+		const upperBack = result.get("upper_back")!;
+		// Two sessions, two different raw tokens, newest first regardless of which token it came from.
+		expect(upperBack.recentUsage).toEqual([
+			{ exercise: "Seated Cable Row", sessionsAgo: 0 },
+			{ exercise: "Face Pull", sessionsAgo: 1 },
+		]);
+	});
+
+	it("carries load history through untouched, and resolves the anchor from it", () => {
+		const features = featuresFor([
+			activity(daysAgo(2), { exercise: "Bench Press", category: "strength", muscle_groups: ["chest"], sets: 3, reps: 8, load_lb: 135 }),
+			activity(daysAgo(9), { exercise: "Bench Press", category: "strength", muscle_groups: ["chest"], sets: 3, reps: 8, load_lb: 130 }),
+		]);
+		const result = exercisePoolInputsByMuscle(features, PRIMARIES, ["chest"]);
+		const chest = result.get("chest")!;
+		expect(chest.loadHistory).toEqual([
+			{
+				exercise: "Bench Press",
+				sessions: [
+					{ date: daysAgo(2), loadLb: 135 },
+					{ date: daysAgo(9), loadLb: 130 },
+				],
+			},
+		]);
+		expect(chest.anchor).toBe("Bench Press");
+	});
+
+	it("is empty, with a null anchor, for a muscle with no logged history at all", () => {
+		const features = featuresFor([]);
+		const result = exercisePoolInputsByMuscle(features, PRIMARIES, ["quads"]);
+		expect(result.get("quads")).toEqual({ recentUsage: [], loadHistory: [], anchor: null });
+	});
+
+	it("skips a key the registry doesn't recognise, rather than throwing", () => {
+		const features = featuresFor([]);
+		const result = exercisePoolInputsByMuscle(features, PRIMARIES, ["not-a-real-muscle"]);
+		expect(result.has("not-a-real-muscle")).toBe(false);
 	});
 });

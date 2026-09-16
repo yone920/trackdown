@@ -1,6 +1,6 @@
 import type pg from "pg";
 import { DEFAULT_LOAD_DIRECTION, type LoadDirection } from "../../db/exercises.js";
-import { LEDGER_MUSCLES } from "./features.js";
+import { muscleByKey, type CandidateExercise } from "../recommendation/index.js";
 
 // The two catalogue facts the progression reads, in one place because two callers now read
 // them: the coach (services/coach/coach.ts) and the training board
@@ -65,6 +65,28 @@ export async function catalogFactsFor(db: Queryable, names: readonly string[]): 
 	};
 }
 
+/**
+ * Every catalogue exercise for a set of muscle tokens — not filtered to "never logged"
+ * the way `introductionCandidates` below is. This is the pool `services/recommendation`'s
+ * `eligiblePool()` filters down by rotation, equipment, and media; the query's job is only
+ * to say what exists for the muscle at all, with the two facts that filter needs.
+ */
+export async function catalogCandidatesFor(db: Queryable, tokens: readonly string[]): Promise<CandidateExercise[]> {
+	if (tokens.length === 0) return [];
+	const { rows } = await db.query<{ name: string; equipment: string[] | null; media_count: number | null }>(
+		`SELECT name, equipment, media_count
+		   FROM exercise_catalog
+		  WHERE category IN ('strength', 'cardio')
+		    AND primary_muscles && $1::text[]`,
+		[tokens]
+	);
+	return rows.map((row) => ({
+		name: row.name,
+		hasMedia: (row.media_count ?? 0) > 0,
+		equipment: (row.equipment ?? []).map((item) => item.trim().toLowerCase()),
+	}));
+}
+
 /** How many names the prompt is offered to introduce from. Ten is a choice; forty is a list. */
 export const MAX_INTRODUCTION_CANDIDATES = 10;
 
@@ -92,12 +114,8 @@ export async function introductionCandidates(
 	userId: string,
 	{ muscles = [], limit = MAX_INTRODUCTION_CANDIDATES }: { muscles?: readonly string[]; limit?: number } = {}
 ): Promise<string[]> {
-	// Ledger keys ("upper_back", "core") back into the catalogue's own tags.
-	const tokens = [
-		...new Set(
-			muscles.flatMap((key) => LEDGER_MUSCLES.find((entry) => entry.key === key)?.tokens ?? [])
-		),
-	];
+	// Ledger keys ("upper_back", "abs") back into the catalogue's own tags, via the registry.
+	const tokens = [...new Set(muscles.flatMap((key) => muscleByKey(key)?.tokens ?? []))];
 
 	const { rows } = await db.query<{ name: string }>(
 		`SELECT c.name
