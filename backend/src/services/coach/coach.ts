@@ -25,7 +25,7 @@ import {
 	UnusableBriefError,
 	type RevisionMode,
 } from "./schema.js";
-import { buildRules, type CoachGoal, type NudgeAction, type TrainingBackground } from "./rules.js";
+import { buildRules, type CoachGoal, type NudgeAction, type Prescription, type PrescriptionRule, type TrainingBackground } from "./rules.js";
 import { classifyProviderError, type LlmErrorCode } from "../llmErrors.js";
 
 // The brief: gathering its inputs, caching it for the day, and storing it
@@ -77,6 +77,16 @@ export type BriefExercise = Brief["workout"]["exercises"][number] & {
 	 * not say so.
 	 */
 	barbell: boolean;
+	/**
+	 * How today's number compares to last time — the same field the deterministic
+	 * progression rule already computed (services/coach/rules.ts §prescribeLoads:
+	 * `step_up`, `step_down`, `hold`, `restart`, `ease_back`, `new`, `reference`, `cardio`).
+	 * Matched onto the model's answer by name, ours and not the model's, exactly like
+	 * `exercise_id` and `media_count` above — so a plan cannot claim a step up it did not
+	 * compute, and the app can show one without re-deriving it from prose (user field
+	 * report 2026-09-17: "how do I know it's actually going up").
+	 */
+	progression: PrescriptionRule | null;
 	/**
 	 * The local clock an appended item was added at ("2:05p"), null for the plan's original
 	 * lines. It is what the app's "added 2:05p" divider is drawn from — stored on the brief
@@ -153,7 +163,10 @@ const BRIEF_COLUMNS = `id, date, asked_at, context, headline, rationale, workout
  * answer for the day it was written.
  */
 type StoredWorkout = Omit<Brief["workout"], "exercises" | "finisher"> & {
-	exercises: (Brief["workout"]["exercises"][number] & { added_at?: string | null })[];
+	exercises: (Brief["workout"]["exercises"][number] & {
+		added_at?: string | null;
+		progression?: PrescriptionRule | null;
+	})[];
 	finisher?: Brief["workout"]["finisher"];
 };
 
@@ -174,6 +187,10 @@ function toWorkout(workout: StoredWorkout | null): BriefWorkout {
 			media_count: 0,
 			// Resolved by withExerciseIds on the way out; false until the catalogue says.
 			barbell: false,
+			// A fact fixed at write time, not recomputed on read — a brief stored before
+			// this field existed simply has nothing to say, same as a pre-migration row
+			// has no exercise_id yet.
+			progression: exercise.progression ?? null,
 		})),
 	};
 }
@@ -749,7 +766,8 @@ async function chooseBrief(
 		const { brief: asked, skipped } = await askUsable(coach, inputs, revision, current);
 		const capped = capBrief(asked, inputs, { revised: revision !== undefined });
 		// The recovery rule, enforced rather than requested (user field report 2026-09-03).
-		const { brief: answer, dropped } = dropRecovering(capped, inputs, current ? toBrief(current).workout.exercises : []);
+		const { brief: recovered, dropped } = dropRecovering(capped, inputs, current ? toBrief(current).workout.exercises : []);
+		const answer = attachProgression(recovered, inputs.rules.prescriptions);
 		const stored = await storeBrief(db, userId, inputs, hash, answer, coach.model);
 		// Not a failure, so not an error — but the user asked for more and got fewer items
 		// than the model offered, and is owed the reason (field report 2026-09-02).
@@ -1015,6 +1033,26 @@ export function recoveringNote(dropped: readonly { exercise: string; muscle: str
 	} trained inside 48 hours.`;
 }
 
+/**
+ * The progression signal, matched onto the model's answer by name — same pattern as
+ * `dropRecovering` above, applied for the opposite reason: nothing here is removed, every
+ * exercise just learns how its own number compares to last time. An exercise the model
+ * introduced that has no matching prescription (an introduction, a finisher-only name)
+ * gets `null`, which the app reads as "nothing to say," not "held."
+ */
+export function attachProgression<T extends StorableBrief>(brief: T, prescriptions: readonly Prescription[]): T {
+	return {
+		...brief,
+		workout: {
+			...brief.workout,
+			exercises: brief.workout.exercises.map((exercise) => {
+				const match = prescriptions.find((item) => sameMovement(item.exercise, exercise.name));
+				return { ...exercise, progression: match?.rule ?? null };
+			}),
+		},
+	};
+}
+
 /** "Lat Pulldown and Barbell Curl are already on the plan." Null when nothing was dropped. */
 export function skippedNote(skipped: readonly string[]): string | null {
 	if (skipped.length === 0) return null;
@@ -1041,7 +1079,14 @@ function toBrief(record: CoachBriefRecord): Brief {
 			// way: when an item arrived and whether it has been done are facts about this
 			// app, not about the session the model is being asked to change.
 			exercises: record.workout.exercises.map(
-				({ exercise_id: _id, media_count: _media, added_at: _added, completion: _done, ...exercise }) => exercise
+				({
+					exercise_id: _id,
+					media_count: _media,
+					added_at: _added,
+					completion: _done,
+					progression: _progression,
+					...exercise
+				}) => exercise
 			),
 			finisher: record.workout.finisher.map(({ exercise_id: _id, media_count: _media, ...item }) => item),
 		},
