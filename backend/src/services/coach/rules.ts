@@ -315,6 +315,13 @@ export interface CoachRules {
 	 */
 	off_menu: { exercise: string; muscle: string }[];
 	/**
+	 * Muscles whose last two strength sessions ran the identical exercise roster
+	 * (§stuckRosters). Computed unconditionally like the ledger's own debts; whether the
+	 * prompt is told about it depends on the user having asked for variety
+	 * (§strengthRotationRule).
+	 */
+	stuck_rosters: StuckRoster[];
+	/**
 	 * How many never-logged movements this plan may introduce — 1 unless the user has said
 	 * they want to be shown new work (§varietyAppetite). Asked for in the prompt and capped
 	 * here, the same way the plan's size is.
@@ -622,6 +629,103 @@ export function cardioRotationRule(
 	return `CARDIO ROTATION — the last ${recent.length} cardio sessions were all ${first}, and this user has asked for variety. Prescribe a DIFFERENT modality today${
 		alternatives.length > 0 ? `: ${alternatives.join(", ")} are all available` : ""
 	}. Equivalent minutes already price the modalities against each other, so the week's target is unaffected by the swap — do not prescribe ${first} again today unless the user asked for it in as many words.`;
+}
+
+/**
+ * How many consecutive sessions targeting one muscle, all with the identical exercise
+ * roster, is a rut rather than a programme. Two is the cardio rut's own threshold's near
+ * neighbour (CARDIO_RUT_SESSIONS is three, but a strength roster is a set of several
+ * exercises repeating together, not one modality, so it names the rut sooner). Only
+ * consulted when the user has asked for variety — same reasoning as cardio's rut rule:
+ * following the history is the right default for everybody else.
+ */
+export const STRENGTH_RUT_SESSIONS = 2;
+
+/**
+ * Every strength session's exercise roster, grouped by primary muscle and keyed by date,
+ * most recent first. `recoveringExercises` only ever blocks a muscle for 48 hours and says
+ * nothing about what happens the first legal day after that — which is where an identical
+ * roster can just repeat forever once the recovery window clears (user field report
+ * 2026-09-15: chest came back Bench Press/Cable Crossover/Chest Press Machine/Assisted Dip,
+ * exercise-for-exercise, two rest days after the same four; back did the same with Lat
+ * Pulldown/Seated Cable Row/Barbell Curl/Face Pull).
+ */
+function recentRostersByMuscle(
+	features: CoachFeatures,
+	primaryMuscle: Record<string, string>
+): Map<string, { date: string; roster: Set<string> }[]> {
+	const byMuscle = new Map<string, Map<string, Set<string>>>();
+	for (const exercise of features.exercises) {
+		if (exercise.category !== "strength") continue;
+		const key = exercise.exercise.trim().toLowerCase();
+		const muscle = (primaryMuscle[key] ?? exercise.muscle_groups[0] ?? "").trim().toLowerCase();
+		if (!muscle) continue;
+		const byDate = byMuscle.get(muscle) ?? new Map<string, Set<string>>();
+		for (const session of exercise.sessions) {
+			const roster = byDate.get(session.date) ?? new Set<string>();
+			roster.add(exercise.exercise);
+			byDate.set(session.date, roster);
+		}
+		byMuscle.set(muscle, byDate);
+	}
+
+	const result = new Map<string, { date: string; roster: Set<string> }[]>();
+	for (const [muscle, byDate] of byMuscle) {
+		result.set(
+			muscle,
+			[...byDate.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([date, roster]) => ({ date, roster }))
+		);
+	}
+	return result;
+}
+
+export interface StuckRoster {
+	muscle: string;
+	exercises: string[];
+	sessions: number;
+}
+
+/**
+ * Muscles whose last `sessions` strength sessions all used the exact same set of exercises
+ * — a data fact, not an opinion, so it is computed unconditionally and left to the caller
+ * to decide (via `strengthRotationRule`) whether the user has asked to hear about it.
+ */
+export function stuckRosters(
+	features: CoachFeatures,
+	primaryMuscle: Record<string, string> = {},
+	sessions: number = STRENGTH_RUT_SESSIONS
+): StuckRoster[] {
+	const byMuscle = recentRostersByMuscle(features, primaryMuscle);
+	const stuck: StuckRoster[] = [];
+	for (const [muscle, recent] of byMuscle) {
+		if (recent.length < sessions) continue;
+		const [first, ...rest] = recent.slice(0, sessions) as [
+			{ date: string; roster: Set<string> },
+			...{ date: string; roster: Set<string> }[],
+		];
+		const sameRoster = rest.every(
+			(entry) => entry.roster.size === first.roster.size && [...first.roster].every((name) => entry.roster.has(name))
+		);
+		if (sameRoster && first.roster.size > 0) {
+			stuck.push({ muscle, exercises: [...first.roster].sort(), sessions });
+		}
+	}
+	return stuck.sort((a, b) => a.muscle.localeCompare(b.muscle));
+}
+
+/**
+ * "These muscles have run the identical roster for their last two sessions, and you asked
+ * for variety, so change at least one." The strength half of `cardioRotationRule` above —
+ * same trigger (appetite === "wants"), same reasoning: following the history is the right
+ * default for everybody who has not asked otherwise.
+ */
+export function strengthRotationRule(stuck: readonly StuckRoster[], appetite: VarietyAppetite): string | null {
+	if (appetite !== "wants" || stuck.length === 0) return null;
+	return `STRENGTH ROTATION — this user has asked for variety, and these muscles have used the exact same exercises for their last ${stuck[0]!.sessions} sessions running: ${stuck
+		.map((entry) => `${entry.muscle} (${entry.exercises.join(", ")})`)
+		.join(
+			"; "
+		)}. If any of them is on today's menu, swap in at least one DIFFERENT movement for it — a catalogue exercise this user has logged before but not last time, or one of today's introductions. Repeating the identical set again is exactly what VARIETY AND INTRODUCTIONS above is asking you not to do.`;
 }
 
 export function cardioRule(features: CoachFeatures): CardioRule {
@@ -1031,6 +1135,7 @@ export function buildRules({
 	}).filter((item) => !blockedNames.has(item.exercise.trim().toLowerCase()));
 	const appetite = varietyAppetite(background);
 	const nudge = selectNudge(features, goals, background);
+	const stuck = stuckRosters(features, primaryMuscle ?? {});
 
 	const statements = [
 		gap.text,
@@ -1040,6 +1145,7 @@ export function buildRules({
 		sizing.text,
 		coverageRule(features.coverage ?? [], recovery.avoid_primary),
 		cardioRotationRule(features, appetite, introductionCandidates),
+		strengthRotationRule(stuck, appetite),
 		varietyRule(introductionCandidates, appetite),
 		`Sessions: ${features.sessions_this_week} in the last 7 days${
 			features.training_days_target ? ` against a plan of ${features.training_days_target}/week` : ""
@@ -1050,7 +1156,18 @@ export function buildRules({
 		`Nudge: ${nudge.subject}`,
 	].filter((line): line is string => line !== null);
 
-	return { gap, recovery, cardio, sizing, prescriptions, off_menu: blocked, max_new: MAX_NEW_PER_PLAN[appetite], nudge, statements };
+	return {
+		gap,
+		recovery,
+		cardio,
+		sizing,
+		prescriptions,
+		off_menu: blocked,
+		stuck_rosters: stuck,
+		max_new: MAX_NEW_PER_PLAN[appetite],
+		nudge,
+		statements,
+	};
 }
 
 /**

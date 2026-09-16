@@ -13,6 +13,8 @@ import {
 	recoveringExercises,
 	recoveryRule,
 	cardioRotationRule,
+	strengthRotationRule,
+	stuckRosters,
 	varietyAppetite,
 	MAX_NEW_PER_PLAN,
 	selectNudge,
@@ -1024,5 +1026,85 @@ describe("cardio that has stopped rotating", () => {
 		});
 		const rules = buildRules({ features, goals: [], background: wantsVariety, introductionCandidates: ["Rowing Machine"] });
 		expect(rules.statements.some((statement) => statement.startsWith("CARDIO ROTATION"))).toBe(true);
+	});
+});
+
+// ── strength, when the roster stops changing ─────────────────────────────────────────
+// User field report 2026-09-15: chest came back Bench Press / Cable Crossover / Chest
+// Press Machine / Assisted Dip, exercise-for-exercise, two rest days after the same four —
+// the muscle had cleared the 48-hour recovery window, but nothing rotated the roster.
+
+describe("strength that has stopped rotating", () => {
+	const CHEST_PRIMARIES = { "bench press": "chest", "cable crossover": "chest", "lat pulldown": "lats" };
+	const chestDay = (date: string) => [
+		activity(date, { exercise: "Bench Press", category: "strength", muscle_groups: ["chest"], sets: 3, reps: 8, load_lb: 135 }),
+		activity(date, { exercise: "Cable Crossover", category: "strength", muscle_groups: ["chest"], sets: 3, reps: 12, load_lb: 40 }),
+	];
+	const wantsVariety = { experience: null, background: "I want variety, show me new exercises", reference_loads: [] };
+
+	it("names a muscle stuck on the identical roster for its last two sessions", () => {
+		const features = computeFeatures({
+			facts: facts({ activities: [...chestDay(daysAgo(1)), ...chestDay(daysAgo(3))] }),
+		});
+		const stuck = stuckRosters(features, CHEST_PRIMARIES);
+		expect(stuck).toEqual([{ muscle: "chest", exercises: ["Bench Press", "Cable Crossover"], sessions: 2 }]);
+	});
+
+	it("says nothing once a different exercise enters the roster", () => {
+		const features = computeFeatures({
+			facts: facts({
+				activities: [
+					...chestDay(daysAgo(1)),
+					activity(daysAgo(3), {
+						exercise: "Chest Press Machine",
+						category: "strength",
+						muscle_groups: ["chest"],
+						sets: 3,
+						reps: 10,
+						load_lb: 90,
+					}),
+					activity(daysAgo(3), {
+						exercise: "Bench Press",
+						category: "strength",
+						muscle_groups: ["chest"],
+						sets: 3,
+						reps: 8,
+						load_lb: 135,
+					}),
+				],
+			}),
+		});
+		expect(stuckRosters(features, CHEST_PRIMARIES)).toEqual([]);
+	});
+
+	it("says nothing before there are two sessions to compare", () => {
+		const features = computeFeatures({ facts: facts({ activities: chestDay(daysAgo(1)) }) });
+		expect(stuckRosters(features, CHEST_PRIMARIES)).toEqual([]);
+	});
+
+	it("names the rut and asks for a swap only once the user has asked for variety", () => {
+		const features = computeFeatures({
+			facts: facts({ activities: [...chestDay(daysAgo(1)), ...chestDay(daysAgo(3))] }),
+		});
+		const stuck = stuckRosters(features, CHEST_PRIMARIES);
+		expect(strengthRotationRule(stuck, "default")).toBeNull();
+		expect(strengthRotationRule(stuck, "steady")).toBeNull();
+		const line = strengthRotationRule(stuck, "wants");
+		expect(line).toContain("chest (Bench Press, Cable Crossover)");
+		expect(line).toContain("swap in at least one DIFFERENT movement");
+	});
+
+	it("puts the line in the rules the prompt is handed", () => {
+		const features = computeFeatures({
+			facts: facts({ activities: [...chestDay(daysAgo(1)), ...chestDay(daysAgo(3))] }),
+		});
+		const rules = buildRules({
+			features,
+			goals: [],
+			background: wantsVariety,
+			primaryMuscle: CHEST_PRIMARIES,
+		});
+		expect(rules.stuck_rosters).toEqual([{ muscle: "chest", exercises: ["Bench Press", "Cable Crossover"], sessions: 2 }]);
+		expect(rules.statements.some((statement) => statement.startsWith("STRENGTH ROTATION"))).toBe(true);
 	});
 });
