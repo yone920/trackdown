@@ -342,10 +342,27 @@ export type ExerciseCompletion = {
   records?: CompletionRecord[];
 };
 
+/** How today's number compares to last time — the coach's own deterministic call, never the model's. */
+export type ExerciseProgression =
+  | 'new'
+  | 'hold'
+  | 'step_up'
+  | 'step_down'
+  | 'ease_back'
+  | 'restart'
+  | 'cardio'
+  | 'reference';
+
 export type BriefExercise = {
   name: string;
   /** Resolved server-side when the brief is returned, so the app never name-matches. */
   exercise_id?: string | null;
+  /**
+   * Set only on `step_up`/`step_down` does the card draw a badge — every other value is a
+   * real fact the coach may quote in prose but not something worth drawing attention to.
+   * Optional for one release, same reason `barbell` is: an older server sends nothing.
+   */
+  progression?: ExerciseProgression | null;
   /**
    * The catalogue says this movement is loaded with plates on a bar, so the row draws the
    * per-side breakdown beside the prescribed total (lib/plates.ts). Resolved server-side —
@@ -366,6 +383,14 @@ export type BriefExercise = {
   /** The local clock an appended item arrived at ("2:05p"); null for the plan's own lines. */
   added_at?: string | null;
   completion?: ExerciseCompletion;
+};
+
+export type BriefFinisherItem = {
+  name: string;
+  minutes?: number | null;
+  note?: string | null;
+  exercise_id?: string | null;
+  media_count?: number;
 };
 
 export type CoachBrief = {
@@ -392,13 +417,7 @@ export type CoachBrief = {
      * heard of a couch stretch — and they open the sheet in name-only mode, which is what
      * that mode is for.
      */
-    finisher?: {
-      name: string;
-      minutes?: number | null;
-      note?: string | null;
-      exercise_id?: string | null;
-      media_count?: number;
-    }[];
+    finisher?: BriefFinisherItem[];
     /** True when every line of a non-empty plan is done — the "Plan complete" state. */
     complete?: boolean;
   } | null;

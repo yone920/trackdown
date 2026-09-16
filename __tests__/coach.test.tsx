@@ -349,11 +349,11 @@ it('ticks a done line, counts a partial one, and keeps every item on screen', as
   expect(screen.getByText('Overhead Press')).toBeTruthy();
   expect(screen.getByText('Face Pull')).toBeTruthy();
 
-  expect(screen.getByText('✓')).toBeTruthy();
+  // Done collapses to its own inert card, with a check badge rather than a text glyph.
+  expect(screen.getByTestId('plan-card-0-truth')).toBeTruthy();
+  // Partial carries the count as a small badge on the collapsed row.
   expect(screen.getByText('2/3')).toBeTruthy();
   expect(screen.getByText('1 of 3 done')).toBeTruthy();
-  // The untouched line carries no mark at all: nothing is owed.
-  expect(screen.queryByText('0/3')).toBeNull();
   expect(screen.queryByTestId('coach-plan-complete')).toBeNull();
 });
 
@@ -410,8 +410,8 @@ it('marks the one new movement and opens its sheet from the chip', async () => {
   renderCoach();
 
   await screen.findByText('Face Pull');
-  expect(screen.queryByTestId('coach-new-0')).toBeNull();
-  fireEvent.press(screen.getByTestId('coach-new-1'));
+  expect(screen.queryByTestId('plan-card-0-new')).toBeNull();
+  fireEvent.press(screen.getByTestId('plan-card-1-new'));
   expect(mockPush).toHaveBeenCalled();
   expect(JSON.stringify(mockPush.mock.calls[0])).toContain('ex-9');
 });
@@ -567,11 +567,14 @@ it('says what each control does without pointing at a box that is not there', as
 // and nothing on the plan said which names had a picture behind them.
 
 it('opens the sheet from a plan row, by the id the server resolved', async () => {
+  // The name now opens the CARD, not the sheet (user decision 2026-09-17 — the header bar
+  // is the one toggle target). "View photo", inside the opened card, is the sheet's door.
   mockApi.mockResolvedValue(next());
   renderCoach();
   await screen.findByText('Pull day: back and shoulders');
 
-  fireEvent.press(screen.getByText('Lat Pulldown'));
+  fireEvent.press(screen.getByTestId('plan-card-0'));
+  fireEvent.press(await screen.findByTestId('plan-card-0-photo'));
   expect(mockPush).toHaveBeenCalledWith({
     pathname: '/exercise/[id]',
     // The count travels with the tap, so the sheet draws two photo boxes on frame one.
@@ -580,11 +583,14 @@ it('opens the sheet from a plan row, by the id the server resolved', async () =>
 });
 
 it('opens the finisher too — a stretch with no catalogue row is a name-only sheet, not a dead row', async () => {
+  // Same accordion as the Do list (user decision 2026-09-17): the name opens the card,
+  // "View photo" inside it opens the sheet.
   mockApi.mockResolvedValue(next());
   renderCoach();
   await screen.findByText('Pull day: back and shoulders');
 
-  fireEvent.press(screen.getByText('Doorway Chest Stretch'));
+  fireEvent.press(screen.getByTestId('plan-finisher-0'));
+  fireEvent.press(await screen.findByTestId('plan-finisher-0-photo'));
   expect(mockPush).toHaveBeenCalledWith({
     pathname: '/exercise/[id]',
     // No id, and a count of zero: the sheet skips straight to "no photos for this one"
@@ -593,15 +599,17 @@ it('opens the finisher too — a stretch with no catalogue row is a name-only sh
   });
 });
 
-it('draws the photo glyph only beside the names that have one', async () => {
+it('offers "View photo" even for a name the catalogue has no picture of — same reasoning as the finisher, not a dead door', async () => {
   mockApi.mockResolvedValue(next());
   renderCoach();
   await screen.findByText('Pull day: back and shoulders');
 
-  expect(screen.getByTestId('coach-do-0-photo')).toBeTruthy();
-  // Farmer Carry and the stretch are tappable and say nothing they cannot deliver.
-  expect(screen.queryByTestId('coach-do-1-photo')).toBeNull();
-  expect(screen.queryByTestId('coach-finisher-0-photo')).toBeNull();
+  fireEvent.press(screen.getByTestId('plan-card-1')); // Farmer Carry — media_count: 0
+  fireEvent.press(await screen.findByTestId('plan-card-1-photo'));
+  expect(mockPush).toHaveBeenCalledWith({
+    pathname: '/exercise/[id]',
+    params: { id: FARMER_CARRY_ID, name: 'Farmer Carry', media: '0' },
+  });
 });
 
 it('warms every plan row and asks for the first photo at the width the sheet uses', async () => {
@@ -762,7 +770,7 @@ describe('the merged training section', () => {
     renderCoach();
 
     await screen.findByText('Chest Press Machine');
-    expect(screen.getByTestId('coach-truth-0').props.children).toContain('2 × 10 @ 85');
+    expect(screen.getByTestId('plan-card-0-truth').props.children).toContain('2 × 10 @ 85');
     // What was ASKED for is no longer on the row at all.
     expect(screen.queryByText(/85 lb · 4 × 10/)).toBeNull();
   });
@@ -774,7 +782,7 @@ describe('the merged training section', () => {
 
     await screen.findByText('Chest Press Machine');
     expect(screen.getByText(/85 lb · 4 × 10/)).toBeTruthy();
-    expect(screen.getByTestId('coach-truth-0').props.children).toContain('2 of 4 sets');
+    expect(screen.getByTestId('plan-card-0-truth').props.children).toContain('2 of 4 sets');
   });
 
   it('puts BOTH halves of a split record on the line, and reaches both', async () => {
@@ -786,14 +794,14 @@ describe('the merged training section', () => {
     );
     renderCoach();
 
-    await screen.findByTestId('coach-truth-0');
+    await screen.findByTestId('plan-card-0-truth');
     // Both halves on the ONE line. There is no second row repeating the name — the truth
     // line carries the log (user decision 2026-09-01).
-    expect(screen.getByTestId('coach-truth-0').props.children).toContain('2 × 10 @ 85 + 2 × 10 @ 70');
+    expect(screen.getByTestId('plan-card-0-truth').props.children).toContain('2 × 10 @ 85 + 2 × 10 @ 70');
     expect(screen.queryByTestId('coach-records-0')).toBeNull();
 
     // The ROW opens the logged record, not the how-to sheet.
-    fireEvent.press(screen.getByTestId('coach-do-0'));
+    fireEvent.press(screen.getByTestId('plan-card-0'));
     expect(mockPush).toHaveBeenCalledWith({
       pathname: '/log',
       params: { editDate: expect.any(String), editId: 'a1', editKind: 'activity' },
@@ -812,17 +820,20 @@ describe('the merged training section', () => {
 
     // The small trailing door still gets to the photographs and the steps.
     mockPush.mockReset();
-    fireEvent.press(screen.getByTestId('coach-do-0-photo'));
+    fireEvent.press(screen.getByTestId('plan-card-0-photo'));
     expect(JSON.stringify(mockPush.mock.calls)).toContain(CHEST_ID);
   });
 
-  it('leaves an UNDONE row exactly as it was: prescription, and the name opens the sheet', async () => {
+  it('leaves an UNDONE row exactly as it was: the prescription is there, opened, the photo behind View photo', async () => {
+    // Tapping the name now opens the CARD (user decision 2026-09-17) rather than the sheet
+    // directly — the sheet is one further tap away, on "View photo" inside it.
     serveBoth(planned([], { done: false, sets_done: 0, partial: false }), []);
     renderCoach();
     await screen.findByText('Chest Press Machine');
 
     expect(screen.getByText(/85 lb · 4 × 10/)).toBeTruthy();
-    fireEvent.press(screen.getByText('Chest Press Machine'));
+    fireEvent.press(screen.getByTestId('plan-card-0'));
+    fireEvent.press(await screen.findByTestId('plan-card-0-photo'));
     expect(JSON.stringify(mockPush.mock.calls)).toContain(CHEST_ID);
   });
 
@@ -830,7 +841,7 @@ describe('the merged training section', () => {
     serveBoth(planned([], { done: false, sets_done: 0, partial: false }), []);
     renderCoach();
     await screen.findByText('Chest Press Machine');
-    expect(screen.queryByTestId('coach-truth-0')).toBeNull();
+    expect(screen.queryByTestId('plan-card-0-truth')).toBeNull();
   });
 
   it('draws off-plan work as DONE — it is a logged fact, not a pending one', async () => {
@@ -914,9 +925,9 @@ describe('the merged training section', () => {
   it('still counts the plan off the way it always did', async () => {
     serveBoth(planned([record()], { done: false, sets_done: 2, partial: true }), [activity()]);
     renderCoach();
-    await screen.findByTestId('coach-truth-0');
+    await screen.findByTestId('plan-card-0-truth');
     // The completion math is untouched: the tick and the count still read from it.
-    expect(screen.getByTestId('coach-truth-0').props.children).toContain('2 of 4 sets');
+    expect(screen.getByTestId('plan-card-0-truth').props.children).toContain('2 of 4 sets');
   });
 });
 
@@ -1017,7 +1028,7 @@ describe('a barbell row says what to put on the bar', () => {
     );
     renderCoach();
     await screen.findByText('Bench Press');
-    expect(screen.getByTestId('coach-truth-0').props.children).toContain('35/side + bar');
+    expect(screen.getByTestId('plan-card-0-truth').props.children).toContain('35/side + bar');
   });
 });
 

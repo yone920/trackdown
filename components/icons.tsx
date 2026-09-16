@@ -300,3 +300,23 @@ export function IconChevronDown(p: IconProps) {
     </Frame>
   );
 }
+
+/** A step up — the progression badge on a load that climbed since last time. */
+export function IconTrendUp(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Line x1={12} y1={19} x2={12} y2={5} {...base(p)} strokeWidth={p.strokeWidth ?? 2.4} />
+      <Polyline points="5,12 12,5 19,12" {...base(p)} strokeWidth={p.strokeWidth ?? 2.4} />
+    </Frame>
+  );
+}
+
+/** A step down — the assisted-machine case, where LESS is the progress (migration 0013). */
+export function IconTrendDown(p: IconProps) {
+  return (
+    <Frame size={p.size}>
+      <Line x1={12} y1={5} x2={12} y2={19} {...base(p)} strokeWidth={p.strokeWidth ?? 2.4} />
+      <Polyline points="5,12 12,19 19,12" {...base(p)} strokeWidth={p.strokeWidth ?? 2.4} />
+    </Frame>
+  );
+}

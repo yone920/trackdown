@@ -4,11 +4,11 @@ import { ActivityIndicator, View } from 'react-native';
 
 import { ActivityRow } from '@/components/activity-row';
 import { BigButton, Card, Chip, Chips, GroupHeading, Row, Section, SkeletonLines } from '@/components/kit';
+import { PlanExerciseCard } from '@/components/plan-exercise-card';
+import { PlanFinisherCard } from '@/components/plan-finisher-card';
 import { Body, Disp, Eyebrow, Sub } from '@/components/type';
-import { openExercise } from '@/lib/exercise';
 import { clock, kcal } from '@/lib/format';
-import { perSideNote } from '@/lib/plates';
-import { matchedRecordIds, truthLine } from '@/lib/plan-truth';
+import { matchedRecordIds } from '@/lib/plan-truth';
 import {
   localDateKey,
   useAskCoach,
@@ -52,15 +52,6 @@ import { readerLine } from '@/lib/errors';
  * nothing at all before it is started — an untouched plan should read as a plan, not as a
  * column of zeroes (concept-v2 §Principles 8: nothing is owed).
  */
-function tick(completion: ExerciseCompletion | undefined): string | null {
-  if (!completion) return null;
-  if (completion.done) return '✓';
-  if (completion.partial && completion.sets_prescribed != null) {
-    return `${completion.sets_done}/${completion.sets_prescribed}`;
-  }
-  return null;
-}
-
 /** "2 of 5 done" while the plan is being worked through; the count on its own before that. */
 function doneSummary(exercises: BriefExercise[]): string {
   const done = exercises.filter((exercise) => exercise.completion?.done).length;
@@ -83,6 +74,10 @@ export function PlanSection() {
    * remembered: it folds because the session started, and it should fold again tomorrow.
    */
   const [whyOpen, setWhyOpen] = useState(false);
+  /** Which Do-list card is expanded — an accordion, so only one is ever open at once. */
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  /** Same accordion rule for the finisher's own list, kept separate from the Do list's. */
+  const [openFinisherIndex, setOpenFinisherIndex] = useState<number | null>(null);
 
 
   const coach = useCoachNext();
@@ -274,108 +269,27 @@ export function PlanSection() {
             right={doneSummary(brief.workout.exercises ?? [])}
           />
           {(brief.workout.exercises ?? []).map((exercise, index, all) => (
-            <View key={`${exercise.name}-${index}`}>
+            <View key={`${exercise.name}-${index}`} style={{ marginTop: index === 0 ? 0 : 10 }}>
               {/* An add-on the user asked for later in the day sits under its own
                   divider, so the plan reads as the plan plus what was added to it. */}
               {exercise.added_at && exercise.added_at !== all[index - 1]?.added_at ? (
-                <View testID={`coach-added-${exercise.added_at}`} style={{ marginTop: 6 }}>
+                <View testID={`coach-added-${exercise.added_at}`} style={{ marginBottom: 6 }}>
                   <GroupHeading label={`Added ${exercise.added_at}`} />
                 </View>
               ) : null}
-              <View style={{ opacity: exercise.completion?.done ? 0.45 : 1 }}>
-                <Row
-                  testID={`coach-do-${index}`}
-                  title={exercise.name}
-                  // Once a line has been done, the ROW — name included — opens what was
-                  // actually logged, and the how-to sheet moves to the glyph beside the
-                  // name (user decision 2026-09-01). Before it is done there is no record
-                  // to open, so the name is the sheet's door exactly as it always was.
-                  onPress={firstRecordOf(exercise) ? () => correct(firstRecordOf(exercise)!) : undefined}
-                  onTitlePress={
-                    firstRecordOf(exercise)
-                      ? undefined
-                      : () =>
-                          openExercise(router, {
-                            id: exercise.exercise_id,
-                            name: exercise.name,
-                            mediaCount: exercise.media_count,
-                          })
-                  }
-                  onMediaPress={
-                    firstRecordOf(exercise)
-                      ? () =>
-                          openExercise(router, {
-                            id: exercise.exercise_id,
-                            name: exercise.name,
-                            mediaCount: exercise.media_count,
-                          })
-                      : undefined
-                  }
-                  titleMedia={exercise.media_count}
-                  // The prescription — and it is GONE once the line is done. What was
-                  // asked for stops being the point the moment it has been answered; the
-                  // truth line below is the row's subject then (user decision 2026-09-01).
-                  // A partial row keeps it, because the target is still live.
-                  sub={
-                    exercise.completion?.done
-                      ? null
-                      : [
-                          // The total leads — it is what the plan, the history and the
-                          // progression are keyed on — and the plates follow, because
-                          // that is the number the hands do (field report 2026-09-02).
-                          exercise.load_lb != null
-                            ? [
-                                `${exercise.load_lb} lb`,
-                                perSideNote(exercise.load_lb, exercise.barbell ? ['barbell'] : null),
-                              ]
-                                .filter(Boolean)
-                                .join(' · ')
-                            : null,
-                          exercise.sets != null && exercise.reps != null
-                            ? `${exercise.sets} × ${exercise.reps}`
-                            : exercise.sets != null
-                              ? `${exercise.sets} sets`
-                              : null,
-                          exercise.minutes != null ? `${exercise.minutes} min` : null,
-                          exercise.note,
-                        ]
-                          .filter(Boolean)
-                          .join(' · ')
-                  }
-                  right={tick(exercise.completion)}
-                  rightColor={exercise.completion?.done ? C.good : C.mute}
-                  divider={index < all.length - 1}>
-                  {/* What was actually logged against this prescription. It is the whole
-                      point of the merge: the ask and the answer on one row, so a load
-                      that dropped partway through reads without holding two lists in
-                      your head. */}
-                  {truthLine(exercise.completion, exercise.barbell) ? (
-                    <Sub
-                      testID={`coach-truth-${index}`}
-                      style={[
-                        { marginTop: 2, color: exercise.completion?.done ? C.ink : C.good },
-                        TABULAR,
-                      ]}>
-                      {truthLine(exercise.completion, exercise.barbell)}
-                    </Sub>
-                  ) : null}
-                  {exercise.is_new ? (
-                    <View style={{ marginTop: 6, alignSelf: 'flex-start' }}>
-                      <Chip
-                        testID={`coach-new-${index}`}
-                        label="New to you"
-                        onPress={() =>
-                          openExercise(router, {
-                            id: exercise.exercise_id,
-                            name: exercise.name,
-                            mediaCount: exercise.media_count,
-                          })
-                        }
-                      />
-                    </View>
-                  ) : null}
-                </Row>
-              </View>
+              <PlanExerciseCard
+                exercise={exercise}
+                index={index}
+                open={openIndex === index}
+                onToggle={() => setOpenIndex((current) => (current === index ? null : index))}
+                onCorrect={correct}
+                firstRecordId={firstRecordOf(exercise)}
+                onLogged={() => {
+                  setOpenIndex(null);
+                  void day.refetch();
+                  void coach.refetch();
+                }}
+              />
             </View>
           ))}
           {/* Everything logged that no line of the plan asked for — the extra set, the
@@ -431,33 +345,23 @@ export function PlanSection() {
           </Card>
         ) : null}
 
-        {/* How the session ends. Short, scaled to its length, and never a rest day's. */}
+        {/* How the session ends. Short, scaled to its length, and never a rest day's.
+            Same card shell as the Do list (user decision 2026-09-17) — a stretch has no
+            DONE state to track, so there is no Log here, only the toggle and the photo. */}
         {brief.workout.finisher && brief.workout.finisher.length > 0 ? (
           <Card testID="coach-finisher" style={{ marginTop: 10, paddingVertical: 4 }}>
             <GroupHeading label="To finish" right={`${brief.workout.finisher.length} items`} />
-            {/* Every one of these opens (field report 2026-09-01: they did not). A
-                stretch is rarely in the catalogue, so most of them open the sheet in
-                name-only mode — a title and a form video, which is a search and knows
-                what a couch stretch looks like even when we do not. */}
-            {brief.workout.finisher.map((item, index, all) => (
-              <Row
-                key={`${item.name}-${index}`}
-                testID={`coach-finisher-${index}`}
-                title={item.name}
-                onTitlePress={() =>
-                  openExercise(router, {
-                    id: item.exercise_id,
-                    name: item.name,
-                    mediaCount: item.media_count,
-                  })
-                }
-                titleMedia={item.media_count}
-                sub={[item.minutes != null ? `${item.minutes} min` : null, item.note]
-                  .filter(Boolean)
-                  .join(' · ')}
-                divider={index < all.length - 1}
-              />
-            ))}
+            <View style={{ gap: 10, marginTop: 6 }}>
+              {brief.workout.finisher.map((item, index) => (
+                <PlanFinisherCard
+                  key={`${item.name}-${index}`}
+                  item={item}
+                  index={index}
+                  open={openFinisherIndex === index}
+                  onToggle={() => setOpenFinisherIndex((current) => (current === index ? null : index))}
+                />
+              ))}
+            </View>
           </Card>
         ) : null}
 

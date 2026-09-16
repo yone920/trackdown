@@ -193,7 +193,7 @@ describe('Train — the plan and what was done, on one page', () => {
 
     // Do — the plan, in full, before what happened. It is the only list on the page.
     await waitFor(() => expect(screen.getByText('Pull day')).toBeTruthy());
-    expect(screen.getByTestId('coach-do-0')).toBeTruthy();
+    expect(screen.getByTestId('plan-card-0')).toBeTruthy();
     expect(screen.getByText('Lat Pulldown')).toBeTruthy();
     // With a plan, the training section IS the log: there is no second Done row, and the
     // day's totals sit on the plan's own header (user decision 2026-09-01).
