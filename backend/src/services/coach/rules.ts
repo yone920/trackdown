@@ -1,12 +1,12 @@
 import { DEFAULT_LOAD_DIRECTION, type LoadDirection } from "../../db/exercises.js";
 import type { ReferenceLoad } from "../fusion/schema.js";
 import {
-	allocateVolume,
 	chooseAnchor,
-	chooseFamily,
 	muscleByKey,
+	scheduleTargets,
 	type LoadHistory,
 	type MuscleStat,
+	type Override,
 	type RecentUsage,
 } from "../recommendation/index.js";
 import { sameMovement } from "./completion.js";
@@ -358,6 +358,12 @@ export interface BuildRulesInput {
 	 * until a caller supplies it.
 	 */
 	eligibleExercises?: Readonly<Record<string, readonly string[]>>;
+	/**
+	 * What the user's own words asked for by name, when they named anything — `services/
+	 * recommendation`'s `parseOverride()` over this ask's revision and context (ENGINE.md
+	 * §The override). Null is the ordinary day, where the debt decides.
+	 */
+	override?: Override | null;
 }
 
 const NO_BACKGROUND: TrainingBackground = { experience: null, background: null, reference_loads: [] };
@@ -568,12 +574,22 @@ export function recoveryRule(muscles: readonly MuscleFeature[]): RecoveryRule {
  * Null when nothing is available at all (every muscle in every family still inside its own
  * recovery window) or the session has no room for a single exercise — both real, quiet
  * states, not errors.
+ *
+ * With an `override` — the user named a muscle or a family in this ask — the split is the
+ * request's, not the debt's (ENGINE.md §The override), and the line says so: what was
+ * asked for is not something to weigh against the rotation, it IS today's target. A
+ * muscle they asked for that is still inside its own recovery window is named as not
+ * targeted, so the brief can say why instead of quietly doing something else.
  */
-export function targetPriorityStatement(stats: readonly MuscleStat[], totalSlots: number): string | null {
-	const family = chooseFamily(stats);
-	if (family == null) return null;
+export function targetPriorityStatement(
+	stats: readonly MuscleStat[],
+	totalSlots: number,
+	override: Override | null = null
+): string | null {
+	const schedule = scheduleTargets(stats, totalSlots, override);
+	if (schedule.family == null) return null;
 	const byKey = new Map(stats.map((stat) => [stat.key, stat]));
-	const allocation = allocateVolume(family, stats, totalSlots).filter((item) => item.slots > 0);
+	const allocation = schedule.allocation.filter((item) => item.slots > 0);
 	if (allocation.length === 0) return null;
 
 	const parts = allocation.map((item) => {
@@ -583,8 +599,26 @@ export function targetPriorityStatement(stats: readonly MuscleStat[], totalSlots
 			stat?.daysSince == null ? "not served in four weeks" : `${stat.daysSince} day${stat.daysSince === 1 ? "" : "s"} unserved`;
 		return `${muscle?.label ?? item.key} — ${item.slots} exercise${item.slots === 1 ? "" : "s"} (${since})`;
 	});
+	const label = (key: string) => muscleByKey(key)?.label ?? key;
 
-	return `TODAY'S TARGET — ${family}: ${parts.join(", ")}. This split is computed from the actual rotation debt, not a guess — build today's plan with roughly this many exercises per muscle, heaviest debt first. A stated goal, missing equipment, or something the user said today may point elsewhere — if you target something else instead, say why in the rationale.`;
+	const asked = schedule.requested.length > 0 || (override?.family != null && override.family === schedule.family);
+	const notes = [
+		schedule.recovering.length > 0
+			? `They also asked for ${schedule.recovering.map(label).join(" and ")}, which ${
+					schedule.recovering.length === 1 ? "is" : "are"
+				} still inside ${schedule.recovering.length === 1 ? "its" : "their"} own recovery window and ${
+					schedule.recovering.length === 1 ? "is" : "are"
+				} not targeted today — say so in the rationale.`
+			: null,
+		schedule.avoided.length > 0
+			? `${schedule.avoided.map(label).join(" and ")} ${schedule.avoided.length === 1 ? "is" : "are"} off today's plan entirely, at their request.`
+			: null,
+	].filter((line): line is string => line != null);
+
+	if (asked) {
+		return `TODAY'S TARGET — ${schedule.family}, AS ASKED: ${parts.join(", ")}. The user asked for this by name, and it wins today over the rotation's own pick — build today's plan with roughly this many exercises per muscle. ${notes.join(" ")}`.trim();
+	}
+	return `TODAY'S TARGET — ${schedule.family}: ${parts.join(", ")}. This split is computed from the actual rotation debt, not a guess — build today's plan with roughly this many exercises per muscle, heaviest debt first. A stated goal, missing equipment, or something the user said today may point elsewhere — if you target something else instead, say why in the rationale. ${notes.join(" ")}`.trim();
 }
 
 /**
@@ -603,11 +637,12 @@ export function targetPriorityStatement(stats: readonly MuscleStat[], totalSlots
 export function eligibleExercisesStatement(
 	stats: readonly MuscleStat[],
 	totalSlots: number,
-	eligibleExercises: Readonly<Record<string, readonly string[]>>
+	eligibleExercises: Readonly<Record<string, readonly string[]>>,
+	override: Override | null = null
 ): string | null {
-	const family = chooseFamily(stats);
-	if (family == null) return null;
-	const allocation = allocateVolume(family, stats, totalSlots).filter((item) => item.slots > 0);
+	const schedule = scheduleTargets(stats, totalSlots, override);
+	if (schedule.family == null) return null;
+	const allocation = schedule.allocation.filter((item) => item.slots > 0);
 
 	const lines = allocation
 		.map((item) => {
@@ -1247,6 +1282,7 @@ export function buildRules({
 	sessionMinutes = null,
 	introductionCandidates = [],
 	eligibleExercises = {},
+	override = null,
 }: BuildRulesInput): CoachRules {
 	const gap = gapRule(features.days_since_last_workout);
 	const recovery = recoveryRule(features.muscles);
@@ -1270,8 +1306,8 @@ export function buildRules({
 	const statements = [
 		gap.text,
 		recovery.text,
-		targetPriorityStatement(features.recommendation_stats, sizing.target_exercises),
-		eligibleExercisesStatement(features.recommendation_stats, sizing.target_exercises, eligibleExercises),
+		targetPriorityStatement(features.recommendation_stats, sizing.target_exercises, override),
+		eligibleExercisesStatement(features.recommendation_stats, sizing.target_exercises, eligibleExercises, override),
 		recoveringExercisesStatement(blocked),
 		cardio.text,
 		sizing.text,

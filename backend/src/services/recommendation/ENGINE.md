@@ -27,8 +27,9 @@ back.** Every failure above happened because that line was blurry.
 | 3 | Exercise pool: rotation, images, equipment, the anchor lift (`exercisePool.ts`) | **Done, and wired in** |
 | 4a | Per-muscle coverage-level arithmetic (`coverage.ts`) | **Done, and wired in** |
 | 4b | `coverageLedger()` and `lib/body-map.ts` migrated onto the registry | **Done** |
+| 5 | The override: an explicit request wins for that ask (`override.ts`, `scheduleTargets`) | **Done, and wired in** |
 
-**Phases 2 through 4 are all live.** `coach/features.ts`'s `recommendationMuscleStats()`
+**Phases 2 through 5 are all live.** `coach/features.ts`'s `recommendationMuscleStats()`
 computes real `MuscleStat[]` for this registry's fourteen muscles straight from the
 activity window (its own pass, not a reshaping of `muscleFeatures()` — see that
 function's own doc), and `coach/rules.ts`'s `targetPriorityStatement()` calls
@@ -108,18 +109,78 @@ which had only just cleared its OWN gate at two days, zero days past it — got 
 again anyway. `chooseFamily` given those exact numbers picks push (chest's family), and
 `scheduler.test.ts` pins that scenario down by name so it can never silently regress.
 
-`avoidMuscles` exists for the override an explicit "give me chest today" request will
-apply (§override.ts, not yet built): a muscle removed from consideration is excluded from
-its family's case, not merely dropped from the final answer, so the rest of that family
-still competes honestly.
+`avoidMuscles` is how the override (below) takes a muscle out of the day: a muscle
+removed from consideration is excluded from its family's case, not merely dropped from
+the final answer, so the rest of that family still competes honestly.
 
-**`allocateVolume(family, stats, totalSlots)`** — how a chosen family's exercise slots
-split across its own muscles. Weighted by each muscle's shortfall against its OWN
-`mavLow` floor (`max(0, mavLow − sets7d)`), apportioned by the largest-remainder method so
-the slots always sum to exactly `totalSlots` with no muscle's fractional share rounded
-away unfairly. When nothing in the family is short of its floor, the slots split evenly
-instead of collapsing to zero everywhere — a well-covered family still gets a session,
-just not one weighted by a shortfall that doesn't exist.
+**`allocateVolume(family, stats, totalSlots, avoidMuscles?)`** — how a chosen family's
+exercise slots split across its own muscles. Weighted by each muscle's shortfall against
+its OWN `mavLow` floor (`max(0, mavLow − sets7d)`), apportioned by the largest-remainder
+method so the slots always sum to exactly `totalSlots` with no muscle's fractional share
+rounded away unfairly. When nothing in the family is short of its floor, the slots split
+evenly instead of collapsing to zero everywhere — a well-covered family still gets a
+session, just not one weighted by a shortfall that doesn't exist. `allocateAcross(members,
+stats, totalSlots)` is the same apportionment over any list of muscles; `allocateVolume`
+is it over a family, the override is it over whatever was asked for.
+
+**`scheduleTargets(stats, totalSlots, override?)`** — the one entry point a caller
+building a day should use: `chooseFamily` + `allocateVolume` with the override applied,
+so the family the TARGET line names, the menu built for it, and the request that shaped
+both can never disagree. Returns the family, the allocation, and three lists the brief is
+told about — `requested` (named and scheduled), `recovering` (named but still inside its
+own gate), `avoided`.
+
+## The override (`override.ts`) — live
+
+An explicit request always wins, for that ask only. This is the second half of the
+2026-09-16 field report: the user typed "generate chest workout" into the Adjust box on a
+day the debt had given chest ZERO slots (twelve sets six days earlier, still inside the
+7-day window — exactly its floor), so TODAY'S MENU had no chest on it and the model
+reached for the same four movements from memory. The engine's arithmetic was right about
+the debt and wrong about the day, because it never heard the request.
+
+**`parseOverride(text)`** is the ONE place the engine reads the user's words, and it
+reads them for exactly one thing: which muscles or family were named, and whether to be
+worked or skipped. Spoken names ("pecs", "delts", "core", "hammies") resolve to registry
+keys — it never invents a muscle, and a word it doesn't know is a word it ignores. "Back"
+is lats + upper back; "arms" is biceps + triceps, across families, because that is what
+was said; "lower back" is heard before "back" can claim it. "Legs" alone is a family;
+"push"/"pull" are only heard as the day they name ("push day", "pull session") because
+"push harder" and "pull-ups" are ordinary speech. A negation ("no shoulders", "skip
+legs", "without calves") or a complaint ("my shoulder hurts", "quads are still sore") is
+a request to leave that muscle out. Everything else in the sentence — "only 30 minutes",
+"harder", "with the bands" — stays the model's to understand.
+
+**How it wins**, in `scheduleTargets`, in this order:
+
+1. **Muscles named to be worked get the whole session**, split between them by the same
+   shortfall weighting a family's members get: "give me chest" is a chest day. A named
+   muscle still inside its OWN recovery gate is not forced — the same gate `chooseFamily`
+   holds every muscle to — and is reported so the brief says why ("They also asked for
+   Chest, which is still inside its own recovery window and is not targeted today").
+2. **A family named** is forced, split across its members as always.
+3. **Otherwise the debt decides**, exactly as before.
+
+Skipped muscles apply at every step: out of the split and out of their family's case.
+
+It never touches the ledger. A forced chest day is logged like any other, and the
+schedule recomputes from what was actually done next time.
+
+**Live in `coach/coach.ts`'s `loadCoachInputs`**, which parses THIS ask's own words — the
+revision ("switch to legs" from the sheet) and the context ("chest day" said while asking
+for a session) — and hands the result to `scheduleTargets` ahead of the model, so the
+menu is built for what was asked; and to `buildRules` as `override`, so
+`targetPriorityStatement` writes "TODAY'S TARGET — push, AS ASKED: Chest — 6 exercises…
+the user asked for this by name, and it wins today over the rotation's own pick". The
+day's SAVED contexts are deliberately not read for this: a request is for the ask it was
+made in.
+
+The app side of the same report: the Adjust box is hard-wired to append (a promise the
+model may not overrule — `coach/coach.ts`'s merge), and "Replace today's plan" used to
+fire on a second tap with no words. It now opens the logger in `plan-replace` framing
+(`lib/log-framing.ts`, `app/log.tsx` §runReplacePlan): the sheet says the plan goes,
+takes what today should be, and sends it as a `rewrite` revision — which is where this
+module first hears it.
 
 ## The exercise pool (`exercisePool.ts`)
 
@@ -197,10 +258,13 @@ old twelve-muscle vocabulary simply never had anywhere to put them.
   MEV, and only where they fit the day's pattern: abs on any day, lower_back only on Leg
   days (already primed by squats/deadlifts), neck only when severely overdue. Capped at
   1–2 extra items, never their own day.
-- **The override**: an explicit request ("give me chest today") always wins for that day
-  only. It never touches the debt ledger — the ledger keeps reflecting whatever actually
-  gets logged, so the schedule just recomputes normally next time. `chooseFamily`'s
-  `avoidMuscles` parameter already exists for this; nothing calls it yet.
+- **The recovery gate, once:** `override.ts` and `chooseFamily` hold a requested muscle
+  to the registry's per-muscle `recoveryHours`, while `coach/rules.ts`'s older
+  `recoveryRule` (and `coach.ts`'s `dropRecovering` enforcement) still use one flat
+  48-hour `RECOVERY_DAYS` over `TRACKED_MUSCLES`. They agree for every 48-hour muscle;
+  for a 24-hour one (triceps, biceps, forearms, calves, abs) asked for on day one, the
+  engine will schedule it and the flat rule will then strip its exercises. Folding the
+  flat rule onto the registry is the remaining migration.
 
 Full detail on all of it, including the exact data contract the logging agent needs to
 honor (a canonical muscle name, never an invented one; a two-tier confidence fallback for
@@ -218,13 +282,15 @@ backend/src/services/recommendation/
 ├─ exercisePool.test.ts  — including the exact chest-roster repeat, pinned by name
 ├─ coverage.ts           — per-muscle map-level arithmetic, read by coverageLedger()
 ├─ coverage.test.ts
+├─ override.ts           — parseOverride: the one place the engine reads the user's words
+├─ override.test.ts      — including the exact sentence from the field report
 ├─ index.ts              — the ONLY public surface; everything else here is private
 └─ ENGINE.md             — this file
 ```
 
-`accessories.ts` and `override.ts` join this directory the same way every file above
-did — their own small, independently-testable pure functions, the same composition
-pattern `coach/rules.ts` already uses, just given a dedicated module boundary instead of
-living loose inside one large file. Adding a muscle, retuning a band, or reassigning
-which family a muscle belongs to stays a data edit in `registry.ts`; the code that reads
-it doesn't change.
+`accessories.ts` joins this directory the same way every file above did — its own
+small, independently-testable pure functions, the same composition pattern
+`coach/rules.ts` already uses, just given a dedicated module boundary instead of living
+loose inside one large file. Adding a muscle, retuning a band, or reassigning which
+family a muscle belongs to stays a data edit in `registry.ts`; the code that reads it
+doesn't change.

@@ -14,6 +14,7 @@ import {
 	recoveringExercises,
 	recoveryRule,
 	cardioRotationRule,
+	eligibleExercisesStatement,
 	exercisePoolInputsByMuscle,
 	strengthRotationRule,
 	stuckRosters,
@@ -1001,6 +1002,62 @@ describe("today's target, named instead of listed", () => {
 
 	it("says nothing when the session has no room for a single exercise", () => {
 		expect(targetPriorityStatement(neutralStats(), 0)).toBeNull();
+	});
+
+	// The override (ENGINE.md §The override). Field report 2026-09-16, second half: the
+	// user typed "generate chest workout" and chest — twelve sets six days ago, still in
+	// the 7-day window — had zero slots in the debt's own split, so the menu had no chest
+	// on it and the model reached for the same four movements from memory.
+	describe("when the user asked for something by name", () => {
+		it("makes the named muscle the whole target and says it was asked for", () => {
+			let stats = neutralStats();
+			stats = withStat(stats, "chest", { daysSince: 6, sets7d: 12 });
+			stats = withStat(stats, "shoulders", { daysSince: 6, sets7d: 3 });
+			const line = targetPriorityStatement(stats, 6, { family: null, muscles: ["chest"], avoid: [] });
+			expect(line).toContain("TODAY'S TARGET — push, AS ASKED:");
+			expect(line).toContain("Chest — 6 exercises");
+			expect(line).not.toContain("Shoulders");
+			expect(line).toContain("wins today over the rotation's own pick");
+		});
+
+		it("names a requested muscle that is still recovering, and targets it not at all", () => {
+			let stats = neutralStats();
+			stats = withStat(stats, "chest", { daysSince: 1 });
+			stats = withStat(stats, "quads", { daysSince: 10 });
+			const line = targetPriorityStatement(stats, 6, { family: null, muscles: ["chest"], avoid: [] });
+			expect(line).toContain("TODAY'S TARGET — legs:");
+			expect(line).toContain("They also asked for Chest, which is still inside its own recovery window");
+		});
+
+		it("says which muscle is off the plan at their request", () => {
+			const line = targetPriorityStatement(neutralStats(), 6, { family: "legs", muscles: [], avoid: ["calves"] });
+			expect(line).toContain("TODAY'S TARGET — legs, AS ASKED:");
+			expect(line).not.toContain("Calves —");
+			expect(line).toContain("Calves is off today's plan entirely, at their request.");
+		});
+
+		it("builds the menu for what was asked, not for the debt", () => {
+			let stats = neutralStats();
+			stats = withStat(stats, "chest", { daysSince: 6, sets7d: 12 });
+			const menu = eligibleExercisesStatement(
+				stats,
+				6,
+				{ chest: ["Incline Dumbbell Press", "Pec Deck"], shoulders: ["Lateral Raise"] },
+				{ family: null, muscles: ["chest"], avoid: [] }
+			);
+			expect(menu).toContain("Chest: Incline Dumbbell Press, Pec Deck");
+			expect(menu).not.toContain("Lateral Raise");
+		});
+
+		it("reaches the rules the prompt is handed, through buildRules", () => {
+			const move = (date: string, muscle: string) =>
+				activity(date, { exercise: `${muscle} move`, category: "strength", muscle_groups: [muscle], sets: 3, reps: 10, load_lb: 50 });
+			const features = computeFeatures({ facts: facts({ activities: [move(daysAgo(3), "chest"), move(daysAgo(9), "quads")] }) });
+			const rules = buildRules({ features, goals: [], override: { family: null, muscles: ["chest"], avoid: [] } });
+			const line = rules.statements.find((statement) => statement.startsWith("TODAY'S TARGET"));
+			expect(line).toContain("push, AS ASKED");
+			expect(line).toContain("Chest");
+		});
 	});
 
 	it("puts the line in the rules the prompt is handed, reading straight off computeFeatures", () => {

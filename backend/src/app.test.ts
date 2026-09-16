@@ -2877,6 +2877,35 @@ describe("coach — revising the brief, and never storing an empty one", () => {
 		expect(after.body.brief.id).toBe(good.body.brief.id);
 	});
 
+	// The override, end to end (services/recommendation ENGINE.md §The override): what the
+	// revision names is what the engine schedules and the prompt is handed, not merely a
+	// sentence the model is left to weigh against the rotation's own pick.
+	it("computes today's target for the muscle the revision asked for", async () => {
+		await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "generate chest workout", mode: "rewrite" });
+		expect(res.status).toBe(200);
+
+		const statements = coach.inputs.at(-1)!.rules.statements;
+		const target = statements.find((line) => line.startsWith("TODAY'S TARGET"));
+		expect(target).toContain("push, AS ASKED");
+		expect(target).toContain("Chest — ");
+		expect(target).not.toContain("Shoulders — ");
+	});
+
+	it("computes today's target for the family the revision asked for", async () => {
+		await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "switch to legs", mode: "rewrite" });
+
+		const target = coach.inputs.at(-1)!.rules.statements.find((line) => line.startsWith("TODAY'S TARGET"));
+		expect(target).toContain("TODAY'S TARGET — legs, AS ASKED");
+	});
+
 	it("keeps a rest day, which is the one brief that is allowed to have nothing in it", async () => {
 		coach.nextBrief = {
 			...SAMPLE_BRIEF,

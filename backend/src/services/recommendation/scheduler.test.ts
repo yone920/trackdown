@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allocateVolume, chooseFamily, definitionsFor, type MuscleStat } from "./scheduler.js";
+import { allocateVolume, chooseFamily, definitionsFor, scheduleTargets, type MuscleStat } from "./scheduler.js";
 import { musclesInFamily } from "./registry.js";
 
 // Every push/pull/legs muscle, "just cleared its own gate" — the neutral starting point
@@ -106,6 +106,94 @@ describe("allocateVolume", () => {
 		expect(allocation.map((item) => item.key).sort()).toEqual(
 			musclesInFamily("legs").map((muscle) => muscle.key).sort()
 		);
+	});
+
+	it("leaves a muscle the user asked to skip out of the split entirely", () => {
+		const allocation = allocateVolume("legs", neutralStats(), 4, new Set(["calves"]));
+		expect(allocation.map((item) => item.key)).not.toContain("calves");
+		expect(allocation.reduce((sum, item) => sum + item.slots, 0)).toBe(4);
+	});
+});
+
+// The override (ENGINE.md §The override): what the user asked for by name wins, for
+// that ask. The scenario is the real one from 2026-09-16 — twelve sets of chest six days
+// ago, still inside the 7-day window, so the debt gave chest ZERO slots on the very day
+// the user typed "generate chest workout" into the box.
+describe("scheduleTargets", () => {
+	const todayReal = (): MuscleStat[] => {
+		let stats = neutralStats();
+		stats = withStat(stats, "chest", { daysSince: 6, sets7d: 12 }); // exactly its floor: no shortfall
+		stats = withStat(stats, "shoulders", { daysSince: 6, sets7d: 3 });
+		stats = withStat(stats, "triceps", { daysSince: 6, sets7d: 0 });
+		return stats;
+	};
+
+	it("without a request, is exactly chooseFamily + allocateVolume", () => {
+		const stats = todayReal();
+		const schedule = scheduleTargets(stats, 6);
+		expect(schedule.family).toBe(chooseFamily(stats));
+		expect(schedule.allocation).toEqual(allocateVolume(schedule.family!, stats, 6));
+		expect(schedule).toMatchObject({ requested: [], recovering: [], avoided: [] });
+		// The bug, pinned: the debt alone gives chest nothing today.
+		expect(schedule.allocation.find((item) => item.key === "chest")?.slots).toBe(0);
+	});
+
+	it("gives a muscle asked for by name the whole session", () => {
+		const schedule = scheduleTargets(todayReal(), 6, { family: null, muscles: ["chest"], avoid: [] });
+		expect(schedule.family).toBe("push");
+		expect(schedule.allocation).toEqual([{ key: "chest", slots: 6 }]);
+		expect(schedule.requested).toEqual(["chest"]);
+	});
+
+	it("splits the session between the muscles asked for, whatever family each is in", () => {
+		const schedule = scheduleTargets(neutralStats(), 6, { family: null, muscles: ["biceps", "triceps"], avoid: [] });
+		expect(schedule.allocation.map((item) => item.key).sort()).toEqual(["biceps", "triceps"]);
+		expect(schedule.allocation.reduce((sum, item) => sum + item.slots, 0)).toBe(6);
+	});
+
+	it("forces a family asked for by name, split across its members as usual", () => {
+		const stats = todayReal(); // push would win on debt
+		const schedule = scheduleTargets(stats, 6, { family: "legs", muscles: [], avoid: [] });
+		expect(schedule.family).toBe("legs");
+		expect(schedule.allocation).toEqual(allocateVolume("legs", stats, 6));
+		expect(schedule.requested).toEqual([]);
+	});
+
+	it("will not force a muscle still inside its own recovery gate, and says which", () => {
+		let stats = neutralStats();
+		stats = withStat(stats, "chest", { daysSince: 1 }); // 48h gate
+		stats = withStat(stats, "quads", { daysSince: 10 });
+		const schedule = scheduleTargets(stats, 6, { family: null, muscles: ["chest"], avoid: [] });
+		expect(schedule.recovering).toEqual(["chest"]);
+		expect(schedule.requested).toEqual([]);
+		// The debt decides instead — and quads is the debt.
+		expect(schedule.family).toBe("legs");
+	});
+
+	it("keeps the cleared muscles when only some of a request is recovering", () => {
+		let stats = neutralStats();
+		stats = withStat(stats, "chest", { daysSince: 1 });
+		const schedule = scheduleTargets(stats, 4, { family: null, muscles: ["chest", "shoulders"], avoid: [] });
+		expect(schedule.requested).toEqual(["shoulders"]);
+		expect(schedule.recovering).toEqual(["chest"]);
+		expect(schedule.allocation).toEqual([{ key: "shoulders", slots: 4 }]);
+	});
+
+	it("a muscle asked to be skipped is out of the split and out of its family's case", () => {
+		let stats = neutralStats();
+		stats = withStat(stats, "chest", { daysSince: 7 }); // would win push on its own
+		stats = withStat(stats, "quads", { daysSince: 3 });
+		const schedule = scheduleTargets(stats, 6, { family: null, muscles: [], avoid: ["chest"] });
+		expect(schedule.family).toBe("legs");
+		expect(schedule.avoided).toEqual(["chest"]);
+		expect(schedule.allocation.map((item) => item.key)).not.toContain("chest");
+	});
+
+	it("never trained counts as cleared: nothing to recover from", () => {
+		let stats = neutralStats();
+		stats = withStat(stats, "neck", { daysSince: null });
+		const schedule = scheduleTargets(stats, 2, { family: null, muscles: ["neck"], avoid: [] });
+		expect(schedule.allocation).toEqual([{ key: "neck", slots: 2 }]);
 	});
 });
 

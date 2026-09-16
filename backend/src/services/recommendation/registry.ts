@@ -186,8 +186,11 @@ export const MUSCLES: readonly MuscleDefinition[] = [
 	},
 ] as const;
 
+/** A family that can be a day's theme — everything but the accessories. */
+export type RotationFamily = Exclude<MuscleFamily, "accessory">;
+
 /** The three families a day's theme rotates through. Accessories ride along; they never win the rotation. */
-export const ROTATION_FAMILIES: readonly Exclude<MuscleFamily, "accessory">[] = ["push", "pull", "legs"];
+export const ROTATION_FAMILIES: readonly RotationFamily[] = ["push", "pull", "legs"];
 
 const BY_KEY = new Map(MUSCLES.map((muscle) => [muscle.key, muscle]));
 

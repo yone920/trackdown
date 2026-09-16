@@ -38,9 +38,9 @@ function excessIdleDays(stat: MuscleStat, definition: MuscleDefinition): number 
  * way, chest's debt (5) beats back's (0) and the family that contains chest wins, which a
  * page of advisory text handed to a model did not reliably produce.
  *
- * `avoidMuscles` is for an explicit override (§override.ts, not yet built): a muscle the
- * user asked to skip today is treated as if it weren't a member of its family at all,
- * never as the family's excuse to lose.
+ * `avoidMuscles` is the override's (override.ts, applied by `scheduleTargets` below): a
+ * muscle the user asked to skip today is treated as if it weren't a member of its family
+ * at all, never as the family's excuse to lose.
  */
 export function chooseFamily(
 	stats: readonly MuscleStat[],
@@ -95,9 +95,26 @@ export interface MuscleAllocation {
 export function allocateVolume(
 	family: MuscleFamily,
 	stats: readonly MuscleStat[],
+	totalSlots: number,
+	avoidMuscles: ReadonlySet<string> = new Set()
+): MuscleAllocation[] {
+	return allocateAcross(
+		musclesInFamily(family).filter((muscle) => !avoidMuscles.has(muscle.key)),
+		stats,
+		totalSlots
+	);
+}
+
+/**
+ * The same apportionment over ANY set of muscles — a family's members minus the ones the
+ * user asked to skip, or exactly the muscles they asked for, whatever family each is in.
+ * `allocateVolume` is this over a family; the override is this over the request.
+ */
+export function allocateAcross(
+	members: readonly MuscleDefinition[],
+	stats: readonly MuscleStat[],
 	totalSlots: number
 ): MuscleAllocation[] {
-	const members = musclesInFamily(family);
 	if (members.length === 0 || totalSlots <= 0) return members.map((muscle) => ({ key: muscle.key, slots: 0 }));
 
 	const byKey = new Map(stats.map((stat) => [stat.key, stat]));
@@ -128,6 +145,95 @@ export function allocateVolume(
 	}
 
 	return members.map((muscle, index) => ({ key: muscle.key, slots: slots[index] as number }));
+}
+
+/** What a day is for, once the request (if any) has had its say. */
+export interface DaySchedule {
+	/** Today's theme — the request's when it named one, the debt's otherwise. */
+	family: MuscleFamily | null;
+	/** Every scheduled muscle and its share of the session's exercise slots. */
+	allocation: MuscleAllocation[];
+	/** Muscles the request named that ARE scheduled — the reason the split looks the way it does. */
+	requested: string[];
+	/** Muscles the request named that are still inside their own recovery gate, and so are not. */
+	recovering: string[];
+	/** Muscles the request said to leave out. */
+	avoided: string[];
+}
+
+/**
+ * `chooseFamily` + `allocateVolume`, with the override applied (ENGINE.md §The override).
+ * The one entry point a caller building a day should use, so the family the TARGET line
+ * names, the menu built for it, and the request that shaped both can never disagree.
+ *
+ * The override wins in exactly this order, and each step is the whole of what it does:
+ *
+ * 1. **Muscles named to be worked** get ALL the slots, split between them by the same
+ *    shortfall weighting a family's members get — "give me chest" is a chest day, and
+ *    "chest and triceps" splits between the two, whatever family either is in. A named
+ *    muscle still inside its OWN recovery gate is not forced (the same gate `chooseFamily`
+ *    holds every muscle to); it is reported in `recovering` so the brief can say why.
+ * 2. **A family named** ("legs") is forced, and its slots split across its members as
+ *    they always do.
+ * 3. **Otherwise** the debt decides, as it always did.
+ *
+ * `avoid` applies at every step: a muscle asked to be skipped is out of the allocation
+ * AND out of its family's case for the day (`chooseFamily`'s own `avoidMuscles`).
+ *
+ * It never touches the stats: a forced day is logged like any other and the schedule
+ * recomputes from real history next time.
+ */
+export function scheduleTargets(
+	stats: readonly MuscleStat[],
+	totalSlots: number,
+	override: { family: MuscleFamily | null; muscles: readonly string[]; avoid: readonly string[] } | null = null
+): DaySchedule {
+	const avoid = new Set(override?.avoid ?? []);
+	const avoided = [...avoid];
+	const byKey = new Map(stats.map((stat) => [stat.key, stat]));
+
+	const named = (override?.muscles ?? [])
+		.filter((key) => !avoid.has(key))
+		.map((key) => muscleByKey(key))
+		.filter((muscle): muscle is MuscleDefinition => muscle != null);
+	if (named.length > 0) {
+		const cleared: MuscleDefinition[] = [];
+		const recovering: string[] = [];
+		for (const muscle of named) {
+			const stat = byKey.get(muscle.key);
+			// No stat at all reads as never trained — nothing to recover from.
+			if (stat == null || excessIdleDays(stat, muscle) >= 0) cleared.push(muscle);
+			else recovering.push(muscle.key);
+		}
+		if (cleared.length > 0) {
+			return {
+				family: cleared[0]?.family ?? null,
+				allocation: allocateAcross(cleared, stats, totalSlots),
+				requested: cleared.map((muscle) => muscle.key),
+				recovering,
+				avoided,
+			};
+		}
+		// Everything they asked for is still recovering: the debt decides, and the brief is
+		// told what was asked for and why it was not done.
+		const family = override?.family ?? chooseFamily(stats, avoid);
+		return {
+			family,
+			allocation: family ? allocateVolume(family, stats, totalSlots, avoid) : [],
+			requested: [],
+			recovering,
+			avoided,
+		};
+	}
+
+	const family = override?.family ?? chooseFamily(stats, avoid);
+	return {
+		family,
+		allocation: family ? allocateVolume(family, stats, totalSlots, avoid) : [],
+		requested: [],
+		recovering: [],
+		avoided,
+	};
 }
 
 /** Convenience for a caller that only has muscle keys and wants their registry rows — used

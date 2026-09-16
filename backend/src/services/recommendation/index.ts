@@ -3,16 +3,17 @@
 // free to be reshaped without anything else in the codebase noticing, as long as what it
 // exports through here stays the same shape.
 //
-// Phases 1–3 (this file, today): the registry, the scheduler that reads it, and the
-// exercise-pool filters. None of it is wired into `coach/rules.ts` yet — that live system
-// still targets muscles and picks exercises by asking a model to read advisory prose.
-// Only once all of it is proven does coach.ts start asking THIS module, instead of the
-// model, which muscle today is for and what may fill its slots.
+// The registry, the scheduler that reads it (with the override applied), the
+// exercise-pool filters, and the coverage-level arithmetic — all live: `coach/coach.ts`
+// and `coach/rules.ts` ask THIS module, not the model, which muscles today is for, how
+// many slots each gets, and what may fill them.
 
 export { MUSCLES, ROTATION_FAMILIES, muscleByKey, musclesInFamily } from "./registry.js";
-export type { MuscleDefinition, MuscleFamily } from "./registry.js";
-export { allocateVolume, chooseFamily, definitionsFor } from "./scheduler.js";
-export type { MuscleAllocation, MuscleStat } from "./scheduler.js";
+export type { MuscleDefinition, MuscleFamily, RotationFamily } from "./registry.js";
+export { allocateAcross, allocateVolume, chooseFamily, definitionsFor, scheduleTargets } from "./scheduler.js";
+export type { DaySchedule, MuscleAllocation, MuscleStat } from "./scheduler.js";
+export { parseOverride } from "./override.js";
+export type { Override } from "./override.js";
 export {
 	ROTATION_WINDOW_SESSIONS,
 	chooseAnchor,

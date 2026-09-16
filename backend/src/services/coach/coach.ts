@@ -15,7 +15,7 @@ import type { ReferenceLoad } from "../fusion/schema.js";
 import { listGoals } from "../goals/store.js";
 import { formatClock, localDay, localMinutesOf, type IsoDate } from "../localTime.js";
 import { currentPlace, placeEquipment } from "../places.js";
-import { allocateVolume, chooseFamily, eligiblePool, muscleByKey } from "../recommendation/index.js";
+import { eligiblePool, muscleByKey, parseOverride, scheduleTargets } from "../recommendation/index.js";
 import { catalogCandidatesFor, catalogFactsFor, introductionCandidates } from "./catalog.js";
 import { completionOf, planIsComplete, sameMovement, type ExerciseCompletion } from "./completion.js";
 import { computeFeatures } from "./features.js";
@@ -359,6 +359,16 @@ export interface LoadInputsOptions {
 	now?: Date;
 	/** What the user typed or said in this ask. Appended to the day's saved contexts. */
 	context?: string | null;
+	/**
+	 * "Make it 8 exercises", "switch to legs". The day's current brief goes to the model
+	 * with this instruction and the whole revised brief comes back. Implies a regenerate:
+	 * there is nothing to revise into the cache.
+	 *
+	 * Read here as well as by the model: a muscle or family named in it — or in `context`
+	 * — is the engine's override for this ask (ENGINE.md §The override), and today's
+	 * target and menu are computed for what was asked rather than for the debt.
+	 */
+	revision?: string | null;
 }
 
 /**
@@ -369,7 +379,7 @@ export interface LoadInputsOptions {
 export async function loadCoachInputs(
 	db: Queryable,
 	userId: string,
-	{ date, tzOffsetMin, now = new Date(), context = null }: LoadInputsOptions
+	{ date, tzOffsetMin, now = new Date(), context = null, revision = null }: LoadInputsOptions
 ): Promise<CoachBriefInputs> {
 	const view = await computeDay(db, { userId, date, tzOffsetMin, now });
 
@@ -438,11 +448,16 @@ export async function loadCoachInputs(
 	// `targetPriorityStatement` names, so the menu built below can only ever agree with it.
 	// `sessionSizing` is a pure function of the stated session length, cheap enough to run
 	// twice rather than thread its result through `buildRules`'s own call to it.
+	//
+	// THIS ask's own words come first: a muscle or family named in the revision ("give me
+	// chest") or the context ("chest day" said while asking for a session) is the override,
+	// and the schedule is computed for it rather than for the debt (ENGINE.md §The
+	// override). The day's SAVED contexts are not read for this — a request is for the ask
+	// it was made in, not for the rest of the day.
 	const sizing = sessionSizing(plan?.session_minutes ?? null, plan?.session_minutes != null);
-	const family = chooseFamily(features.recommendation_stats);
-	const allocation = family
-		? allocateVolume(family, features.recommendation_stats, sizing.target_exercises).filter((item) => item.slots > 0)
-		: [];
+	const override = parseOverride([revision, context].filter((words) => words?.trim()).join(". "));
+	const schedule = scheduleTargets(features.recommendation_stats, sizing.target_exercises, override);
+	const allocation = schedule.allocation.filter((item) => item.slots > 0);
 
 	// The menu each targeted muscle may choose from — services/recommendation's
 	// eligiblePool(), fed real rotation history (re-keyed onto the registry by
@@ -480,6 +495,7 @@ export async function loadCoachInputs(
 		sessionMinutes: plan?.session_minutes ?? null,
 		introductionCandidates: candidates,
 		eligibleExercises,
+		override,
 	});
 
 	const statements = await dayContexts(db, userId, date);
@@ -612,12 +628,6 @@ async function storeBrief(
 export interface NextBriefOptions extends LoadInputsOptions {
 	/** Ask again even if the cache has this exact answer (POST /api/coach/next/regenerate). */
 	regenerate?: boolean;
-	/**
-	 * "Make it 8 exercises", "switch to legs". The day's current brief goes to the model
-	 * with this instruction and the whole revised brief comes back. Implies a regenerate:
-	 * there is nothing to revise into the cache.
-	 */
-	revision?: string | null;
 	/**
 	 * Which of the two explicit buttons this came from, when it came from one — *Add to
 	 * today's plan* or *Replace today's plan* (user decision 2026-08-31 §3). Null is the
