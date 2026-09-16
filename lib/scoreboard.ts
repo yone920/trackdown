@@ -1,4 +1,4 @@
-import { bodyRegions, lastTrainedWords, overdueRegions, SET_BAND_HIGH, SET_BAND_LOW, type BodyRegion } from '@/lib/body-map';
+import { bodyRegions, lastTrainedWords, overdueRegions, type BodyRegion } from '@/lib/body-map';
 import { dateLabel } from '@/lib/format';
 import { whenLabel } from '@/lib/progress-sections';
 import type {
@@ -372,7 +372,11 @@ export function muscleFacts(region: BodyRegion, lifts: readonly BoardLift[] = []
     headline,
     band,
     facts: [
-      { label: 'Target', value: `${SET_BAND_LOW}–${SET_BAND_HIGH} sets/wk` },
+      // This muscle's own band, not one flat range — null only when the server sent no
+      // reading for it at all.
+      ...(region.band_low != null && region.band_high != null
+        ? [{ label: 'Target', value: `${region.band_low}–${region.band_high} sets/wk` }]
+        : []),
       {
         label: 'Last trained',
         value: [

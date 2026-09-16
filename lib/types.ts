@@ -795,6 +795,15 @@ export type CoverageEntry = {
   sets_28d: number;
   unit: 'sets' | 'sessions';
   overdue: boolean;
+  /**
+   * The body map's four-state colour, judged server-side against this muscle's own
+   * MEV/MAV band (backend/src/services/recommendation/coverage.ts) rather than one flat
+   * band for everyone. Optional for one release, same as `sets_7d` above.
+   */
+  level?: 0 | 1 | 2 | 3;
+  /** This muscle's own weekly floor and ceiling (sets/wk); null for stretching, which has none. */
+  band_low?: number | null;
+  band_high?: number | null;
 };
 
 /** Light ×0.5, moderate ×1, vigorous ×2 — how a minute of cardio is counted. */

@@ -218,13 +218,14 @@ export const WALK: BoardCardioRow = {
 
 /**
  * The coverage ledger, as the server sends it: chest worked hard this week, biceps lightly,
- * core three weeks ago and overdue, calves never seen at all.
+ * abs three weeks ago and overdue, calves never seen at all. Levels and bands are each
+ * muscle's own (backend/src/services/recommendation/registry.ts), not one flat range.
  */
 export const COVERAGE: CoverageEntry[] = [
-  { key: 'calves', label: 'calves', days_since: null, last_date: null, sets_7d: 0, sets_14d: 0, sets_28d: 0, unit: 'sets', overdue: true },
-  { key: 'core', label: 'core', days_since: 21, last_date: '2026-08-10', sets_7d: 0, sets_14d: 0, sets_28d: 3, unit: 'sets', overdue: true },
-  { key: 'chest', label: 'chest', days_since: 1, last_date: '2026-08-30', sets_7d: 12, sets_14d: 18, sets_28d: 18, unit: 'sets', overdue: false },
-  { key: 'biceps', label: 'biceps', days_since: 5, last_date: '2026-08-26', sets_7d: 3, sets_14d: 6, sets_28d: 9, unit: 'sets', overdue: false },
+  { key: 'calves', label: 'Calves', days_since: null, last_date: null, sets_7d: 0, sets_14d: 0, sets_28d: 0, unit: 'sets', overdue: true, level: 0, band_low: 12, band_high: 16 },
+  { key: 'abs', label: 'Abs', days_since: 21, last_date: '2026-08-10', sets_7d: 0, sets_14d: 0, sets_28d: 3, unit: 'sets', overdue: true, level: 1, band_low: 16, band_high: 20 },
+  { key: 'chest', label: 'Chest', days_since: 1, last_date: '2026-08-30', sets_7d: 12, sets_14d: 18, sets_28d: 18, unit: 'sets', overdue: false, level: 2, band_low: 12, band_high: 20 },
+  { key: 'biceps', label: 'Biceps', days_since: 5, last_date: '2026-08-26', sets_7d: 3, sets_14d: 6, sets_28d: 9, unit: 'sets', overdue: false, level: 1, band_low: 8, band_high: 14 },
 ];
 
 export function makeBoard(overrides: Partial<TrainingBoard> = {}): TrainingBoard {

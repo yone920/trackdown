@@ -1,16 +1,13 @@
-// Phase 4, the safe half: the level a muscle's week lands on, judged against ITS OWN
-// MEV/MAV/MRV band instead of the one flat 10–20 sets/week band `lib/body-map.ts` holds
-// every muscle to today. Same four states, same meaning, as that file's own `levelOf` —
-// this just reads the registry for the numbers instead of a single constant.
+// Phase 4: the level a muscle's week lands on, judged against ITS OWN MEV/MAV/MRV band
+// instead of the one flat 10–20 sets/week band `lib/body-map.ts` used to hold every
+// muscle to. Same four states, same meaning, as that file's own retired `levelOf` — this
+// just reads the registry for the numbers instead of a single constant.
 //
-// Deliberately NOT wired into anything live in this commit. `coach/features.ts`'s
-// `coverageLedger()` — the one function that actually produces what the map and the
-// coach's own prompt both read — still uses its own, older LEDGER_MUSCLES vocabulary
-// (twelve tokens: no lower_back, no neck, "core" instead of a separate "abs"). Migrating
-// it onto this registry changes what the live coach's COVERAGE DEBTS text says and what a
-// real user's map shows — a production behavior change, not an additive one, and every
-// other phase of this module was kept additive on purpose. That migration is its own
-// deliberate, reviewed step; this file is the arithmetic it will call once it happens.
+// Live in `coach/features.ts`'s `coverageLedger()` (ENGINE.md §4b), which reads this
+// registry's fourteen muscles instead of its own older LEDGER_MUSCLES vocabulary (twelve
+// tokens: no lower_back, no neck, "core" instead of a separate "abs") and stamps each
+// entry with this function's answer plus the muscle's own band, for `lib/body-map.ts` to
+// draw and quote directly instead of recomputing a flat-band level of its own.
 
 import type { MuscleDefinition } from "./registry.js";
 import type { MuscleStat } from "./scheduler.js";

@@ -6,13 +6,12 @@ import {
 	computeFeatures,
 	coverageLedger,
 	exerciseFeatures,
-	LEDGER_MUSCLES,
 	STRETCHING_KEY,
 	muscleFeatures,
 	recommendationMuscleStats,
 	weightFeature,
 } from "./features.js";
-import { chooseFamily } from "../recommendation/index.js";
+import { chooseFamily, MUSCLES } from "../recommendation/index.js";
 
 // The coach's inputs, without a database and without a provider. Everything the brief is
 // built on is a pure function of a 28-day DayFacts window, which is what makes "why did it
@@ -353,11 +352,13 @@ describe("the coverage ledger", () => {
 	const stretch = (date: string) =>
 		activity(date, { exercise: "Stretching", category: "mobility", muscle_groups: ["full_body"], duration_min: 10 });
 
-	it("has a row for every muscle it tracks, plus stretching, whether or not it was trained", () => {
+	it("has a row for every muscle the registry knows, plus stretching, whether or not it was trained", () => {
 		const ledger = coverageLedger(facts({ activities: [squat(TODAY)] }));
-		expect(ledger).toHaveLength(LEDGER_MUSCLES.length + 1);
+		expect(ledger).toHaveLength(MUSCLES.length + 1);
 		expect(find(ledger, STRETCHING_KEY)?.label).toBe("stretching");
 		expect(ledger.map((entry) => entry.key)).toContain("upper_back");
+		// Two rows the old twelve-muscle ledger had nowhere to put (ENGINE.md §4b).
+		expect(ledger.map((entry) => entry.key)).toEqual(expect.arrayContaining(["lower_back", "neck"]));
 	});
 
 	it("counts sets in 7, 14 and 28 days, and days since it was last served", () => {
@@ -369,7 +370,7 @@ describe("the coverage ledger", () => {
 		// The same rows pay into every muscle they name.
 		expect(find(ledger, "glutes")).toMatchObject({ sets_7d: 4, sets_14d: 7, sets_28d: 12 });
 		// The seven-day count is what the body map colours a region by, so it is counted here
-		// rather than on the phone: LEDGER_MUSCLES' token mapping exists in one place.
+		// rather than on the phone: the registry's token mapping exists in one place.
 		expect(find(ledger, "chest")).toMatchObject({ sets_7d: 0, sets_28d: 0 });
 	});
 
@@ -383,10 +384,10 @@ describe("the coverage ledger", () => {
 				],
 			})
 		);
-		// abs + obliques are one entry called "core"; back + traps are "upper back". And a
+		// abs + obliques are one entry called "abs"; back + traps are "upper back". And a
 		// row tagged with both halves is counted once for the entry, not twice.
-		expect(find(ledger, "core")).toMatchObject({ label: "core", days_since: 2, sets_28d: 5 });
-		expect(find(ledger, "upper_back")).toMatchObject({ label: "upper back", days_since: 4, sets_28d: 4 });
+		expect(find(ledger, "abs")).toMatchObject({ label: "Abs", days_since: 2, sets_28d: 5 });
+		expect(find(ledger, "upper_back")).toMatchObject({ label: "Upper back", days_since: 4, sets_28d: 4 });
 	});
 
 	it("counts stretching in SESSIONS, because a stretch has no sets", () => {
@@ -405,7 +406,7 @@ describe("the coverage ledger", () => {
 	it("calls an entry overdue at two weeks, and 'never' the largest debt there is", () => {
 		const ledger = coverageLedger(facts({ activities: [squat(daysAgo(1)), crunch(daysAgo(15))] }));
 		expect(find(ledger, "quads")?.overdue).toBe(false);
-		expect(find(ledger, "core")).toMatchObject({ days_since: 15, overdue: true });
+		expect(find(ledger, "abs")).toMatchObject({ days_since: 15, overdue: true });
 		expect(find(ledger, "calves")).toMatchObject({ days_since: null, overdue: true, debt_days: 29 });
 		// Never-served entries sort above a 15-day debt, which sorts above everything fresh.
 		expect(ledger[0]?.days_since).toBeNull();
@@ -420,6 +421,37 @@ describe("the coverage ledger", () => {
 	it("rides on computeFeatures, so the prompt and the board read one ledger", () => {
 		const features = computeFeatures({ facts: facts({ activities: [squat(daysAgo(2))] }) });
 		expect(features.coverage).toEqual(coverageLedger(facts({ activities: [squat(daysAgo(2))] })));
+	});
+
+	// ENGINE.md §4b: each muscle's colour level is judged against ITS OWN band, not one flat
+	// 10–20 sets/week band applied to everyone.
+	it("judges level against each muscle's own band, and carries the band for the sheet", () => {
+		// Forearms' MAV band is 6–10 — 8 sets lands inside it, though it would read as
+		// "under the band" against the old flat 10–20 the app used to hold every muscle to.
+		const forearmWork = activity(daysAgo(1), {
+			exercise: "Wrist Curl",
+			category: "strength",
+			muscle_groups: ["forearms"],
+			sets: 8,
+			reps: 15,
+		});
+		const ledger = coverageLedger(facts({ activities: [forearmWork] }));
+		const forearms = find(ledger, "forearms");
+		expect(forearms).toMatchObject({ sets_7d: 8, level: 2, band_low: 6, band_high: 10 });
+		// Untouched: never served, level 0, still carries its band for the sheet to quote.
+		const quads = find(ledger, "quads");
+		expect(quads).toMatchObject({ days_since: null, level: 0, band_low: 12, band_high: 18 });
+	});
+
+	it("gives stretching a level without a volume band, since it has no MEV/MAV of its own", () => {
+		const seenThisWeek = coverageLedger(facts({ activities: [stretch(daysAgo(1))] }));
+		expect(find(seenThisWeek, STRETCHING_KEY)).toMatchObject({ level: 2, band_low: null, band_high: null });
+
+		const seenLastMonth = coverageLedger(facts({ activities: [stretch(daysAgo(9))] }));
+		expect(find(seenLastMonth, STRETCHING_KEY)).toMatchObject({ level: 1, band_low: null, band_high: null });
+
+		const never = coverageLedger(facts({ activities: [] }));
+		expect(find(never, STRETCHING_KEY)).toMatchObject({ level: 0, band_low: null, band_high: null });
 	});
 });
 

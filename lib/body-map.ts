@@ -33,6 +33,8 @@ export type BodySlug =
   | 'forearm'
   | 'gluteal'
   | 'hamstring'
+  | 'lower-back'
+  | 'neck'
   | 'obliques'
   | 'quadriceps'
   | 'trapezius'
@@ -40,15 +42,20 @@ export type BodySlug =
   | 'upper-back';
 
 /**
- * The twelve ledger muscles, and where each one is on the figure.
+ * The fourteen registry muscles (`backend/src/services/recommendation/registry.ts`), and
+ * where each one is on the figure.
  *
  * Two of these are a judgement rather than a lookup, and they are worth the note. The
  * package has no `lats` slug at all — its back is `trapezius`, `upper-back` and
  * `lower-back`. So **`lats` takes `upper-back`** (the wing under the shoulder blades, which
- * is what that path covers) and **the ledger's `upper_back` takes `trapezius`** (the traps
- * are the part of an upper back anybody can point at). The ledger's own tokens already say
+ * is what that path covers) and **the registry's `upper_back` takes `trapezius`** (the traps
+ * are the part of an upper back anybody can point at). The registry's own tokens already say
  * these are two different things — `lats` is `lats`, `upper_back` is `back` + `traps` — and
  * this is the closest the drawing gets to saying it too.
+ *
+ * `lower_back` and `neck` are new here (ENGINE.md §4b): the package draws both
+ * (`lower-back` on the back figure, `neck` on both), so nothing about the drawing itself
+ * blocked adding them the way the old twelve-muscle ledger never had a place for them.
  *
  * `stretching` is on the ledger and deliberately not here: it is a category, not a place on
  * a body, and the coach reads it. Nothing is lost by leaving it off a map of muscles.
@@ -59,27 +66,23 @@ export const BODY_REGIONS: readonly { key: string; label: string; slugs: readonl
   { key: 'biceps', label: 'Biceps', slugs: ['biceps'] },
   { key: 'triceps', label: 'Triceps', slugs: ['triceps'] },
   { key: 'forearms', label: 'Forearms', slugs: ['forearm'] },
-  { key: 'core', label: 'Core', slugs: ['abs', 'obliques'] },
+  { key: 'abs', label: 'Abs', slugs: ['abs', 'obliques'] },
   { key: 'lats', label: 'Lats', slugs: ['upper-back'] },
   { key: 'upper_back', label: 'Upper back', slugs: ['trapezius'] },
   { key: 'glutes', label: 'Glutes', slugs: ['gluteal'] },
   { key: 'quads', label: 'Quads', slugs: ['quadriceps'] },
   { key: 'hamstrings', label: 'Hamstrings', slugs: ['hamstring'] },
   { key: 'calves', label: 'Calves', slugs: ['calves'] },
+  { key: 'lower_back', label: 'Lower back', slugs: ['lower-back'] },
+  { key: 'neck', label: 'Neck', slugs: ['neck'] },
 ];
-
-/**
- * The weekly band a working muscle is aimed at — the number the ramp is measured against.
- * Ten to twenty hard sets a week is the range every serious programme lands in, and it is
- * a *band* rather than a target because the top of it is not better than the middle.
- */
-export const SET_BAND_LOW = 10;
-export const SET_BAND_HIGH = 20;
 
 /**
  * Four states, and the first one is not a judgement: `0` is "nothing in four weeks", which
  * is what an untouched region looks like on the ledger. The three above it are volume this
- * week against the band — under it, in it, past it.
+ * week against the muscle's OWN band — under it, in it, past it
+ * (`backend/src/services/recommendation/coverage.ts`'s `coverageLevel`, computed
+ * server-side and sent as `CoverageEntry.level`; there is no flat band left to compute here).
  */
 export type CoverageLevel = 0 | 1 | 2 | 3;
 
@@ -95,11 +98,17 @@ export const LEVEL_COLOR: Record<CoverageLevel, string> = {
   3: C.accent,
 };
 
+/**
+ * No numbers here on purpose: each muscle judges its week against its own band now
+ * (forearms' floor is not chest's), so a legend that quoted one range would be right about
+ * at most one of fourteen regions. The per-region number, when there is one, is in its own
+ * detail line (`regionDetail`) instead.
+ */
 export const LEVEL_LABEL: Record<CoverageLevel, string> = {
   0: 'Not in four weeks',
-  1: `Under ${SET_BAND_LOW}`,
-  2: `${SET_BAND_LOW}–${SET_BAND_HIGH}`,
-  3: `Over ${SET_BAND_HIGH}`,
+  1: 'Under this week',
+  2: 'In range',
+  3: 'Over this week',
 };
 
 export type BodyRegion = {
@@ -115,32 +124,12 @@ export type BodyRegion = {
   days_since: number | null;
   last_date: string | null;
   unit: 'sets' | 'sessions';
-  /** "Biceps — 3 sets this week · last trained Tue · target 10+/wk". */
+  /** This muscle's own weekly floor and ceiling (sets/wk); null when the server sent none. */
+  band_low: number | null;
+  band_high: number | null;
+  /** "Biceps — 3 sets this week · last trained Tue · target 8+ sets/wk". */
   detail: string;
 };
-
-/**
- * Which level a ledger entry's week lands on.
- *
- * Level 0 is `days_since == null` and **nothing else** — the ledger has not seen this muscle
- * in four weeks. Deliberately not "and no sets either": a treadmill walk serves the calves
- * and the glutes and records no sets at all, so a muscle can be `days_since: 0` with
- * `sets_28d: 0`, and grey there would say "not in four weeks" about something trained this
- * morning. Checked against the live account, which is exactly that shape.
- */
-export function levelOf(entry: {
-  sets_7d?: number;
-  sets_28d: number;
-  days_since: number | null;
-}): CoverageLevel {
-  if (entry.days_since == null) return 0;
-  const week = entry.sets_7d ?? 0;
-  if (week >= SET_BAND_LOW && week <= SET_BAND_HIGH) return 2;
-  if (week > SET_BAND_HIGH) return 3;
-  // Served inside the window but not this week — or served lightly. Either way it is the
-  // faintest step and not the grey, because grey means "I have never seen this".
-  return 1;
-}
 
 /** "today", "Tue", "never" — how long ago, in the fewest words that are still true. */
 export function lastTrainedWords(daysSince: number | null, lastDate: string | null | undefined): string {
@@ -172,22 +161,33 @@ export function regionDetail(region: Omit<BodyRegion, 'detail'>): string {
   return [
     `${region.label} — ${volume}`,
     lastTrainedWords(region.days_since, region.last_date),
-    `target ${SET_BAND_LOW}+ sets/wk`,
-  ].join(' · ');
+    // This muscle's own floor, not a flat one — a server that sent no band (an old release,
+    // or a region it has no reading for at all) simply leaves the line without one.
+    region.band_low != null ? `target ${region.band_low}+ sets/wk` : null,
+  ]
+    .filter((line): line is string => line != null)
+    .join(' · ');
 }
 
 /**
- * The ledger as twelve regions, in the order they are defined (the map is a picture, so a
+ * The ledger as fourteen regions, in the order they are defined (the map is a picture, so a
  * stable order beats the ledger's debt-first sort — the *list* under it is what is sorted).
  *
  * A ledger entry the server did not send is still drawn, grey and with nothing to say: a
  * missing muscle on a body map is a hole, and "I have no reading for this" is a state.
+ *
+ * `level` is read straight off the entry (`backend/src/services/recommendation/coverage.ts`'s
+ * `coverageLevel`, computed server-side against this muscle's own band) rather than
+ * recomputed here — the flat 10–20 band this file used to hold every muscle to is gone.
+ * Served-but-unlabelled (an entry with no `level`, from a server before this shipped) reads
+ * as the faintest step rather than grey, matching the same "not zero, just unknown" instinct
+ * the old flat-band fallback already had.
  */
 export function bodyRegions(coverage: readonly CoverageEntry[] | undefined): BodyRegion[] {
   const byKey = new Map((coverage ?? []).map((entry) => [entry.key, entry]));
   return BODY_REGIONS.map((region) => {
     const entry = byKey.get(region.key) ?? null;
-    const level = entry ? levelOf(entry) : 0;
+    const level: CoverageLevel = entry?.level ?? (entry?.days_since == null ? 0 : 1);
     const base = {
       key: region.key,
       label: region.label,
@@ -200,6 +200,8 @@ export function bodyRegions(coverage: readonly CoverageEntry[] | undefined): Bod
       days_since: entry?.days_since ?? null,
       last_date: entry?.last_date ?? null,
       unit: entry?.unit ?? ('sets' as const),
+      band_low: entry?.band_low ?? null,
+      band_high: entry?.band_high ?? null,
     };
     return { ...base, detail: regionDetail(base) };
   });

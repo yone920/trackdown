@@ -24,31 +24,32 @@ back.** Every failure above happened because that line was blurry.
 |---|---|---|
 | 1 | The muscle registry (`registry.ts`) | **Done** |
 | 2 | The scheduler: family + volume selection (`scheduler.ts`) | **Done, and wired in** |
-| 3 | Exercise pool: rotation, images, equipment, the anchor lift (`exercisePool.ts`) | **Done, not wired in** |
-| 4a | Per-muscle coverage-level arithmetic (`coverage.ts`) | **Done, not wired in** |
-| 4b | `coverageLedger()` and `lib/body-map.ts` actually migrated onto it | **Not done — deliberately** |
+| 3 | Exercise pool: rotation, images, equipment, the anchor lift (`exercisePool.ts`) | **Done, and wired in** |
+| 4a | Per-muscle coverage-level arithmetic (`coverage.ts`) | **Done, and wired in** |
+| 4b | `coverageLedger()` and `lib/body-map.ts` migrated onto the registry | **Done** |
 
-**Phase 2 is live.** `coach/features.ts`'s `recommendationMuscleStats()` computes real
-`MuscleStat[]` for this registry's fourteen muscles straight from the activity window
-(its own pass, not a reshaping of `muscleFeatures()` — see that function's own doc), and
-`coach/rules.ts`'s `targetPriorityStatement()` now calls `chooseFamily` +
-`allocateVolume` on those stats instead of a single lookup. A real brief's TODAY'S TARGET
-line is computed by this module now, not guessed by a model reading a list.
+**Phases 2 through 4 are all live.** `coach/features.ts`'s `recommendationMuscleStats()`
+computes real `MuscleStat[]` for this registry's fourteen muscles straight from the
+activity window (its own pass, not a reshaping of `muscleFeatures()` — see that
+function's own doc), and `coach/rules.ts`'s `targetPriorityStatement()` calls
+`chooseFamily` + `allocateVolume` on those stats. `coach/coach.ts`'s `loadCoachInputs`
+recomputes that same family and allocation ahead of the model, fetches each targeted
+muscle's catalogue candidates (`catalog.ts`'s `catalogCandidatesFor`), re-keys real
+rotation history onto the registry (`rules.ts`'s `exercisePoolInputsByMuscle`), and runs
+`eligiblePool()` — the stated place's equipment included — before handing the result to
+`rules.ts`'s `eligibleExercisesStatement()` as the brief's TODAY'S MENU line. A real
+brief's target AND its exercise menu are both computed by this module now, not guessed
+by a model reading a list.
 
-Phase 3 (`exercisePool.ts`) and 4a (`coverage.ts`) are built and tested but NOT called
-from anywhere live yet — exercise selection is still the model choosing from the full
-catalogue, and the coverage map still reads the old flat band. Wiring each in is its own
-next step, same discipline as Phase 2's wiring: real data adapter, full test coverage,
-reviewed before it touches a live brief.
-
-**4b is called out separately because it is not additive.** `coverageLedger()` feeds
-BOTH the live coach prompt's COVERAGE DEBTS text and the Progress tab's map, and it still
-speaks its own, older vocabulary (`LEDGER_MUSCLES`: twelve tokens, no `lower_back`, no
-`neck`, `"core"` where this registry has a standalone `abs`). Migrating it is a real
-production change to what today's brief says and what today's map shows — not a new,
-inert file sitting beside the old one, the way Phases 1 through 4a were. It's the right
-next step, but it's a deliberately separate one, reviewed on its own rather than folded
-into a run of additive commits.
+`coverageLedger()` (`coach/features.ts`) reads this registry's fourteen muscles instead
+of its own older `LEDGER_MUSCLES` vocabulary, and stamps each entry with
+`coverage.ts`'s `coverageLevel()` plus that muscle's own `band_low`/`band_high` — the
+level judged against ITS OWN MAV band, not one flat 10–20 sets/week range for everyone.
+`lib/body-map.ts` reads `level`/`band_low`/`band_high` straight off the entry the server
+sends rather than recomputing a flat-band level locally, and `BODY_REGIONS` carries all
+fourteen muscles, `abs` where the old map had `core`, plus `lower_back` and `neck` — both
+real slugs in `react-native-body-highlighter` (`lower-back` on the back figure, `neck` on
+both) that the old twelve-muscle map had nowhere to put.
 
 ## The registry (`registry.ts`)
 
@@ -151,17 +152,44 @@ already seen is a smaller failure than prescribing equipment that isn't there or
 with no picture behind it; `coach.ts`'s own `dropRecovering` documents the identical
 principle ("it will not empty a training day").
 
-## The coverage-level arithmetic (`coverage.ts`)
+**Live in `coach/coach.ts`'s `loadCoachInputs`.** The place's equipment is read ahead of
+`buildRules` now (it used to be read after); `chooseFamily` + `allocateVolume` run once
+there, over the same `features.recommendation_stats` and session sizing
+`targetPriorityStatement` uses, to name today's targeted muscles. For each one,
+`catalog.ts`'s `catalogCandidatesFor` fetches its catalogue candidates,
+`rules.ts`'s `exercisePoolInputsByMuscle` re-keys real rotation history and load history
+onto it, and `eligiblePool()` narrows the two down to what the muscle may actually
+choose from today. The result is a `Record<muscleKey, string[]>` handed into
+`buildRules` as `eligibleExercises`, which `rules.ts`'s `eligibleExercisesStatement`
+turns into the brief's TODAY'S MENU line — recomputing the same family and allocation
+`targetPriorityStatement` already named, so the two lines can never disagree about which
+muscles are today's target.
+
+## The coverage-level arithmetic (`coverage.ts`) — live
 
 `coverageLevel(stat, muscle)` — the same four-state judgment `lib/body-map.ts`'s own
-`levelOf()` already makes (0 = not seen in the window at all, 1 = served but under the
-floor, 2 = inside the band, 3 = over the ceiling), except level 2 and 3 are judged
-against THIS muscle's own `mavLow`/`mavHigh` instead of one 10–20 sets/week band applied
-to everyone. Ten sets of forearms work (its own MAV band) means something different from
-ten sets of chest work (short of chest's own floor) — the flat band could never say that,
-and this is the arithmetic that can.
+`levelOf()` used to make locally (0 = not seen in the window at all, 1 = served but
+under the floor, 2 = inside the band, 3 = over the ceiling), except level 2 and 3 are
+judged against THIS muscle's own `mavLow`/`mavHigh` instead of one 10–20 sets/week band
+applied to everyone. Ten sets of forearms work (its own MAV band) means something
+different from ten sets of chest work (short of chest's own floor) — the flat band could
+never say that, and this is the arithmetic that can.
 
-Not called from anywhere yet — see 4b above.
+**Live in `coach/features.ts`'s `coverageLedger()`**, which now reads this registry's
+fourteen muscles instead of its own older `LEDGER_MUSCLES` (twelve tokens, no
+`lower_back`, no `neck`, `"core"` where this registry has a standalone `abs`) and stamps
+each entry with `coverageLevel()`'s answer plus that muscle's own `band_low`/`band_high`
+(`mavLow`/`mavHigh`, `null` for the `stretching` entry, which has no volume-landmark
+band of its own). `catalog.ts`'s `introductionCandidates` reads the registry directly
+(`muscleByKey`) for the same lookup `LEDGER_MUSCLES.find()` used to do.
+
+`lib/body-map.ts` no longer computes a level itself: `bodyRegions()` reads
+`entry.level`/`entry.band_low`/`entry.band_high` straight off what the server sends,
+`BODY_REGIONS` carries all fourteen keys (`abs` where the old map had `core`, plus
+`lower_back` and `neck`), and the legend and detail line quote a muscle's own floor
+instead of one number for everyone. Both `lower-back` and `neck` are real slugs in
+`react-native-body-highlighter` (`lower-back` on the back figure, `neck` on both) — the
+old twelve-muscle vocabulary simply never had anywhere to put them.
 
 ## What's coming, and what's left after that
 
@@ -173,12 +201,6 @@ Not called from anywhere yet — see 4b above.
   only. It never touches the debt ledger — the ledger keeps reflecting whatever actually
   gets logged, so the schedule just recomputes normally next time. `chooseFamily`'s
   `avoidMuscles` parameter already exists for this; nothing calls it yet.
-- **4b**, above: `coverageLedger()` and `lib/body-map.ts` actually reading this module
-  instead of `LEDGER_MUSCLES` and the flat band.
-- **Wiring the whole module into `coach/coach.ts`**, so a real brief is built from
-  `chooseFamily` / `allocateVolume` / `eligiblePool` instead of a model reading advisory
-  prompt text. This is the step every phase above has been building toward, and none of
-  them do it on their own.
 
 Full detail on all of it, including the exact data contract the logging agent needs to
 honor (a canonical muscle name, never an invented one; a two-tier confidence fallback for
@@ -194,7 +216,7 @@ backend/src/services/recommendation/
 ├─ scheduler.test.ts     — including the exact real-account scenario, pinned by name
 ├─ exercisePool.ts       — rotation, media, equipment filters + the anchor exception
 ├─ exercisePool.test.ts  — including the exact chest-roster repeat, pinned by name
-├─ coverage.ts           — per-muscle map-level arithmetic (not wired in yet — see 4b)
+├─ coverage.ts           — per-muscle map-level arithmetic, read by coverageLedger()
 ├─ coverage.test.ts
 ├─ index.ts              — the ONLY public surface; everything else here is private
 └─ ENGINE.md             — this file

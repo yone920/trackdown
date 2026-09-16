@@ -148,20 +148,20 @@ describe('the strength row', () => {
 describe('the coverage row', () => {
   it('counts what has been served and names what the rotation owes', () => {
     const row = coverageRow(COVERAGE);
-    expect(row.total).toBe(12);
+    expect(row.total).toBe(14);
     expect(row.served).toBe(3);
-    expect(row.line).toBe('3 of 12 served · quiet: calves, core');
-    expect(row.chips).toHaveLength(12);
+    expect(row.line).toBe('3 of 14 served · quiet: calves, abs');
+    expect(row.chips).toHaveLength(14);
   });
 
   it('colours a chip the way the figure colours a region', () => {
     const by = new Map(coverageRow(COVERAGE).chips.map((chip) => [chip.key, chip.tone]));
-    // Chest: twelve sets, inside the band.
+    // Chest: twelve sets, inside its own band.
     expect(by.get('chest')).toBe('good');
-    // Biceps: three sets, served but under it.
+    // Biceps: three sets, served but under its own floor.
     expect(by.get('biceps')).toBe('accent');
-    // Core: overdue. Calves: never seen. Both dim — the rotation owes them a turn.
-    expect(by.get('core')).toBe('dim');
+    // Abs: overdue. Calves: never seen. Both dim — the rotation owes them a turn.
+    expect(by.get('abs')).toBe('dim');
     expect(by.get('calves')).toBe('dim');
     // A muscle the ledger did not mention at all is still a chip, and still honest.
     expect(by.get('hamstrings')).toBe('dim');
@@ -175,7 +175,7 @@ describe('the muscle popup', () => {
 
     expect(facts.headline).toBe('12 sets this week');
     expect(facts.band).toBe('in the band');
-    expect(facts.facts[0]).toEqual({ label: 'Target', value: '10–20 sets/wk' });
+    expect(facts.facts[0]).toEqual({ label: 'Target', value: '12–20 sets/wk' });
     expect(facts.facts[1]?.value).toContain('trained yesterday');
     expect(facts.facts[1]?.value).toContain('Bench Press');
     expect(facts.facts[2]).toEqual({ label: 'Fed by', value: 'Bench Press · 3 sets' });
@@ -190,7 +190,7 @@ describe('the muscle popup', () => {
   });
 
   // A treadmill walk serves the glutes and the calves and records no sets at all, so the
-  // colour and the number must tell one story (lib/body-map.ts §levelOf).
+  // colour and the number must tell one story (lib/body-map.ts §regionDetail).
   it('says where the credit came from when a muscle was served with no sets', () => {
     const walked = bodyRegions([
       { key: 'glutes', label: 'glutes', days_since: 0, last_date: '2026-08-31', sets_7d: 0, sets_14d: 0, sets_28d: 0, unit: 'sets', overdue: false },

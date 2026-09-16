@@ -229,7 +229,7 @@ describe('Progress — one screenful of live facts', () => {
     renderProgress();
     await boardReady();
 
-    expect(screen.getByTestId('coverage-line').props.children).toBe('3 of 12 served · quiet: calves, core');
+    expect(screen.getByTestId('coverage-line').props.children).toBe('3 of 14 served · quiet: calves, abs');
     expect(screen.getByTestId('coverage-figures')).toBeTruthy();
     expect(within(screen.getByTestId('coverage-front')).getByTestId('part-front-chest')).toBeTruthy();
     expect(screen.getByTestId('coverage-back')).toBeTruthy();
@@ -330,7 +330,7 @@ describe('Progress — the muscle popup', () => {
     expect(zoomed.getByTestId('part-front-chest')).toBeTruthy();
     expect(zoomed.queryByTestId('part-front-biceps')).toBeNull();
     // The fact stack: the band, when it was last trained, and what is feeding it.
-    expect(screen.getByTestId('muscle-fact-target').props.children).toBe('10–20 sets/wk');
+    expect(screen.getByTestId('muscle-fact-target').props.children).toBe('12–20 sets/wk');
     expect(screen.getByTestId('muscle-fact-last-trained').props.children).toContain('Bench Press');
     expect(screen.getByTestId('muscle-fact-fed-by').props.children).toBe('Bench Press · 3 sets');
   });
@@ -358,7 +358,7 @@ describe('Progress — an account with nothing on it', () => {
     // Nothing lifted is nothing waiting: no count trails the news.
     expect(screen.getByTestId('strength-news').props.children[0]).toBe('Nothing lifted in four weeks');
     expect(screen.queryByTestId('strength-waiting')).toBeNull();
-    expect(screen.getByTestId('coverage-line').props.children).toBe('0 of 12 served');
+    expect(screen.getByTestId('coverage-line').props.children).toBe('0 of 14 served');
     // Cardio is not a row on the screen of somebody who lifts and does not run.
     expect(screen.queryByTestId('tile-cardio')).toBeNull();
     expect(screen.getByTestId('days-empty')).toBeTruthy();

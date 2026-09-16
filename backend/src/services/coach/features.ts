@@ -1,5 +1,5 @@
 import { daysBefore, withinWindow, type DayFacts, type FactActivity, type IsoDate } from "../goals/measures.js";
-import { MUSCLES, type MuscleStat } from "../recommendation/index.js";
+import { coverageLevel, MUSCLES, type CoverageLevel, type MuscleDefinition, type MuscleStat } from "../recommendation/index.js";
 import {
 	alternativesText,
 	classifyCardio,
@@ -56,34 +56,6 @@ export const TRACKED_MUSCLES = [
 ] as const;
 
 /**
- * The coverage ledger's vocabulary (user decision 2026-08-31: "per specific muscle …
- * days-since-served and 14/28-day set counts, plus stretching as a tracked category").
- *
- * `TRACKED_MUSCLES` above is the *catalogue's* vocabulary and stays exactly as it is — the
- * recovery rule and the muscle bars are built on it. This is a second, coarser reading of
- * the same rows, and it exists because the words a lifter uses are not one-to-one with the
- * catalogue's tags: "core" is abs and obliques, "upper back" is back and traps. Each entry
- * names the catalogue tokens it counts, so nothing here has to guess.
- *
- * Order is the order the ledger is *defined* in, not the order it is read in — the ledger
- * sorts itself by debt.
- */
-export const LEDGER_MUSCLES: readonly { key: string; label: string; tokens: readonly string[] }[] = [
-	{ key: "quads", label: "quads", tokens: ["quads"] },
-	{ key: "hamstrings", label: "hamstrings", tokens: ["hamstrings"] },
-	{ key: "glutes", label: "glutes", tokens: ["glutes"] },
-	{ key: "calves", label: "calves", tokens: ["calves"] },
-	{ key: "core", label: "core", tokens: ["abs", "obliques"] },
-	{ key: "chest", label: "chest", tokens: ["chest"] },
-	{ key: "lats", label: "lats", tokens: ["lats"] },
-	{ key: "upper_back", label: "upper back", tokens: ["back", "traps"] },
-	{ key: "shoulders", label: "shoulders", tokens: ["shoulders"] },
-	{ key: "biceps", label: "biceps", tokens: ["biceps"] },
-	{ key: "triceps", label: "triceps", tokens: ["triceps"] },
-	{ key: "forearms", label: "forearms", tokens: ["forearms"] },
-];
-
-/**
  * Mobility is a *category*, not a muscle, and it is on the ledger for the same reason the
  * muscles are: something nobody has done for three weeks is invisible unless an absence can
  * be counted. `sets` for it are sessions — a stretch is not measured in sets — which is why
@@ -112,8 +84,9 @@ export interface CoverageEntry {
 	 * Sets in the trailing 7, 14 and 28 days. Sessions rather than sets for stretching.
 	 *
 	 * The seven-day count is what the body map on Progress colours each region by — weekly
-	 * sets against the 10–20 band — and it is counted here rather than on the phone so that
-	 * `LEDGER_MUSCLES`' token mapping ("core" is abs + obliques) exists in exactly one place.
+	 * sets against this muscle's own band — and it is counted here rather than on the phone
+	 * so that the registry's token mapping ("abs" is abs + obliques) exists in exactly one
+	 * place.
 	 */
 	sets_7d: number;
 	sets_14d: number;
@@ -127,6 +100,16 @@ export interface CoverageEntry {
 	 * "never in four weeks" scored one day past the window so it always sorts first.
 	 */
 	debt_days: number;
+	/**
+	 * The body map's four-state colour (services/recommendation/coverage.ts): 0 not served,
+	 * 1 under this muscle's own MAV floor, 2 inside its band, 3 over its ceiling. Stretching
+	 * has no volume-landmark band of its own — it reads 2 the week it happens at all, 1 when
+	 * it's been served but not this week, 0 the same as everything else.
+	 */
+	level: CoverageLevel;
+	/** This muscle's own weekly floor and ceiling (sets/wk), for the sheet to quote; null for stretching. */
+	band_low: number | null;
+	band_high: number | null;
 }
 
 export interface MuscleFeature {
@@ -435,11 +418,19 @@ export function isMobility(activity: FactActivity): boolean {
  *
  * A muscle nothing in four weeks has touched scores one day past the window, so "never" is
  * always the largest debt there can be and always sorts first.
+ *
+ * Reads `services/recommendation`'s fourteen-muscle registry (ENGINE.md §4b) rather than
+ * this file's own older, twelve-token vocabulary — the migration that phase called out as
+ * deliberately separate from the rest of that module, because unlike every phase before
+ * it, this one changes what a live COVERAGE DEBTS line says and what a real user's body
+ * map shows. `abs` replaces the old `core` key (same tokens: abs + obliques), and
+ * `lower_back` / `neck` are new rows the old vocabulary had nowhere to put.
  */
 export function coverageLedger(facts: DayFacts): CoverageEntry[] {
 	const window = inWindow(facts);
 
 	const entryFor = (
+		muscle: MuscleDefinition | null,
 		key: string,
 		label: string,
 		rows: FactActivity[],
@@ -454,29 +445,43 @@ export function coverageLedger(facts: DayFacts): CoverageEntry[] {
 				: inside.reduce((total, row) => total + (row.sets ?? 0), 0);
 		};
 		const daysSince = lastDate == null ? null : daysBefore(lastDate, facts.date);
+		const sets7d = count(WEEK_DAYS);
+		// Stretching has no MEV/MAV band — the closest honest reading is whether it happened
+		// at all this week, not a volume it was never given a target for.
+		const level: CoverageLevel = muscle
+			? coverageLevel({ key, daysSince, sets7d }, muscle)
+			: daysSince == null
+				? 0
+				: sets7d > 0
+					? 2
+					: 1;
 		return {
 			key,
 			label,
 			days_since: daysSince,
 			last_date: lastDate,
-			sets_7d: count(WEEK_DAYS),
+			sets_7d: sets7d,
 			sets_14d: count(LEDGER_SHORT_DAYS),
 			sets_28d: count(COACH_WINDOW_DAYS),
 			unit,
 			overdue: daysSince == null || daysSince >= LEDGER_OVERDUE_DAYS,
 			debt_days: daysSince == null ? COACH_WINDOW_DAYS + 1 : daysSince,
+			level,
+			band_low: muscle?.mavLow ?? null,
+			band_high: muscle?.mavHigh ?? null,
 		};
 	};
 
-	const entries = LEDGER_MUSCLES.map((muscle) =>
+	const entries = MUSCLES.map((muscle) =>
 		entryFor(
+			muscle,
 			muscle.key,
 			muscle.label,
 			window.filter((activity) => muscle.tokens.some((token) => hasMuscle(activity, token))),
 			"sets"
 		)
 	);
-	entries.push(entryFor(STRETCHING_KEY, "stretching", window.filter(isMobility), "sessions"));
+	entries.push(entryFor(null, STRETCHING_KEY, "stretching", window.filter(isMobility), "sessions"));
 
 	// Largest debt first, then alphabetically, so the same facts always read in the same
 	// order — the prompt is hashed and a wobbling order would be a new brief every ask.

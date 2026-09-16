@@ -66,6 +66,15 @@ const OBLIGATION_PHRASES = [
 	"owe",
 ];
 
+/**
+ * Word-boundary match, not a raw substring: "owe" is short enough to hide inside an
+ * unrelated word, and "lower back" (a real muscle since ENGINE.md §4b) is exactly that —
+ * l-OWE-r — the same way "shower" or "however" always could have been.
+ */
+function containsPhrase(text: string, phrase: string): boolean {
+	return new RegExp(`\\b${phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(text);
+}
+
 describe.skipIf(!apiKey)("anthropic day readings (contract)", () => {
 	it("compiles the right_now grammar and answers in two sentences with one next action", async () => {
 		const answer = await coach().parseStructured({
@@ -102,7 +111,7 @@ next action. Use only the numbers on the sheet.\n\n${DAY_SHEET}`,
 			.map((action) => action.label)
 			.join(" ")}`.toLowerCase();
 		for (const forbidden of OBLIGATION_PHRASES) {
-			expect({ forbidden, said }).toMatchObject({ forbidden, said: expect.not.stringContaining(forbidden) });
+			expect({ forbidden, contains: containsPhrase(said, forbidden) }).toEqual({ forbidden, contains: false });
 		}
 	}, 90_000);
 
@@ -149,7 +158,7 @@ describe.skipIf(!apiKey)("anthropic dossier (contract)", () => {
 		// Nothing in either paragraph reads as a debt the user has run up.
 		const said = `${answer.known} ${answer.missing}`.toLowerCase();
 		for (const forbidden of OBLIGATION_PHRASES) {
-			expect({ forbidden, said }).toMatchObject({ forbidden, said: expect.not.stringContaining(forbidden) });
+			expect({ forbidden, contains: containsPhrase(said, forbidden) }).toEqual({ forbidden, contains: false });
 		}
 		// And "you haven't told me" is the specific shape this prompt was written against.
 		for (const scold of ["haven't told me", "have not told me", "you failed", "you never"]) {

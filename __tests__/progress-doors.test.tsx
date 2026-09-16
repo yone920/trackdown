@@ -364,7 +364,7 @@ describe('behind the coverage row', () => {
     expect(screen.getByTestId('figure-front')).toBeTruthy();
     expect(screen.getByTestId('figure-back')).toBeTruthy();
     expect(screen.getByTestId('body-map-legend')).toBeTruthy();
-    expect(screen.getByText('10–20')).toBeTruthy();
+    expect(screen.getByText('In range')).toBeTruthy();
     expect(screen.getByText('Overdue a turn')).toBeTruthy();
 
     // Chest: twelve sets this week, inside the band, so the middle step of the ramp.
@@ -387,7 +387,7 @@ describe('behind the coverage row', () => {
     fireEvent.press(screen.getByTestId('part-front-biceps'));
     await waitFor(() => expect(screen.getByTestId('body-map-detail')).toBeTruthy());
     expect(screen.getByTestId('body-map-detail').props.accessibilityLabel).toBe(
-      'Biceps — 3 sets this week · last trained Wed · target 10+ sets/wk',
+      'Biceps — 3 sets this week · last trained Wed · target 8+ sets/wk',
     );
 
     fireEvent.press(screen.getByTestId('part-front-biceps'));
@@ -398,7 +398,7 @@ describe('behind the coverage row', () => {
     serve();
     show(<CoverageDetail />);
     await waitFor(() => expect(screen.getByTestId('body-map-overdue')).toBeTruthy());
-    expect(screen.getByTestId('body-map-overdue').props.children).toBe('Overdue: Calves · never · Core · 21 days');
+    expect(screen.getByTestId('body-map-overdue').props.children).toBe('Overdue: Calves · never · Abs · 21 days');
   });
 
   it('says so quietly when nothing has been trained at all', async () => {

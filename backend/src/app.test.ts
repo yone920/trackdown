@@ -3513,7 +3513,7 @@ describe("asking after the session has already happened", () => {
 		const prompt = buildCoachPrompt(inputs);
 		expect(prompt).toContain("COVERAGE LEDGER");
 		expect(prompt).toContain("COVERAGE DEBTS");
-		expect(prompt).toContain("quads: NEVER served in four weeks");
+		expect(prompt).toContain("Quads: NEVER served in four weeks");
 		expect(prompt).toContain("stretching: NEVER served in four weeks");
 		expect(prompt).toContain("RETIRE THE LARGEST DEBTS");
 		// The lats were served this morning, so they are not on the debt list.
