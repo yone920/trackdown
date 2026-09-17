@@ -2770,6 +2770,74 @@ async function countBriefs(date: string, email: string): Promise<number> {
 	return Number(rows[0]!.count);
 }
 
+// TODAY'S MENU, enforced (user field report 2026-09-16, evening). The user asked for a
+// chest day; the engine handed the model a ten-item chest menu built to rotate out the four
+// movements it had repeated for three sessions; the model kept those four from the plan it
+// was rewriting and took one item from the ten. The prompt asks; services/coach/coach.ts
+// §enforceMenu is the rule — and the swap is against the same menu the prompt was handed.
+describe("coach — the menu is enforced on the answer", () => {
+	const tz = tzForLocalHour(15);
+	const today = localDay(new Date(), tz).date;
+	let headers: Record<string, string>;
+
+	beforeAll(async () => {
+		const token = await signUp("menu@example.com");
+		headers = { Authorization: `Bearer ${token}` };
+		coachLlm.nextOutput = READING;
+		// One chest session two days ago: a loaded bench (the anchor, exempt from rotation)
+		// and an unloaded crossover (rotated out of the next chest session).
+		for (const row of [
+			{ description: "3 × 8 bench at 135 lb", exercise: "Bench Press", sets: 3, reps: 8, load_lb: 135 },
+			{ description: "3 × 15 cable crossover", exercise: "Cable Crossover", sets: 3, reps: 15 },
+		]) {
+			await request(app)
+				.post("/api/entries/movement")
+				.set(headers)
+				.send({ ...row, kcal: 100, logged_at: localInstant(addDays(today, -2), "18:00", tz) });
+		}
+	}, 60_000);
+
+	afterEach(() => {
+		coach.nextBrief = SAMPLE_BRIEF;
+		coach.briefs.length = 0;
+		coach.revisedBriefs.length = 0;
+	});
+
+	it("swaps a movement the model kept from the old plan when the menu had rotated it out", async () => {
+		const first = await request(app).get(`/api/coach/next?tz=${tz}`).set(headers);
+		expect(first.status).toBe(200);
+
+		const line = (name: string, load_lb: number | null) => ({ name, load_lb, sets: 3, reps: 10, minutes: null, note: null, is_new: false });
+		coach.revisedBriefs.push({
+			...SAMPLE_BRIEF,
+			headline: "Chest day",
+			revision_mode: "rewrite",
+			workout: { type: "strength", targets: ["chest"], exercises: [line("Bench Press", 135), line("Cable Crossover", null)], finisher: [] },
+		});
+		const res = await request(app)
+			.post("/api/coach/next/regenerate")
+			.set(headers)
+			.send({ tz_offset_min: tz, revision: "chest day", mode: "rewrite" });
+		expect(res.status).toBe(200);
+
+		const names = (res.body.brief.workout.exercises as { name: string }[]).map((exercise) => exercise.name);
+		// The anchor stays; the repeat is replaced, not merely dropped — the slot was the
+		// engine's own allocation.
+		expect(names).toHaveLength(2);
+		expect(names[0]).toBe("Bench Press");
+		expect(names).not.toContain("Cable Crossover");
+		expect(res.body.note).toContain("Cable Crossover was off today's chest menu");
+		expect(res.body.note).toContain(`swapped for ${names[1]}`);
+
+		// Against the very menu the prompt printed, not a second opinion.
+		const menu = coach.inputs.at(-1)!.menu!;
+		expect(menu.chest).toContain(names[1]);
+		expect(menu.chest).not.toContain("Cable Crossover");
+		const statement = coach.inputs.at(-1)!.rules.statements.find((item) => item.startsWith("TODAY'S MENU"));
+		expect(statement).toContain(names[1] as string);
+	});
+});
+
 describe("coach — revising the brief, and never storing an empty one", () => {
 	const tz = tzForLocalHour(15);
 	const today = localDay(new Date(), tz).date;

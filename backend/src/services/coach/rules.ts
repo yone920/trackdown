@@ -654,7 +654,7 @@ export function eligibleExercisesStatement(
 		.filter((line): line is string => line != null);
 	if (lines.length === 0) return null;
 
-	return `TODAY'S MENU — for the muscles above, choose ONLY from the exercises listed for them; anything else is off the menu today. Computed from real rotation history, the equipment at hand, and which entries have a photo — not a suggestion to weigh against others.\n${lines
+	return `TODAY'S MENU — for the muscles above, choose ONLY from the exercises listed for them; anything else is off the menu today, INCLUDING a movement on a plan you are revising — an unlisted one is replaced, not kept. Computed from real rotation history, the equipment at hand, and which entries have a photo — not a suggestion to weigh against others.\n${lines
 		.map((line) => `- ${line}`)
 		.join("\n")}`;
 }

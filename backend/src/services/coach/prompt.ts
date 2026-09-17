@@ -276,7 +276,9 @@ ${modeBlock(revision.mode)}
   * Return the WHOLE brief, filled in exactly as if you were writing it fresh. It replaces
     the one above; a partial answer loses whatever it leaves out.
   * Change what they asked for and leave everything else as it stands. More exercises means
-    keep the ones already there and add to them; a different body part means rebuild the list.
+    keep the ones already there and add to them; a different body part — or a body part
+    they named — means rebuild the list from TODAY'S MENU when there is one, not from the
+    plan above: a movement on the old plan that is not on the menu goes.
   * Update "headline" and "why" so they describe the revised session, not the old one.
 
 BOTH WAYS

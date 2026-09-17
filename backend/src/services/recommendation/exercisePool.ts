@@ -86,25 +86,33 @@ export interface LoadHistory {
 
 /**
  * The one exercise per muscle exempt from rotation: whichever logged movement has the
- * MOST sessions carrying an actual load, tie-broken by whichever was trained most
- * recently. Not "trending up" — a lift that's been HELD at one weight for two sessions
- * (see `coach/rules.ts`'s own `hold` rule) still needs continuity to know when it's ready
- * to step, and losing that continuity to rotation is the failure this exists to prevent.
- * A history with no loaded sessions at all (only bodyweight or cardio work) has no anchor,
- * which is a real answer: nothing here needs the continuity a heavy compound lift does.
+ * MOST sessions carrying an actual load — tie-broken by the HEAVIEST, then by whichever
+ * was trained most recently. Not "trending up" — a lift that's been HELD at one weight
+ * for two sessions (see `coach/rules.ts`'s own `hold` rule) still needs continuity to
+ * know when it's ready to step, and losing that continuity to rotation is the failure
+ * this exists to prevent. A history with no loaded sessions at all (only bodyweight or
+ * cardio work) has no anchor, which is a real answer: nothing here needs the continuity
+ * a heavy compound lift does.
+ *
+ * The heaviest-lift tie-break is from a real account (2026-09-16): four chest movements
+ * with three loaded sessions each, all last done the same day, and registry order handed
+ * the anchor to a 55 lb assisted dip over a 135 lb bench press. The lift whose number
+ * matters most is the one carrying the most weight.
  */
 export function chooseAnchor(history: readonly LoadHistory[]): string | null {
-	let best: { exercise: string; loadedSessions: number; lastDate: string } | null = null;
+	let best: { exercise: string; loadedSessions: number; heaviest: number; lastDate: string } | null = null;
 	for (const entry of history) {
 		const loaded = entry.sessions.filter((session) => session.loadLb != null);
 		if (loaded.length === 0) continue;
+		const heaviest = Math.max(...loaded.map((session) => session.loadLb as number));
 		const lastDate = entry.sessions[0]?.date ?? "";
 		if (
 			!best ||
 			loaded.length > best.loadedSessions ||
-			(loaded.length === best.loadedSessions && lastDate > best.lastDate)
+			(loaded.length === best.loadedSessions &&
+				(heaviest > best.heaviest || (heaviest === best.heaviest && lastDate > best.lastDate)))
 		) {
-			best = { exercise: entry.exercise, loadedSessions: loaded.length, lastDate };
+			best = { exercise: entry.exercise, loadedSessions: loaded.length, heaviest, lastDate };
 		}
 	}
 	return best?.exercise ?? null;
@@ -125,16 +133,26 @@ export interface EligiblePoolOptions {
  * gap than "we showed you something you've done before" (`coach/coach.ts`'s
  * `dropRecovering` documents the same principle for the recovery rule: "it will not
  * empty a training day").
+ *
+ * The anchor is exempt from the media requirement as well as from rotation: the user has
+ * done it, so a picture is not what makes it a recommendation, and losing the one lift
+ * whose number is being tracked to a missing photo would be the same continuity failure
+ * the exemption exists to prevent.
  */
 export function eligiblePool(candidates: readonly CandidateExercise[], options: EligiblePoolOptions = {}): CandidateExercise[] {
 	const { recentUsage = [], anchor = null, availableEquipment = null, rotationWindowSessions } = options;
+	const anchorKey = anchor ? normalize(anchor) : null;
 
 	const constrained = filterByEquipment(
 		filterByRotation(candidates, recentUsage, anchor, rotationWindowSessions),
 		availableEquipment
 	);
-	const withMedia = filterByMedia(constrained);
-	if (withMedia.length > 0) return withMedia;
+	// The anchor rides along with the illustrated ones; it is never what decides whether
+	// there ARE illustrated ones, or a menu with no photos anywhere would shrink to the
+	// anchor alone instead of relaxing the photo requirement.
+	if (constrained.some((candidate) => candidate.hasMedia)) {
+		return constrained.filter((candidate) => candidate.hasMedia || normalize(candidate.name) === anchorKey);
+	}
 	if (constrained.length > 0) return constrained;
 
 	// Rotation and equipment together left nothing at all — the same "menu had nothing

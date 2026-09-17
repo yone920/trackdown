@@ -15,7 +15,7 @@ import type { ReferenceLoad } from "../fusion/schema.js";
 import { listGoals } from "../goals/store.js";
 import { formatClock, localDay, localMinutesOf, type IsoDate } from "../localTime.js";
 import { currentPlace, placeEquipment } from "../places.js";
-import { eligiblePool, muscleByKey, parseOverride, scheduleTargets } from "../recommendation/index.js";
+import { MUSCLES, eligiblePool, muscleByKey, parseOverride, scheduleTargets } from "../recommendation/index.js";
 import { catalogCandidatesFor, catalogFactsFor, introductionCandidates } from "./catalog.js";
 import { completionOf, planIsComplete, sameMovement, type ExerciseCompletion } from "./completion.js";
 import { computeFeatures } from "./features.js";
@@ -528,6 +528,8 @@ export async function loadCoachInputs(
 		rules,
 		today: todayFrom(view),
 		context: said.length > 0 ? said.join(" · ") : null,
+		menu: eligibleExercises,
+		introductions: candidates,
 	};
 }
 
@@ -822,11 +824,29 @@ async function chooseBrief(
 			: undefined;
 
 	try {
-		const { brief: asked, skipped } = await askUsable(coach, inputs, revision, current);
+		const { brief: asked, skipped, appended = false } = await askUsable(coach, inputs, revision, current);
 		const capped = capBrief(asked, inputs, { revised: revision !== undefined });
+		// Lines the plan already had, when this answer is an append: promised to stay, so
+		// neither rule below may take them. On a rewrite nothing is promised — the old plan is
+		// the thing being replaced, and a line the model carried over from it is the model's
+		// choice, held to every rule like any other.
+		const keep = appended && current ? toBrief(current).workout.exercises : [];
 		// The recovery rule, enforced rather than requested (user field report 2026-09-03).
-		const { brief: recovered, dropped } = dropRecovering(capped, inputs, current ? toBrief(current).workout.exercises : []);
-		const answer = attachProgression(recovered, inputs.rules.prescriptions);
+		const { brief: recovered, dropped } = dropRecovering(capped, inputs, keep);
+		// The menu, enforced rather than requested (user field report 2026-09-16, evening):
+		// asked for a chest day, the model kept the four chest movements from the plan it was
+		// rewriting and took one item from a ten-item menu built to rotate them out.
+		const facts = await catalogFactsFor(
+			db,
+			recovered.workout.exercises.map((exercise) => exercise.name)
+		);
+		const { brief: onMenu, swapped } = enforceMenu(
+			recovered,
+			inputs,
+			(name) => registryKeyForToken(facts.primaryMuscle[name.trim().toLowerCase()]),
+			keep
+		);
+		const answer = attachProgression(onMenu, inputs.rules.prescriptions);
 		const stored = await storeBrief(db, userId, inputs, hash, answer, coach.model);
 		// Not a failure, so not an error — but the user asked for more and got fewer items
 		// than the model offered, and is owed the reason (field report 2026-09-02).
@@ -834,7 +854,7 @@ async function chooseBrief(
 			brief: stored,
 			inputs,
 			stale: false,
-			note: [skippedNote(skipped), recoveringNote(dropped)].filter(Boolean).join(" ") || null,
+			note: [skippedNote(skipped), recoveringNote(dropped), menuNote(swapped)].filter(Boolean).join(" ") || null,
 		};
 	} catch (error) {
 		// A brief the user has already read beats an error page; nothing at all is a 503,
@@ -883,7 +903,7 @@ async function askUsable(
 		const mode: RevisionMode = revision.mode ?? raw.revision_mode;
 		const answer = assertUsableRevision(raw, mode);
 		return mode === "append" && current
-			? appendToBrief(current, answer, inputs.local_time)
+			? { ...appendToBrief(current, answer, inputs.local_time), appended: true }
 			: { brief: assertUsableBrief(stripMode(answer)), skipped: [] };
 	};
 
@@ -958,6 +978,8 @@ export interface AppendResult {
 	brief: StorableBrief;
 	/** The repeated movements, by the name the model used for them. */
 	skipped: string[];
+	/** True when `brief` is the plan the user already had with the answer merged under it. */
+	appended?: boolean;
 }
 
 /**
@@ -1090,6 +1112,135 @@ export function recoveringNote(dropped: readonly { exercise: string; muscle: str
 	return `${list} ${names.length === 1 ? "was" : "were"} left off: ${muscles.join(" and ")} ${
 		muscles.length === 1 ? "was" : "were"
 	} trained inside 48 hours.`;
+}
+
+/** The registry muscle a catalogue tag ("chest", "back", "traps") counts toward, if any. */
+export function registryKeyForToken(token: string | null | undefined): string | null {
+	if (!token) return null;
+	const wanted = token.trim().toLowerCase();
+	return MUSCLES.find((muscle) => muscle.tokens.includes(wanted))?.key ?? null;
+}
+
+export interface MenuSwap {
+	/** The movement the model chose, by the name it used. */
+	exercise: string;
+	/** The targeted muscle it was for — the registry's label. */
+	muscle: string;
+	/** What took its place, or null when the menu had nothing left to offer. */
+	replacement: string | null;
+}
+
+/**
+ * TODAY'S MENU, applied to the ANSWER — the same pattern as `dropRecovering`, for the
+ * same reason: the prompt says "choose ONLY from the exercises listed", and a prompt is a
+ * request. On 2026-09-16 the user asked for a chest day, the engine handed the model ten
+ * chest movements chosen to rotate out the four it had repeated for three sessions, and
+ * the model kept those four from the plan it was rewriting and took one item from the
+ * ten. The engine owns which movements are eligible (ENGINE.md); this is where that
+ * ownership is made real.
+ *
+ * Only movements FOR A TARGETED MUSCLE are held to it — the menu is per targeted muscle,
+ * and an accessory the model added for a muscle with no menu today is the model's call.
+ * A movement the catalogue does not know at all is left alone too: an invented name is a
+ * different failure, and this rule cannot say what it was for.
+ *
+ * An off-menu movement is SWAPPED, not merely dropped: the slot was the engine's own
+ * allocation, and handing back a shorter plan would be trading the model's mistake for
+ * ours. The replacement is the first menu item not already on the plan — one with a
+ * prescription first (the user has done it, so it arrives with its own numbers), then
+ * whatever the menu offers, with no load and a note to pick the weight. When the menu is
+ * exhausted the movement is dropped, and it will not empty a training day.
+ *
+ * `keep` is the plan as it already stood when this answer is an append: promised to stay,
+ * so never swapped.
+ */
+export function enforceMenu<T extends StorableBrief>(
+	brief: T,
+	inputs: CoachBriefInputs,
+	muscleOf: (exercise: string) => string | null,
+	keep: readonly { name: string }[] = []
+): { brief: T; swapped: MenuSwap[] } {
+	const menu = inputs.menu ?? {};
+	if (Object.keys(menu).length === 0) return { brief, swapped: [] };
+
+	const swapped: MenuSwap[] = [];
+	// Every name the plan will carry — the model's, the kept ones, and each replacement as
+	// it is chosen — so a swap never puts a movement on the plan twice.
+	const taken: { name: string }[] = [...brief.workout.exercises, ...keep];
+	const prescriptionFor = (name: string) => inputs.rules.prescriptions.find((item) => sameMovement(item.exercise, name));
+
+	const exercises = brief.workout.exercises.flatMap((exercise) => {
+		if (keep.some((line) => sameMovement(line.name, exercise.name))) return [exercise];
+		const key = muscleOf(exercise.name);
+		const pool = key ? menu[key] : undefined;
+		if (!key || !pool || pool.length === 0) return [exercise];
+		if (pool.some((name) => sameMovement(name, exercise.name))) return [exercise];
+
+		const muscle = muscleByKey(key)?.label ?? key;
+		const free = pool.filter((name) => !taken.some((line) => sameMovement(line.name, name)));
+		const replacement = free.find((name) => prescriptionFor(name) != null) ?? free[0] ?? null;
+		swapped.push({ exercise: exercise.name, muscle, replacement });
+		if (replacement == null) return [];
+		taken.push({ name: replacement });
+
+		const prescription = prescriptionFor(replacement);
+		if (prescription) {
+			return [
+				{
+					...exercise,
+					name: replacement,
+					load_lb: prescription.load_lb,
+					sets: prescription.sets ?? exercise.sets,
+					reps: prescription.reps ?? exercise.reps,
+					minutes: prescription.minutes,
+					note: null,
+					is_new: false,
+				},
+			];
+		}
+		return [
+			{
+				...exercise,
+				name: replacement,
+				load_lb: null,
+				note: "Swapped in to rotate — pick a weight that leaves two reps in reserve.",
+				is_new: (inputs.introductions ?? []).some((name) => sameMovement(name, replacement)),
+			},
+		];
+	});
+
+	if (swapped.length === 0) return { brief, swapped };
+	if (exercises.length === 0) {
+		console.warn(`⚠️  Every movement in the brief for ${inputs.date} was off the menu and nothing could replace them; keeping it.`);
+		return { brief, swapped: [] };
+	}
+	return { brief: { ...brief, workout: { ...brief.workout, exercises } }, swapped };
+}
+
+/** "Bench Press and Cable Crossover were off today's chest menu … swapped for Pec Deck and Dumbbell Fly." */
+export function menuNote(swapped: readonly MenuSwap[]): string | null {
+	if (swapped.length === 0) return null;
+	const list = (names: readonly string[]) =>
+		names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+	const muscles = [...new Set(swapped.map((item) => item.muscle.toLowerCase()))];
+	const replaced = swapped.filter((item) => item.replacement != null);
+	const dropped = swapped.filter((item) => item.replacement == null);
+	const parts: string[] = [];
+	if (replaced.length > 0) {
+		parts.push(
+			`${list(replaced.map((item) => item.exercise))} ${replaced.length === 1 ? "was" : "were"} off today's ${list(
+				muscles
+			)} menu — used in your last two sessions, or not at this place — and ${
+				replaced.length === 1 ? "was" : "were"
+			} swapped for ${list(replaced.map((item) => item.replacement as string))}.`
+		);
+	}
+	if (dropped.length > 0) {
+		parts.push(
+			`${list(dropped.map((item) => item.exercise))} ${dropped.length === 1 ? "was" : "were"} left off: off today's menu, and nothing else was on it.`
+		);
+	}
+	return parts.join(" ");
 }
 
 /**

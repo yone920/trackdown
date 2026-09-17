@@ -24,7 +24,7 @@ back.** Every failure above happened because that line was blurry.
 |---|---|---|
 | 1 | The muscle registry (`registry.ts`) | **Done** |
 | 2 | The scheduler: family + volume selection (`scheduler.ts`) | **Done, and wired in** |
-| 3 | Exercise pool: rotation, images, equipment, the anchor lift (`exercisePool.ts`) | **Done, and wired in** |
+| 3 | Exercise pool: rotation, images, equipment, the anchor lift (`exercisePool.ts`) | **Done, wired in, and enforced on the answer** |
 | 4a | Per-muscle coverage-level arithmetic (`coverage.ts`) | **Done, and wired in** |
 | 4b | `coverageLedger()` and `lib/body-map.ts` migrated onto the registry | **Done** |
 | 5 | The override: an explicit request wins for that ask (`override.ts`, `scheduleTargets`) | **Done, and wired in** |
@@ -207,6 +207,13 @@ deciding the menu, not hoping the model rotates on its own. Four filters, compos
    never a filter).
 4. **`filterByMedia`** — only what the catalogue can show a picture of.
 
+The anchor is exempt from the photo requirement as well as from rotation — the user has
+done it, so a picture is not what makes it a recommendation — and a tie in loaded-session
+count breaks toward the HEAVIEST lift before the most recent one. Both from the same real
+account on 2026-09-16: four chest movements with three loaded sessions each, all last done
+the same day, where registry order had handed the anchor to a 55 lb assisted dip with no
+photo (which the media filter then dropped) over a 135 lb bench press.
+
 **The one safety valve**: if rotation and equipment together leave nothing with a photo,
 media is what relaxes first — never rotation, never equipment. Prescribing something
 already seen is a smaller failure than prescribing equipment that isn't there or a name
@@ -225,6 +232,22 @@ choose from today. The result is a `Record<muscleKey, string[]>` handed into
 turns into the brief's TODAY'S MENU line — recomputing the same family and allocation
 `targetPriorityStatement` already named, so the two lines can never disagree about which
 muscles are today's target.
+
+**Enforced on the answer, not only asked for.** The same menu rides along in
+`CoachBriefInputs.menu`, and after the model answers, `coach.ts`'s `enforceMenu` holds
+every movement for a targeted muscle to it (the catalogue's own primary-muscle tag says
+which muscle a movement is for, mapped onto the registry by `registryKeyForToken`). An
+off-menu movement is SWAPPED for the first free menu item — one with a prescription
+first, since the user has done it and it arrives with its own numbers, else the next
+listed one with no load and a note to pick the weight — and the brief's note says what
+went and what came. Only when the menu is exhausted is it dropped, and it will not empty
+a training day. Lines the user already had on an append are never touched; on a rewrite,
+nothing is promised, and a line the model carried over from the old plan is held to the
+menu like any other. This is the second half of the 2026-09-16 field report: asked for a
+chest day, the model kept the four repeated chest movements from the plan it was
+rewriting and took one item from the ten-item menu built to rotate them out. The prompt
+now also says the menu applies to a plan being revised; the enforcement is what makes
+that true.
 
 ## The coverage-level arithmetic (`coverage.ts`) — live
 

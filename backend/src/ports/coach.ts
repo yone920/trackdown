@@ -101,6 +101,15 @@ export interface CoachBriefInputs {
 	 * never overrides the history (concept-v2 §Output).
 	 */
 	context: string | null;
+	/**
+	 * Today's menu: for each targeted muscle (registry key), the catalogue names it may be
+	 * filled from — `services/recommendation`'s `eligiblePool()` answer, the same list the
+	 * prompt's TODAY'S MENU line prints. Carried here so the answer can be held to it after
+	 * the call (services/coach/coach.ts §enforceMenu), not only asked to honour it.
+	 */
+	menu?: Readonly<Record<string, readonly string[]>>;
+	/** Catalogue names this user has never logged — what a swapped-in movement's `is_new` is judged by. */
+	introductions?: readonly string[];
 }
 
 /** What the model produced, with the deterministic parts already merged in. */

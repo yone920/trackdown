@@ -101,6 +101,20 @@ describe("chooseAnchor", () => {
 		expect(anchor).toBe("Newer");
 	});
 
+	it("breaks a tie by the heaviest lift before recency — the real account's four chest movements", () => {
+		// 2026-09-16: all four with three loaded sessions, all last done the same day. Order
+		// alone handed the anchor to the 55 lb assisted dip; the 135 lb bench is the lift
+		// whose number matters.
+		const day = (date: string, loadLb: number) => ({ date, loadLb });
+		const anchor = chooseAnchor([
+			{ exercise: "Assisted Dip", sessions: [day("2026-09-10", 55), day("2026-09-08", 55), day("2026-08-31", 55)] },
+			{ exercise: "Bench Press", sessions: [day("2026-09-10", 135), day("2026-09-08", 135), day("2026-09-01", 135)] },
+			{ exercise: "Cable Crossover", sessions: [day("2026-09-10", 60), day("2026-09-08", 55), day("2026-09-01", 60)] },
+			{ exercise: "Chest Press Machine", sessions: [day("2026-09-10", 85), day("2026-09-08", 85), day("2026-09-01", 70)] },
+		]);
+		expect(anchor).toBe("Bench Press");
+	});
+
 	it("ignores an exercise with no loaded sessions at all — bodyweight has no anchor to give", () => {
 		const anchor = chooseAnchor([{ exercise: "Push-Up", sessions: [{ date: "2026-09-15", loadLb: null }] }]);
 		expect(anchor).toBeNull();
@@ -125,6 +139,23 @@ describe("eligiblePool", () => {
 		});
 		// Bench Press is rotated out; Band Chest Crossover has no media, so only Cable Crossover survives cleanly.
 		expect(result.map((c) => c.name)).toEqual(["Cable Crossover"]);
+	});
+
+	it("an unillustrated anchor does not stop the photo requirement relaxing for everyone else", () => {
+		// Nothing has a photo: the whole constrained list comes back, not the anchor alone.
+		const result = eligiblePool(
+			[candidate("Bench Press", { equipment: ["barbell"], hasMedia: false }), candidate("Pec Deck", { equipment: ["machine"], hasMedia: false })],
+			{ anchor: "Bench Press", availableEquipment: null }
+		);
+		expect(result.map((c) => c.name)).toEqual(["Bench Press", "Pec Deck"]);
+	});
+
+	it("keeps the anchor even without a photo — the user has done it", () => {
+		const result = eligiblePool(
+			[candidate("Assisted Dip", { equipment: ["machine"], hasMedia: false }), candidate("Pec Deck", { equipment: ["machine"] })],
+			{ recentUsage: [{ exercise: "Assisted Dip", sessionsAgo: 0 }], anchor: "Assisted Dip", availableEquipment: null }
+		);
+		expect(result.map((c) => c.name)).toEqual(["Assisted Dip", "Pec Deck"]);
 	});
 
 	it("relaxes the media requirement before it ever relaxes rotation or equipment", () => {
