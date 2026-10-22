@@ -10,21 +10,35 @@ the migration `backend/migrations/0021_drop_meals.sql` for the schema-level cut.
 - **Styling:** NativeWind (Tailwind for RN)
 - **State Management:** Zustand
 - **Data Fetching:** TanStack Query
-- **Charts:** Victory Native / Skia
+- **Charts:** hand-built on `react-native-svg` (`components/charts.tsx`, `components/day-arc.tsx`). No Victory, no Skia.
 - **Backend:** `backend/` — Express 5 + Better Auth (email + password, bearer tokens) + self-hosted Postgres 17 in Docker. Migrated off Supabase 2026-08-28; see `docs/supabase-migration-plan.md`
-- **AI text parsing:** Claude Haiku 4.5 via `backend/src/services/parseLog.ts` (the former `parse-log` edge function)
-- **AI Vision (planned):** Claude Sonnet for scale/equipment photo analysis
+- **LLMs:** two roles, each with a provider default in `backend/src/config/index.ts` (override with `LLM_MODEL_*`): **fusion** (parsing a log, text + photos) uses Claude Haiku 4.5 (`claude-haiku-4-5`; OpenAI alternative `gpt-4.1-mini`) and **coach** uses Claude Sonnet 4.5 (`claude-sonnet-4-5`; OpenAI alternative `gpt-4.1`). Entry points: `backend/src/services/parseLog.ts` (one log → one call) and `backend/src/services/fusion/`.
+- **AI vision is live, not planned:** scale and equipment photos travel through `LlmPort` as base64 images in the fusion pipeline (`backend/src/services/fusion/analyze.ts`). `backend/src/services/images.ts` downscales uploads server-side with `sharp` before they reach the model or the disk.
 
 Every third-party service sits behind a port. `backend/src/ports/*` holds the interfaces
-(`LlmPort` takes messages of text **and** base64 images), `backend/src/adapters/**` the SDK
-calls (`llm/anthropic.ts`, `llm/openai.ts`, `email/smtp.ts`), and `backend/src/container.ts`
-picks one from `LLM_PROVIDER` / `COACH_LLM_PROVIDER` — an unknown name refuses to boot.
+(`llm` — messages carry text **and** base64 images; `coach`; `email`; `storage` for evidence
+files; `exerciseMedia`), `backend/src/adapters/**` the SDK calls (`llm/anthropic.ts`,
+`llm/openai.ts`, plus `llm/policy.ts` for retry/fallback policy and `llm/unavailable.ts`;
+`coach/llm.ts`; `email/smtp.ts`; `storage/local.ts`, `storage/exerciseMedia.ts`), and
+`backend/src/container.ts` picks one from `LLM_PROVIDER` / `COACH_LLM_PROVIDER` (and
+`EVIDENCE_PROVIDER`, currently `local` only) — an unknown name refuses to boot.
 Routes and services import ports only; ESLint fails a build that imports `@anthropic-ai/sdk`,
 `openai` or `nodemailer` outside `src/adapters/**`, or reads `process.env` outside `src/config/`.
 Tests use the fakes in `backend/src/test/fakes/`; each adapter has a contract test that runs
 only when that provider's key is in `backend/.env`.
-- **Voice:** OpenAI Whisper for voice transcription
-- **Monitoring:** Sentry + PostHog
+- **Voice:** on-device speech recognition in the app via `expo-speech-recognition`
+  (`lib/ports/speech.expo.ts`); the backend only ever receives text. No Whisper, no audio upload.
+- **Monitoring:** none wired. Sentry and PostHog are not dependencies.
+
+### Backend service map (`backend/src/services/`)
+`fusion/` (log → structured record, incl. refine/revise/confirm), `day/` (auto-blocks, deltas,
+day estimate and narrative), `goals/` (detection, measures, verdicts), `coach/` (the brief:
+rules, catalog, prompt, schema), `recommendation/` (exercise pool, scheduler, muscle registry,
+coverage — read `recommendation/ENGINE.md` first), `readings/` (the "what I know about you"
+dossier), `training/` (training board and history). Design docs: `docs/concept-v2.md`
+(product), `docs/build-plan.md` (engineering), `docs/agent-brief.md` (working rules for
+implementation agents; its `migrate-off-supabase` integration-branch workflow is from the
+migration period — current work goes through `main`).
 
 ## Core Features
 - AI gym equipment photo recognition for calorie burn estimation
@@ -46,6 +60,12 @@ Tables:
 - `coach_briefs` - Cached on-demand workout coaching briefs
 - `day_readings` - Cached "Right now"/"In short" AI narrative text per day
 - `record_corrections` - History of user-driven corrections to a logged activity or weigh-in
+- `exercise_catalog` - The exercise vocabulary the fusion prompt and the coach share; seeded from `backend/data/exercises.json` as part of `npm run db:migrate` (0004)
+- `health_samples` - Samples synced from the phone's health store, unique per (user, external id) (0004)
+- `log_confirmations` - Fusion results awaiting the user's confirmation; a sweep handles rows older than 24 h (0005)
+- `coach_contexts` - State the coach carries between briefs: the title sentence and pending items such as mark_reached / adjust_goal / weigh_in (0008)
+- `places`, `place_equipment` - Gyms and other places accrued from logs (one row per name per user, upserted) and the equipment seen there (0012)
+- `profile_readings` - Profile-scoped AI readings, keyed by (user, kind) (0017)
 
 `meals`/`meal_items` and the whole calorie-budget/macro/TDEE column set on `daily_summaries`
 and `profiles` were dropped in migration 0021 (meal-tracking removal, 2026-09-08).
@@ -63,7 +83,7 @@ npx expo run:ios
 # Run on Android emulator
 npx expo run:android
 
-# Run tests
+# Run app tests (Jest; the backend uses Vitest, see below)
 npx jest
 
 # Lint
@@ -73,11 +93,18 @@ npx eslint .
 npx tsc --noEmit
 ```
 
-### Running Expo from this Fedora dev VM
+A `Makefile` at the repo root wraps the common ones: `make pg` / `make pg-migrate` /
+`make pg-reset` (local Postgres), `make backend`, `make app`, `make test` (backend tests),
+`make typecheck`, `make lint`, `make status`, and the maintainer-only `make docker-prod` /
+`make docker-prod-down` / `make rollback`. `docker-compose.yml` targets the home Docker
+host and publishes the API on host port **8003** (8000-8002 are taken there).
 
-The Fedora VM hosting this project sits behind Proxmox NAT — its `192.168.1.200`
-LAN address is **not reachable** from phones on the home WiFi. The dev iPhone
-must reach Expo over Tailscale (`100.64.198.50`).
+### Running Expo from the Omarchy dev VM
+
+This project lives on the Omarchy VM (Proxmox VM 108, LAN `192.168.1.251`, Tailscale
+`100.64.198.50`). The Fedora VM it used to live on was deleted 2026-09-01. The VM's LAN
+address has not been reachable from phones on the home WiFi, so the dev iPhone reaches
+Expo over Tailscale.
 
 **Always start Expo with the Tailscale hostname:**
 ```bash
@@ -105,8 +132,8 @@ The phone must have **Tailscale on and connected** to scan this QR.
   Use `--offline`.
 - `ExpoSecureStore.default.getValueWithKeyAsync is not a function` → web bundle
   trying to use a native-only module. Don't press `w`; only scan the iOS QR.
-- QR shows `192.168.1.200` instead of `100.64.198.50` → env var didn't take.
-  Re-`export` it and restart.
+- QR shows `192.168.1.251` (or any `192.168.x.x`) instead of `100.64.198.50` → env var
+  didn't take. Re-`export` it and restart.
 
 **Sanity check from the VM that Metro is alive:**
 ```bash
@@ -117,9 +144,11 @@ curl -s http://localhost:8081/status   # should print "packager-status:running"
 ```bash
 cd backend
 npm run dev                      # API on :8000 with hot reload (needs Postgres: `make pg`)
-npm test                         # integration tests on an embedded Postgres (no Docker)
+npm test                         # Vitest (integration tests on an embedded Postgres, no Docker)
 npm run db:migrate               # apply backend/migrations/*.sql to DATABASE_URL
 npm run db:migrate-from-supabase # one-time data copy, see docs/supabase-migration-plan.md
+npm run db:seed-exercises        # re-seed the exercise catalog on its own (db:migrate already does it)
+npm run measure-cache            # prompt-cache measurement script (src/scripts/measure-cache.ts)
 ```
 Config lives in `backend/src/config/index.ts` (the only file that reads `process.env`);
 `.env.example` at the repo root documents every variable. The app reads the API base
@@ -132,7 +161,9 @@ Email + password through Better Auth's `emailAndPassword` (min 8 characters):
 token comes back in the `set-auth-token` header and is stored in `expo-secure-store`
 (`lib/token-store.ts`); every API call sends it as a bearer token.
 
-There is no SMTP server, so there is no self-service password reset. Recovery is an
-operator command on the host that owns the database:
+There is no SMTP server, so there is no self-service password reset: `sendResetPassword`
+is deliberately left unset in `backend/src/auth.ts` (the `EmailPort` and `adapters/email/smtp.ts`
+exist and are registered, but nothing wires them to reset). Recovery is an operator command
+on the host that owns the database:
 `cd backend && npm run reset-password -- <email> <newPassword>`. It also gives a v1
 OTP-era account (which has no password at all) its first one.
