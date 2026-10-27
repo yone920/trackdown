@@ -16,7 +16,7 @@ import { listGoals } from "../goals/store.js";
 import { formatClock, localDay, localMinutesOf, type IsoDate } from "../localTime.js";
 import { currentPlace, placeEquipment } from "../places.js";
 import { MUSCLES, eligiblePool, muscleByKey, parseOverride, scheduleTargets } from "../recommendation/index.js";
-import { catalogCandidatesFor, catalogFactsFor, introductionCandidates } from "./catalog.js";
+import { catalogCandidatesFor, catalogFactsFor, introductionCandidates, priorLoads } from "./catalog.js";
 import { completionOf, planIsComplete, sameMovement, type ExerciseCompletion } from "./completion.js";
 import { computeFeatures } from "./features.js";
 import {
@@ -426,8 +426,13 @@ export async function loadCoachInputs(
 		cardioTargetStatedMin: plan?.cardio_minutes_target ?? null,
 	});
 
+	// What they lifted before the window: the loads a returning lifter is prescribed from,
+	// and the measure of the layoff when the window is empty (rules.ts §PriorLoad). Read
+	// ahead of the catalogue facts so its exercises get their equipment and direction too.
+	const priors = await priorLoads(db, userId, { now });
 	const catalogFacts = await catalogFactsFor(db, [
 		...features.exercises.map((exercise) => exercise.exercise),
+		...priors.map((prior) => prior.exercise),
 		...background.reference_loads.map((load) => load.exercise),
 	]);
 	// The pool an introduction may be drawn from: catalogue entries this user has never
@@ -496,6 +501,7 @@ export async function loadCoachInputs(
 		introductionCandidates: candidates,
 		eligibleExercises,
 		override,
+		priorLoads: priors,
 	});
 
 	const statements = await dayContexts(db, userId, date);

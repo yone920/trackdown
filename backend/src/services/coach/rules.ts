@@ -66,7 +66,12 @@ export type PrescriptionRule =
 	| "restart"
 	| "cardio"
 	/** From a load the user *stated* rather than one this log has seen — see below. */
-	| "reference";
+	| "reference"
+	/**
+	 * From the last session this log HAS seen, older than the feature window: the
+	 * returning lifter's own number, stepped down for the layoff (§prescribeFromPrior).
+	 */
+	| "prior";
 
 export interface Prescription {
 	exercise: string;
@@ -102,6 +107,26 @@ export interface TrainingBackground {
 
 /** Sets for a stated load: they gave a weight and maybe reps, never a set count. */
 export const REFERENCE_SETS = 3;
+
+/**
+ * An exercise's last logged session from BEFORE the feature window — what a lifter coming
+ * back after a month off is prescribed from (services/coach/catalog.ts §priorLoads). A
+ * measurement, unlike a `ReferenceLoad`, so the restart step-down always applies to it.
+ */
+export interface PriorLoad {
+	exercise: string;
+	load_lb: number;
+	sets: number | null;
+	reps: number | null;
+	/** Days since that session; always at least the window length, by construction. */
+	days_since: number;
+}
+
+/** The layoff the prior loads measure: days since the newest of them, or null with none. */
+export function measuredGapDays(priors: readonly PriorLoad[]): number | null {
+	if (priors.length === 0) return null;
+	return Math.min(...priors.map((prior) => prior.days_since));
+}
 
 export interface RecoveryRule {
 	/** Trained inside RECOVERY_DAYS — allowed as an accessory, never today's headline. */
@@ -335,6 +360,11 @@ export interface CoachRules {
 export interface BuildRulesInput {
 	features: CoachFeatures;
 	goals: CoachGoal[];
+	/**
+	 * Last sessions older than the window, one per exercise (§PriorLoad). They fill the
+	 * loads the window cannot and, when the window is empty, measure the layoff.
+	 */
+	priorLoads?: readonly PriorLoad[];
 	/** Equipment per exercise from the catalogue, keyed by lower-cased name. */
 	equipment?: Record<string, string[]>;
 	/** `load_direction` per exercise from the catalogue, keyed the same way (migration 0013). */
@@ -943,15 +973,18 @@ export function prescribeLoads(
 		loadDirection,
 		gap,
 		referenceLoads = [],
+		priorLoads = [],
 	}: {
 		equipment?: Record<string, string[]>;
 		/** Catalogue `load_direction` per exercise, keyed by lower-cased name (migration 0013). */
 		loadDirection?: Record<string, LoadDirection>;
 		gap?: GapRule;
 		referenceLoads?: readonly ReferenceLoad[];
+		/** Sessions older than the window, one per exercise (§PriorLoad). */
+		priorLoads?: readonly PriorLoad[];
 	} = {}
 ): Prescription[] {
-	const resolvedGap = gap ?? gapRule(features.days_since_last_workout);
+	const resolvedGap = gap ?? gapRule(features.days_since_last_workout ?? measuredGapDays(priorLoads));
 	const gapLevel = resolvedGap.level;
 
 	const logged = features.exercises.map((feature) => {
@@ -1103,7 +1136,9 @@ export function prescribeLoads(
 		};
 	});
 
-	return [...logged, ...prescribeFromReferences(logged, referenceLoads, resolvedGap, equipment, loadDirection)];
+	const prior = prescribeFromPrior(logged, priorLoads, equipment, loadDirection);
+	const seen = [...logged, ...prior];
+	return [...seen, ...prescribeFromReferences(seen, referenceLoads, resolvedGap, equipment, loadDirection)];
 }
 
 /**
@@ -1147,6 +1182,56 @@ export function recoveringExercisesStatement(blocked: readonly { exercise: strin
 	return `OFF THE MENU TODAY — trained inside 48 hours, so these movements are not available whatever today's targets are: ${blocked
 		.map((item) => `${item.exercise} (${item.muscle})`)
 		.join(", ")}. Do not prescribe them, do not substitute a near-identical movement for the same primary muscle, and do not work around this by renaming them. Muscles they hit as SECONDARY work are fine.`;
+}
+
+/**
+ * The last logged session of each exercise the WINDOW has nothing on — the number a lifter
+ * coming back after a month off actually worked with. The window is four weeks, so every
+ * prior is at least that old and the restart rule applies to each one on its own clock:
+ * one step lighter than that session's load and a set fewer (the same step `prescribeLoads`
+ * takes for a restart it can see). Below `RESTART_AFTER_DAYS` — only possible when the
+ * window is shorter than the restart threshold — the load is held as it was.
+ *
+ * A prior is a measurement, so unlike a stated reference it always steps down for the
+ * layoff; and it outranks a stated reference for the same exercise, because the log saw it.
+ */
+function prescribeFromPrior(
+	logged: readonly Prescription[],
+	priors: readonly PriorLoad[],
+	equipment?: Record<string, string[]>,
+	loadDirection?: Record<string, LoadDirection>
+): Prescription[] {
+	if (priors.length === 0) return [];
+	const known = new Set(logged.map((item) => item.exercise.trim().toLowerCase()));
+	const out: Prescription[] = [];
+
+	for (const prior of priors) {
+		const key = prior.exercise.trim().toLowerCase();
+		if (known.has(key)) continue;
+		known.add(key);
+
+		const restart = prior.days_since >= RESTART_AFTER_DAYS;
+		const step = stepFor(prior.exercise, prior.load_lb, equipment);
+		const direction = directionFor(prior.exercise, loadDirection);
+		const lastSets = prior.sets ?? REFERENCE_SETS;
+		out.push({
+			exercise: prior.exercise,
+			muscle_groups: [],
+			load_lb: restart ? easier(prior.load_lb, step, direction) : prior.load_lb,
+			sets: restart ? Math.max(2, lastSets - 1) : lastSets,
+			reps: prior.reps,
+			minutes: null,
+			rule: "prior",
+			why: restart
+				? `Last logged ${prior.days_since} days ago at ${say(prior.load_lb, direction)}${prior.reps ? ` for ${prior.reps}` : ""}. Coming back after that long, so one step ${
+						direction === "assistance" ? "more help" : "under it"
+					} and a set fewer; the log takes over from here.`
+				: `Last logged ${prior.days_since} days ago at ${say(prior.load_lb, direction)}${prior.reps ? ` for ${prior.reps}` : ""}: same load, pick up where it left off.`,
+			days_since: prior.days_since,
+			load_direction: direction,
+		});
+	}
+	return out;
 }
 
 /**
@@ -1283,8 +1368,11 @@ export function buildRules({
 	introductionCandidates = [],
 	eligibleExercises = {},
 	override = null,
+	priorLoads = [],
 }: BuildRulesInput): CoachRules {
-	const gap = gapRule(features.days_since_last_workout);
+	// An empty window is not "never trained": the prior loads, when there are any, say how
+	// long ago the last session really was, and the gap rule gets a number to work with.
+	const gap = gapRule(features.days_since_last_workout ?? measuredGapDays(priorLoads));
 	const recovery = recoveryRule(features.muscles);
 	const cardio = cardioRule(features);
 	const sizing = sessionSizing(sessionMinutes, sessionMinutes != null);
@@ -1298,6 +1386,7 @@ export function buildRules({
 		...(loadDirection ? { loadDirection } : {}),
 		gap,
 		referenceLoads: background.reference_loads,
+		priorLoads,
 	}).filter((item) => !blockedNames.has(item.exercise.trim().toLowerCase()));
 	const appetite = varietyAppetite(background);
 	const nudge = selectNudge(features, goals, background);
@@ -1320,7 +1409,7 @@ export function buildRules({
 		}.`,
 		"Loads, sets and reps are prescribed below and are not yours to change: copy them exactly for any exercise you choose from the list. An exercise that is not on the list has no history, so give it no load — describe it and let the user pick the weight.",
 		assistanceStatement(prescriptions),
-		backgroundStatement(features, background),
+		backgroundStatement(features, background, priorLoads),
 		`Nudge: ${nudge.subject}`,
 	].filter((line): line is string => line !== null);
 
@@ -1356,8 +1445,18 @@ function assistanceStatement(prescriptions: readonly Prescription[]): string | n
  * the middle one is the point of the whole change: "nothing logged" used to mean "treat
  * them as a beginner", and it never did mean that.
  */
-function backgroundStatement(features: CoachFeatures, background: TrainingBackground): string | null {
+function backgroundStatement(
+	features: CoachFeatures,
+	background: TrainingBackground,
+	priorLoads: readonly PriorLoad[] = []
+): string | null {
 	if (features.exercises.length > 0) return null;
+	if (priorLoads.length > 0) {
+		const days = measuredGapDays(priorLoads);
+		return `Nothing in the last four weeks, but this is NOT a new lifter: the log has earlier sessions for ${priorLoads.length} exercise${
+			priorLoads.length === 1 ? "" : "s"
+		}, the newest ${days} days ago. PRESCRIBED LOADS below carries each one stepped down for the layoff — use those numbers, prefer those movements, and speak to them as someone coming back, never as a beginner.`;
+	}
 	if (needsBackground(features, background)) {
 		return "Nothing has ever been logged and this user has said nothing about their training background, so you do not know whether they are new to this. Do NOT assume a beginner and do not assume an athlete: prescribe a short, cautious first session with no loads, tell them to pick a weight they can control for the reps, and say in one clause that you are starting carefully because you do not know their background yet.";
 	}

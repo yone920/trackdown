@@ -351,7 +351,9 @@ export type ExerciseProgression =
   | 'ease_back'
   | 'restart'
   | 'cardio'
-  | 'reference';
+  | 'reference'
+  /** The last session before the four-week window, stepped down for the layoff. */
+  | 'prior';
 
 export type BriefExercise = {
   name: string;

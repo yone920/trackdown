@@ -1,6 +1,7 @@
 import type pg from "pg";
 import { DEFAULT_LOAD_DIRECTION, type LoadDirection } from "../../db/exercises.js";
 import { muscleByKey, type CandidateExercise } from "../recommendation/index.js";
+import type { PriorLoad } from "./rules.js";
 
 // The two catalogue facts the progression reads, in one place because two callers now read
 // them: the coach (services/coach/coach.ts) and the training board
@@ -124,7 +125,13 @@ export async function introductionCandidates(
 		    AND NOT EXISTS (
 		          SELECT 1 FROM activities a
 		           WHERE a.user_id = $1
-		             AND (a.exercise_id = c.id OR lower(a.exercise) = lower(c.name))
+		             AND (
+		                   a.exercise_id = c.id
+		                OR lower(a.exercise) = lower(c.name)
+		                -- Rows written before the catalogue resolved names, or under a
+		                -- wording the catalogue lists as an alias ("lat pull down").
+		                OR lower(a.exercise) = ANY (ARRAY(SELECT lower(alias) FROM unnest(c.aliases) AS alias))
+		             )
 		        )
 		  ORDER BY
 		    -- A debt first, when there is one; then something we can show a picture of.
@@ -136,4 +143,61 @@ export async function introductionCandidates(
 		[userId, tokens, limit]
 	);
 	return rows.map((row) => row.name);
+}
+
+/** How far back a prior load is looked for. Older than this is a different lifter. */
+export const PRIOR_LOAD_DAYS = 730;
+/** One per exercise, newest first — more than this is not a returning lifter's menu. */
+export const MAX_PRIOR_LOADS = 40;
+
+/**
+ * The last loaded session of each exercise this user has ever logged, newest first
+ * (services/coach/rules.ts §PriorLoad). The feature window is four weeks; a lifter back
+ * from a month off has nothing in it, and without this the restart rule — "one step lighter
+ * than the last logged load" — had no load to step down from. Only rows with a load count:
+ * a bodyweight or cardio session has no number to come back to.
+ *
+ * Within an exercise the top set of its newest day wins (heaviest, then latest), the same
+ * reading services/training/history.ts gives the Progress tab. Names are grouped
+ * case-insensitively; the stored spelling of the newest row is the one returned.
+ */
+export async function priorLoads(
+	db: Queryable,
+	userId: string,
+	{ now = new Date(), limit = MAX_PRIOR_LOADS }: { now?: Date; limit?: number } = {}
+): Promise<PriorLoad[]> {
+	const { rows } = await db.query<{
+		exercise: string;
+		load_lb: string | number;
+		sets: number | null;
+		reps: number | null;
+		logged_at: string | Date;
+	}>(
+		`WITH ranked AS (
+		   SELECT exercise, load_lb, sets, reps, logged_at,
+		          row_number() OVER (
+		            PARTITION BY lower(exercise)
+		            ORDER BY (logged_at AT TIME ZONE 'UTC')::date DESC, load_lb DESC, logged_at DESC
+		          ) AS rn
+		     FROM activities
+		    WHERE user_id = $1
+		      AND exercise IS NOT NULL
+		      AND load_lb IS NOT NULL
+		      AND logged_at >= $2::timestamptz - make_interval(days => $3)
+		 )
+		 SELECT exercise, load_lb, sets, reps, logged_at
+		   FROM ranked
+		  WHERE rn = 1
+		  ORDER BY logged_at DESC
+		  LIMIT $4`,
+		[userId, now.toISOString(), PRIOR_LOAD_DAYS, limit]
+	);
+	const DAY_MS = 86_400_000;
+	return rows.map((row) => ({
+		exercise: row.exercise,
+		load_lb: Number(row.load_lb),
+		sets: row.sets,
+		reps: row.reps,
+		days_since: Math.max(0, Math.floor((now.getTime() - new Date(row.logged_at).getTime()) / DAY_MS)),
+	}));
 }

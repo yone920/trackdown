@@ -10,6 +10,7 @@ import {
 	coverageRule,
 	DEFAULT_SESSION_MINUTES,
 	gapRule,
+	measuredGapDays,
 	prescribeLoads,
 	recoveringExercises,
 	recoveryRule,
@@ -1302,5 +1303,80 @@ describe("exercisePoolInputsByMuscle — re-keying rosters onto the registry", (
 		const features = featuresFor([]);
 		const result = exercisePoolInputsByMuscle(features, PRIMARIES, ["not-a-real-muscle"]);
 		expect(result.has("not-a-real-muscle")).toBe(false);
+	});
+});
+
+describe("prescribeLoads — prior loads, when the window is empty but the log is not", () => {
+	// A month off: nothing in the four-week window, but the log remembers the last sessions.
+	const priors = [
+		{ exercise: "Lat Pulldown", load_lb: 110, sets: 3, reps: 10, days_since: 34 },
+		{ exercise: "Dumbbell Row", load_lb: 50, sets: 4, reps: 12, days_since: 36 },
+	];
+
+	it("prescribes the last logged load stepped down for the layoff, a set fewer", () => {
+		const prescriptions = prescribeLoads(featuresFor([]), { priorLoads: priors });
+		expect(prescriptions).toHaveLength(2);
+		const pulldown = only(prescriptions, "Lat Pulldown");
+		expect(pulldown).toMatchObject({
+			rule: "prior",
+			load_lb: 110 - stepFor("Lat Pulldown", 110),
+			sets: 2,
+			reps: 10,
+			// A measurement, so the prompt can say when — unlike a stated reference.
+			days_since: 34,
+		});
+		expect(pulldown.why).toContain("34 days ago");
+		expect(pulldown.why).toContain("110 lb");
+		// Four sets last time comes back as three, never below two.
+		expect(only(prescriptions, "Dumbbell Row")).toMatchObject({ rule: "prior", sets: 3, reps: 12 });
+	});
+
+	it("measures the layoff, so the gap is a numbered restart rather than 'never trained'", () => {
+		expect(measuredGapDays(priors)).toBe(34);
+		expect(measuredGapDays([])).toBeNull();
+		const rules = buildRules({ features: featuresFor([]), goals: [], priorLoads: priors });
+		expect(rules.gap).toMatchObject({ level: "restart", days: 34 });
+		expect(rules.gap.text).toContain("34 days since the last session");
+		// And the prompt is told this is someone coming back, not a blank slate.
+		const returning = rules.statements.find((line) => line.startsWith("Nothing in the last four weeks, but"));
+		expect(returning).toBeDefined();
+		expect(returning).toContain("2 exercises");
+		expect(returning).toContain("34 days ago");
+		expect(rules.statements.some((line) => line.startsWith("Nothing has ever been logged"))).toBe(false);
+		expect(rules.prescriptions.map((item) => item.exercise)).toEqual(["Lat Pulldown", "Dumbbell Row"]);
+	});
+
+	it("gives way to the window: an exercise with a real session in it is not a prior", () => {
+		const prescriptions = prescribeLoads(featuresFor([lift(daysAgo(1), { exercise: "Lat Pulldown", muscles: ["lats"], load: 120, reps: 10 })]), {
+			priorLoads: priors,
+		});
+		expect(prescriptions.filter((item) => item.exercise === "Lat Pulldown")).toHaveLength(1);
+		expect(only(prescriptions, "Lat Pulldown").rule).not.toBe("prior");
+		// The other prior still fills the load the window has nothing on.
+		expect(only(prescriptions, "Dumbbell Row")).toMatchObject({ rule: "prior" });
+	});
+
+	it("outranks a stated reference for the same exercise, and lets the measured gap ease the others", () => {
+		const stated = [
+			{ exercise: "Lat Pulldown", load_lb: 150, reps: 8 },
+			{ exercise: "Bench Press", load_lb: 165, reps: 5 },
+		];
+		const prescriptions = prescribeLoads(featuresFor([]), { priorLoads: priors, referenceLoads: stated });
+		// The log saw 110; the claim of 150 does not get a say.
+		expect(only(prescriptions, "Lat Pulldown")).toMatchObject({ rule: "prior", load_lb: 110 - stepFor("Lat Pulldown", 110) });
+		expect(prescriptions.filter((item) => item.exercise === "Lat Pulldown")).toHaveLength(1);
+		// With the layoff measured by the priors, a stated load eases back too (the brand
+		// new account case — no measurement — still takes it as given, see above).
+		expect(only(prescriptions)).toMatchObject({ rule: "reference", load_lb: 160, sets: 2 });
+		expect(only(prescriptions).why).toContain("34 days");
+	});
+
+	it("holds the load when the prior is inside the restart threshold", () => {
+		const recent = [{ exercise: "Lat Pulldown", load_lb: 110, sets: 3, reps: 10, days_since: 5 }];
+		expect(only(prescribeLoads(featuresFor([]), { priorLoads: recent }), "Lat Pulldown")).toMatchObject({
+			rule: "prior",
+			load_lb: 110,
+			sets: 3,
+		});
 	});
 });
